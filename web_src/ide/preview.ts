@@ -1,5 +1,5 @@
 // Markdown and image preview without VS Code webviews: images are shown from the file's bytes, Markdown is rendered
-// by spoved's own markup renderer (sanitized on the server) inside a sandboxed iframe that can't run scripts.
+// by gitdepo's own markup renderer (sanitized on the server) inside a sandboxed iframe that can't run scripts.
 import {getService, IFileService, type IEditorGroup} from '@codingame/monaco-vscode-api';
 import type {URI} from '@codingame/monaco-vscode-api/vscode/vs/base/common/uri';
 import {
@@ -13,7 +13,7 @@ import {POST} from '../js/modules/fetch.js';
 import {escapePath, type IDEConfig} from './api.ts';
 import {repoPathOf} from './paths.ts';
 
-export const PREVIEW_EDITOR = 'spoved.preview';
+export const PREVIEW_EDITOR = 'gitdepo.preview';
 export const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'ico', 'svg'];
 export const markdownExtensions = ['md', 'markdown'];
 

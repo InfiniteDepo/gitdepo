@@ -284,7 +284,7 @@ func TestGetLFSRange(t *testing.T) {
 				var er lfs.ErrorResponse
 				err := json.Unmarshal(resp.Body.Bytes(), &er)
 				require.NoError(t, err)
-				assert.Equal(t, "https://github.com/InfiniteSpoved/spoved/issues", er.DocumentationURL)
+				assert.Equal(t, "https://github.com/InfiniteDepo/gitdepo/issues", er.DocumentationURL)
 				assert.Equal(t, tt.out, er.Message)
 			}
 		})

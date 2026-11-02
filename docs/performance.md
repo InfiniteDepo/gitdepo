@@ -75,10 +75,10 @@ The same steps on the same machine against Gitea 28.2.0 (the binary from the off
 
 | Finding | Change | Effect |
 |---|---|---|
-| The access-token cache was never created (a one-character bug inherited from upstream), so every git request re-hashed its token with PBKDF2. With only 2 idle database connections, PostgreSQL also opened about 70 new connections per second. | [#567](https://github.com/InfiniteSpoved/spoved/pull/567) fixes the cache, keeps idle connections open and skips the `update` hook | Pulls 52 → 146 ops/s, pushes 6.1 → 8.2/s |
-| Each push starts the gitdepo binary as git hooks, and about 40% of that start-up was garbage collection. | [#575](https://github.com/InfiniteSpoved/spoved/pull/575) runs the hooks with garbage collection off | Pushes 8.2 → 11.6/s |
-| Under heavy git load, web pages slowed from 0.05 s to 1.7 s, because git work took every core. | [#578](https://github.com/InfiniteSpoved/spoved/pull/578) caps concurrent git operations | Web median 1.7 → 0.32 s at 100 users |
-| A repository created by an import has no reachability bitmap, so every full clone walks its whole history (4.9 s of CPU for a repository the size of gitdepo). | [#584](https://github.com/InfiniteSpoved/spoved/pull/584) writes a bitmap at import | Clones of an imported repository 0.6 → 1.7/s |
+| The access-token cache was never created (a one-character bug inherited from upstream), so every git request re-hashed its token with PBKDF2. With only 2 idle database connections, PostgreSQL also opened about 70 new connections per second. | [#567](https://github.com/InfiniteDepo/gitdepo/pull/567) fixes the cache, keeps idle connections open and skips the `update` hook | Pulls 52 → 146 ops/s, pushes 6.1 → 8.2/s |
+| Each push starts the gitdepo binary as git hooks, and about 40% of that start-up was garbage collection. | [#575](https://github.com/InfiniteDepo/gitdepo/pull/575) runs the hooks with garbage collection off | Pushes 8.2 → 11.6/s |
+| Under heavy git load, web pages slowed from 0.05 s to 1.7 s, because git work took every core. | [#578](https://github.com/InfiniteDepo/gitdepo/pull/578) caps concurrent git operations | Web median 1.7 → 0.32 s at 100 users |
+| A repository created by an import has no reachability bitmap, so every full clone walks its whole history (4.9 s of CPU for a repository the size of gitdepo). | [#584](https://github.com/InfiniteDepo/gitdepo/pull/584) writes a bitmap at import | Clones of an imported repository 0.6 → 1.7/s |
 
 The bitmap gain doesn't show in the tables above, because the test repositories are small and were created by push, not imported.
 
@@ -90,6 +90,6 @@ The audit log costs gitdepo 3 to 5% more CPU per operation than Forgejo, which t
 
 ## Still open
 
-- [#568](https://github.com/InfiniteSpoved/spoved/issues/568): a smaller hook binary, which would make pushes cheaper still.
-- [#569](https://github.com/InfiniteSpoved/spoved/issues/569): per-user git rate limits, so one user can't fill the cap.
-- [#570](https://github.com/InfiniteSpoved/spoved/issues/570): repacking after pushes, and a cache for identical fetches.
+- [#568](https://github.com/InfiniteDepo/gitdepo/issues/568): a smaller hook binary, which would make pushes cheaper still.
+- [#569](https://github.com/InfiniteDepo/gitdepo/issues/569): per-user git rate limits, so one user can't fill the cap.
+- [#570](https://github.com/InfiniteDepo/gitdepo/issues/570): repacking after pushes, and a cache for identical fetches.

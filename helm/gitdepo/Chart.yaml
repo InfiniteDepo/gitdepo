@@ -1,0 +1,9 @@
+apiVersion: v2
+name: gitdepo
+description: gitdepo, a self-hosted Git forge for teams that need to pass security and compliance audits
+type: application
+version: 0.1.0
+appVersion: "261018.09.04"
+home: https://github.com/InfiniteDepo/gitdepo
+sources:
+  - https://github.com/InfiniteDepo/gitdepo

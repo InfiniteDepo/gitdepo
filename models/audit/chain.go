@@ -1,4 +1,4 @@
-// Copyright 2026 The spoved contributors. All rights reserved.
+// Copyright 2026 The gitdepo contributors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 package audit
@@ -18,7 +18,7 @@ import (
 // ZeroHash is the hash before the first sealed entry.
 var ZeroHash = strings.Repeat("0", 64)
 
-const chainDomain = "spoved-audit-v1\n"
+const chainDomain = "gitdepo-audit-v1\n"
 
 // Canonical returns the JSON array that is hashed: every column of e in a fixed order except seq, prev_hash and
 // hash, with the id and data as stored. Strings are escaped like encoding/json does.
@@ -30,7 +30,7 @@ func Canonical(e *Entry) ([]byte, error) {
 	})
 }
 
-// HashEntry returns SHA-256(prev ‖ "spoved-audit-v1\n" ‖ canonical) in lower-case hex.
+// HashEntry returns SHA-256(prev ‖ "gitdepo-audit-v1\n" ‖ canonical) in lower-case hex.
 func HashEntry(prev string, e *Entry) (string, error) {
 	canonical, err := Canonical(e)
 	if err != nil {

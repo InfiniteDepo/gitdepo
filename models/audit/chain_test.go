@@ -1,4 +1,4 @@
-// Copyright 2026 The spoved contributors. All rights reserved.
+// Copyright 2026 The gitdepo contributors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 package audit_test
@@ -30,7 +30,7 @@ func TestCanonicalGolden(t *testing.T) {
 
 	hash, err := audit_model.HashEntry(audit_model.ZeroHash, e)
 	require.NoError(t, err)
-	assert.Equal(t, "3dc898788830893539867a50b9af57d00bfdb2fbe05413364158fd215958589b", hash)
+	assert.Equal(t, "0901d96df6dc5433400b425bdd1bbf3140449fe85ec2fbd7405a7e45bf215dbd", hash)
 	assert.Len(t, hash, 64)
 }
 

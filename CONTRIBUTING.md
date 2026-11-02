@@ -1,14 +1,14 @@
-# Contributing to spoved
+# Contributing to gitdepo
 
-spoved is a modified version of [Forgejo](https://forgejo.org), distributed under the GPL-3.0-or-later (see [`LICENSE`](LICENSE) and GPLv3 §5). It is not affiliated with or endorsed by the Forgejo project. Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+gitdepo is a modified version of [Forgejo](https://forgejo.org), distributed under the GPL-3.0-or-later (see [`LICENSE`](LICENSE) and GPLv3 §5). It is not affiliated with or endorsed by the Forgejo project. Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
-The product name is always written in lowercase: **spoved**.
+The product name is always written in lowercase: **gitdepo**.
 
 ## Where things go
 
-- Bugs and feature requests: open an issue in the [issue tracker of this repository](https://github.com/InfiniteSpoved/spoved/issues). Feature requests are welcome; the templates guide you.
+- Bugs and feature requests: open an issue in the [issue tracker of this repository](https://github.com/InfiniteDepo/gitdepo/issues). Feature requests are welcome; the templates guide you.
 - Security problems: see [`SECURITY.md`](SECURITY.md). Do not open a public issue.
-- Do not report spoved changes or bugs to the Forgejo project, and do not propose spoved changes to it. Forgejo's own issue trackers, chat rooms and contribution rules do not apply here.
+- Do not report gitdepo changes or bugs to the Forgejo project, and do not propose gitdepo changes to it. Forgejo's own issue trackers, chat rooms and contribution rules do not apply here.
 
 ## Branches
 
@@ -51,10 +51,10 @@ Pull requests from forks run the same CI. Each run for an outside contributor st
 
 ## License
 
-spoved is licensed GPL-3.0-or-later because it is a fork of Forgejo, which is GPL-3.0-or-later. Contributions are accepted under the same license (inbound = outbound). Keep the existing copyright and SPDX headers of the original authors. New files get `Copyright <year> The spoved contributors. All rights reserved.` and `SPDX-License-Identifier: GPL-3.0-or-later` as the first two comment lines, as in any new Go file.
+gitdepo is licensed GPL-3.0-or-later because it is a fork of Forgejo, which is GPL-3.0-or-later. Contributions are accepted under the same license (inbound = outbound). Keep the existing copyright and SPDX headers of the original authors. New files get `Copyright <year> The gitdepo contributors. All rights reserved.` and `SPDX-License-Identifier: GPL-3.0-or-later` as the first two comment lines, as in any new Go file.
 
 Every commit must carry a `Signed-off-by:` line, which certifies the [Developer Certificate of Origin](https://developercertificate.org/). Add it with `git commit -s`. This applies to commits made from the day the repository is made public; earlier history is not rewritten. A check (`tools/check-dco.sh`, run by `.github/workflows/dco.yml`) fails a pull request whose own commits, merge commits excluded, lack the line.
 
 ## AI-assisted contributions
 
-AI-assisted contributions are welcome, and spoved's own changes are AI-assisted and reviewed by people. Please review and test what you submit, and say in the pull request if AI helped; it helps reviewers.
+AI-assisted contributions are welcome, and gitdepo's own changes are AI-assisted and reviewed by people. Please review and test what you submit, and say in the pull request if AI helped; it helps reviewers.

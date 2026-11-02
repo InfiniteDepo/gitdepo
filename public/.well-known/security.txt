@@ -1,6 +1,6 @@
 # Report security problems in gitdepo privately through GitHub:
 # Security tab > Report a vulnerability. Details are in SECURITY.md.
-Contact: https://github.com/InfiniteSpoved/spoved/security/advisories/new
-Policy: https://github.com/InfiniteSpoved/spoved/blob/develop/SECURITY.md
+Contact: https://github.com/InfiniteDepo/gitdepo/security/advisories/new
+Policy: https://github.com/InfiniteDepo/gitdepo/blob/develop/SECURITY.md
 Preferred-Languages: en
 Expires: 2027-10-11T00:00:00.000Z

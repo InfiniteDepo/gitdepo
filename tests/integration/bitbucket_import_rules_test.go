@@ -1,4 +1,4 @@
-// Copyright 2026 The spoved contributors. All rights reserved.
+// Copyright 2026 The gitdepo contributors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 package integration
@@ -96,7 +96,7 @@ func TestBitbucketImportRules(t *testing.T) {
 			"branch-permissions/2.0/projects/RUL/repos/lib/restrictions": page(
 				restriction("pull-request-only", "PATTERN", "rel,x/*", []map[string]any{usr("user4")}, nil),
 			),
-			// overlapping restrictions: spoved applies only the first matching rule, so both get the strictest
+			// overlapping restrictions: gitdepo applies only the first matching rule, so both get the strictest
 			"branch-permissions/2.0/projects/RUL/repos/ovl/restrictions": page(
 				restriction("no-deletes", "BRANCH", "refs/heads/main", nil, nil),
 				restriction("read-only", "PATTERN", "**", nil, nil),

@@ -1,5 +1,5 @@
 // Copyright 2024 The Gitea Authors. All rights reserved.
-// Copyright 2026 The spoved contributors. All rights reserved.
+// Copyright 2026 The gitdepo contributors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
 package storage

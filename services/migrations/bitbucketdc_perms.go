@@ -1,4 +1,4 @@
-// Copyright 2026 The spoved contributors. All rights reserved.
+// Copyright 2026 The gitdepo contributors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 package migrations
@@ -103,12 +103,12 @@ func bitbucketKeyExpiry(expiries ...timeutil.TimeStamp) timeutil.TimeStamp {
 	return earliest
 }
 
-// bitbucketUnmatched is the reason code of a Bitbucket user without a spoved user.
+// bitbucketUnmatched is the reason code of a Bitbucket user without a gitdepo user.
 type bitbucketUnmatched string
 
 func (e bitbucketUnmatched) Error() string { return string(e) }
 
-// matchBitbucketUser finds the spoved user of a Bitbucket user: the login is the Bitbucket name, and the Bitbucket
+// matchBitbucketUser finds the gitdepo user of a Bitbucket user: the login is the Bitbucket name, and the Bitbucket
 // email is an activated email of that same user, who is an active individual allowed to sign in. Otherwise it returns
 // a bitbucketUnmatched reason code; the email is never reported.
 func matchBitbucketUser(ctx context.Context, bu bitbucketAccount) (*user_model.User, error) {

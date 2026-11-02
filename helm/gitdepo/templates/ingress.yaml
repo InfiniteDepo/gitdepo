@@ -2,9 +2,9 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "spoved.fullname" . }}
+  name: {{ include "gitdepo.fullname" . }}
   labels:
-    {{- include "spoved.labels" . | nindent 4 }}
+    {{- include "gitdepo.labels" . | nindent 4 }}
   {{- with .Values.ingress.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -26,7 +26,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "spoved.fullname" $ }}-http
+                name: {{ include "gitdepo.fullname" $ }}-http
                 port:
                   name: http
     {{- end }}

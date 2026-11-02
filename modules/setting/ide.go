@@ -1,4 +1,4 @@
-// Copyright 2026 The spoved Authors. All rights reserved.
+// Copyright 2026 The gitdepo Authors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 package setting

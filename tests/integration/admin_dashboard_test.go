@@ -133,7 +133,7 @@ func TestAdminDashboardUpdateCheck(t *testing.T) {
 	} {
 		t.Run("enabled "+name, func(t *testing.T) {
 			body, doc := dashboard(t, state)
-			doc.AssertSelection(t, doc.Find(`.flash-error a[href="https://github.com/InfiniteSpoved/spoved/releases"]`), true)
+			doc.AssertSelection(t, doc.Find(`.flash-error a[href="https://github.com/InfiniteDepo/gitdepo/releases"]`), true)
 			assert.NotContains(t, body, "forgejo.org/releases")
 		})
 	}

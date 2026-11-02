@@ -1,6 +1,6 @@
 ---
 name: screenshots
-description: Start a fresh local spoved instance from a branch or PR head and screenshot the pages a change touches (desktop and mobile, light and dark), then review them. Use when asked for "screenshots", "show me the UI", "check how this looks" or before merging a pull request that changes the interface.
+description: Start a fresh local gitdepo instance from a branch or PR head and screenshot the pages a change touches (desktop and mobile, light and dark), then review them. Use when asked for "screenshots", "show me the UI", "check how this looks" or before merging a pull request that changes the interface.
 ---
 
 # Screenshots
@@ -23,7 +23,7 @@ You look at the interface as a user would. You don't change product code. Read `
 
 ## 3. Review
 
-For every screenshot check: nothing overlaps or overflows at 390 px, no raw locale keys (`admin.something.title`) or `%!(EXTRA …)`, the product name is lowercase "spoved", buttons and messages say what they do, empty and error states read well, dark mode has readable contrast, and the page shows nothing the viewer shouldn't see. Note the browser console errors.
+For every screenshot check: nothing overlaps or overflows at 390 px, no raw locale keys (`admin.something.title`) or `%!(EXTRA …)`, the product name is lowercase "gitdepo", buttons and messages say what they do, empty and error states read well, dark mode has readable contrast, and the page shows nothing the viewer shouldn't see. Note the browser console errors.
 
 Accessibility, on each changed page: every control can be reached and used with the keyboard alone (Tab, Enter, Escape closes dialogs) with a visible focus ring; inputs have labels and icon-only buttons an `aria-label`; errors are announced in text, not by color alone; headings are in order. A quick automated pass (`@axe-core/playwright`) helps, but doesn't replace the keyboard check.
 

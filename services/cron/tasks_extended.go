@@ -171,7 +171,7 @@ var UpdateCheckerSettings = &UpdateCheckerConfig{
 		RunAtStart: false,
 		Schedule:   "@every 168h",
 	},
-	HTTPEndpoint: "https://api.github.com/repos/InfiniteSpoved/spoved/releases/latest",
+	HTTPEndpoint: "https://api.github.com/repos/InfiniteDepo/gitdepo/releases/latest",
 }
 
 func registerUpdateGiteaChecker() {

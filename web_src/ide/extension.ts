@@ -1,5 +1,5 @@
 // The built-in extension of the Web IDE: the repository as a file system, its changes as source control, and the
-// commit, all through spoved's web routes.
+// commit, all through gitdepo's web routes.
 import type * as vscode from 'vscode';
 import type {IExtensionManifest} from '@codingame/monaco-vscode-api/extensions';
 import {minimatch} from 'minimatch';
@@ -15,31 +15,31 @@ const LFS_POINTER = 'version https://git-lfs.github.com/spec/v1';
 
 export function manifestFor(config: api.IDEConfig): IExtensionManifest {
   const s = config.strings;
-  const isSpoved = `scmProvider == ${SCHEME}`;
+  const isGitdepo = `scmProvider == ${SCHEME}`;
   return {
-    name: 'spoved-fs',
-    publisher: 'spoved',
+    name: 'gitdepo-fs',
+    publisher: 'gitdepo',
     version: '1.0.0',
     engines: {vscode: '*'},
     enabledApiProposals: ['fileSearchProvider', 'textSearchProvider', 'scmActionButton'],
     contributes: {
       commands: [
-        {command: 'spoved.commit', title: s.commit, icon: '$(check)'},
-        {command: 'spoved.viewChanges', title: s.viewChanges, icon: '$(diff-multiple)'},
-        {command: 'spoved.discard', title: s.discard, icon: '$(discard)'},
-        {command: 'spoved.discardAll', title: s.discardAll, icon: '$(discard)'},
-        {command: 'spoved.preview', title: s.preview, icon: '$(open-preview)'},
-        {command: 'spoved.openInRepository', title: s.openInRepository},
+        {command: 'gitdepo.commit', title: s.commit, icon: '$(check)'},
+        {command: 'gitdepo.viewChanges', title: s.viewChanges, icon: '$(diff-multiple)'},
+        {command: 'gitdepo.discard', title: s.discard, icon: '$(discard)'},
+        {command: 'gitdepo.discardAll', title: s.discardAll, icon: '$(discard)'},
+        {command: 'gitdepo.preview', title: s.preview, icon: '$(open-preview)'},
+        {command: 'gitdepo.openInRepository', title: s.openInRepository},
       ],
       menus: {
         'scm/title': [
-          {command: 'spoved.commit', group: 'navigation', when: isSpoved},
-          {command: 'spoved.viewChanges', group: 'navigation', when: isSpoved},
+          {command: 'gitdepo.commit', group: 'navigation', when: isGitdepo},
+          {command: 'gitdepo.viewChanges', group: 'navigation', when: isGitdepo},
         ],
-        'scm/resourceState/context': [{command: 'spoved.discard', group: 'inline', when: isSpoved}],
-        'scm/resourceGroup/context': [{command: 'spoved.discardAll', group: 'inline', when: isSpoved}],
+        'scm/resourceState/context': [{command: 'gitdepo.discard', group: 'inline', when: isGitdepo}],
+        'scm/resourceGroup/context': [{command: 'gitdepo.discardAll', group: 'inline', when: isGitdepo}],
         'editor/title': [{
-          command: 'spoved.preview',
+          command: 'gitdepo.preview',
           group: 'navigation',
           when: `resourceScheme == ${SCHEME} && resourceExtname =~ /^\\.(${markdownExtensions.join('|')})$/i`,
         }],
@@ -47,7 +47,7 @@ export function manifestFor(config: api.IDEConfig): IExtensionManifest {
       configuration: {
         title: 'gitdepo',
         properties: {
-          'spoved.commit.signoff': {type: 'boolean', default: false, description: s.signoff},
+          'gitdepo.commit.signoff': {type: 'boolean', default: false, description: s.signoff},
         },
       },
     },
@@ -285,7 +285,7 @@ export async function activate(vscode: VSCode, config: api.IDEConfig) {
     },
   };
   scm.inputBox.placeholder = s.commitMessagePlaceholder;
-  scm.acceptInputCommand = {command: 'spoved.commit', title: s.commit};
+  scm.acceptInputCommand = {command: 'gitdepo.commit', title: s.commit};
   const group = scm.createResourceGroup('changes', s.changes);
   const label = {added: s.added, modified: s.modified, deleted: s.deleted, renamed: s.renamed};
   const openChange = (change: Change): vscode.Command => {
@@ -311,7 +311,7 @@ export async function activate(vscode: VSCode, config: api.IDEConfig) {
       },
     }));
     scm.count = changes.length;
-    scm.actionButton = {command: {command: 'spoved.commit', title: s.commit}, enabled: canEdit && changes.length > 0};
+    scm.actionButton = {command: {command: 'gitdepo.commit', title: s.commit}, enabled: canEdit && changes.length > 0};
     decorationsChanged.fire(undefined);
   }
 
@@ -328,26 +328,26 @@ export async function activate(vscode: VSCode, config: api.IDEConfig) {
   });
 
   const fireAll = (paths: string[]) => fileChanged.fire(paths.map((path) => ({type: vscode.FileChangeType.Changed, uri: uriOf(path)})));
-  vscode.commands.registerCommand('spoved.discard', (...states: vscode.SourceControlResourceState[]) => {
+  vscode.commands.registerCommand('gitdepo.discard', (...states: vscode.SourceControlResourceState[]) => {
     const paths = states.map((state) => pathOf(state.resourceUri));
     for (const path of paths) ws.revert(path);
     changed(paths.map((path) => ({type: vscode.FileChangeType.Changed, uri: uriOf(path)})));
   });
-  vscode.commands.registerCommand('spoved.discardAll', async () => {
+  vscode.commands.registerCommand('gitdepo.discardAll', async () => {
     if (await vscode.window.showWarningMessage(s.discardAllConfirm, {modal: true}, s.discardAll) !== s.discardAll) return;
     const paths = ws.changes().flatMap((c) => c.from ? [c.path, c.from] : [c.path]);
     ws.clear();
     changed(paths.map((path) => ({type: vscode.FileChangeType.Changed, uri: uriOf(path)})));
   });
-  vscode.commands.registerCommand('spoved.viewChanges', () => vscode.commands.executeCommand('_workbench.openMultiDiffEditor', {
-    multiDiffSourceUri: vscode.Uri.from({scheme: 'spoved-changes', path: root}),
+  vscode.commands.registerCommand('gitdepo.viewChanges', () => vscode.commands.executeCommand('_workbench.openMultiDiffEditor', {
+    multiDiffSourceUri: vscode.Uri.from({scheme: 'gitdepo-changes', path: root}),
     title: s.changes,
     resources: ws.changes().map((c) => ({
       originalUri: c.kind === 'added' ? undefined : uriOf(c.from ?? c.path, BASE_SCHEME),
       modifiedUri: c.kind === 'deleted' ? undefined : uriOf(c.path),
     })),
   }));
-  vscode.commands.registerCommand('spoved.preview', (uri?: vscode.Uri) => {
+  vscode.commands.registerCommand('gitdepo.preview', (uri?: vscode.Uri) => {
     const target = uri ?? vscode.window.activeTextEditor?.document.uri;
     if (target) vscode.commands.executeCommand('vscode.openWith', target, PREVIEW_EDITOR, vscode.ViewColumn.Beside);
   });
@@ -355,7 +355,7 @@ export async function activate(vscode: VSCode, config: api.IDEConfig) {
   const branchItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   branchItem.text = `$(${config.refType === 'branch' ? 'git-branch' : config.refType === 'tag' ? 'tag' : 'git-commit'}) ${config.refName}`;
   branchItem.tooltip = s.openInRepository;
-  branchItem.command = 'spoved.openInRepository';
+  branchItem.command = 'gitdepo.openInRepository';
   branchItem.show();
 
   // after a commit, the IDE continues on the commit's branch with no changes left
@@ -412,7 +412,7 @@ export async function activate(vscode: VSCode, config: api.IDEConfig) {
   }
 
   let committing = false;
-  vscode.commands.registerCommand('spoved.commit', async (forceNewBranch?: boolean) => {
+  vscode.commands.registerCommand('gitdepo.commit', async (forceNewBranch?: boolean) => {
     if (committing) return;
     const files = ws.operations();
     if (!files.length) {
@@ -460,7 +460,7 @@ export async function activate(vscode: VSCode, config: api.IDEConfig) {
         last_commit: ws.commitID,
         new_branch: newBranch,
         message,
-        signoff: vscode.workspace.getConfiguration('spoved.commit').get('signoff', false),
+        signoff: vscode.workspace.getConfiguration('gitdepo.commit').get('signoff', false),
         files,
       }));
       const base = config.refName;
@@ -479,7 +479,7 @@ export async function activate(vscode: VSCode, config: api.IDEConfig) {
       if (err instanceof api.RequestError && err.code === 'branch_moved' && config.canCreateBranch) {
         if (await vscode.window.showWarningMessage(err.message, s.commitToNewBranch) === s.commitToNewBranch) {
           committing = false;
-          await vscode.commands.executeCommand('spoved.commit', true);
+          await vscode.commands.executeCommand('gitdepo.commit', true);
         }
       } else {
         vscode.window.showErrorMessage(err.message);
@@ -489,7 +489,7 @@ export async function activate(vscode: VSCode, config: api.IDEConfig) {
     }
   });
 
-  vscode.commands.registerCommand('spoved.openInRepository', () => {
+  vscode.commands.registerCommand('gitdepo.openInRepository', () => {
     const editor = vscode.window.activeTextEditor?.document.uri;
     const path = editor?.scheme === SCHEME && ws.entry(pathOf(editor)) ? pathOf(editor) : '';
     window.open(`${config.repoLink}/src/${config.refType}/${api.escapePath(config.refName)}${path ? `/${api.escapePath(path)}` : ''}`, '_blank', 'noopener');

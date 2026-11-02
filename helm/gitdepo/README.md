@@ -1,20 +1,20 @@
-# spoved Helm chart
+# gitdepo Helm chart
 
-Installs one spoved instance (rootless image, one replica, `Recreate`) with a PersistentVolumeClaim for `/var/lib/gitea`. The database is an external PostgreSQL server; there is no bundled one. High availability is not supported yet.
+Installs one gitdepo instance (rootless image, one replica, `Recreate`) with a PersistentVolumeClaim for `/var/lib/gitea`. The database is an external PostgreSQL server; there is no bundled one. High availability is not supported yet.
 
 ## Install
 
 ```sh
-kubectl create namespace spoved
-kubectl -n spoved create secret generic spoved-db --from-literal=password='<database password>'
+kubectl create namespace gitdepo
+kubectl -n gitdepo create secret generic gitdepo-db --from-literal=password='<database password>'
 # Optional but recommended: a fixed SECRET_KEY also locks the web installer.
-kubectl -n spoved create secret generic spoved-secrets --from-literal=SECRET_KEY="$(openssl rand -hex 32)"
+kubectl -n gitdepo create secret generic gitdepo-secrets --from-literal=SECRET_KEY="$(openssl rand -hex 32)"
 
-helm install spoved ./helm/spoved -n spoved \
+helm install gitdepo ./helm/gitdepo -n gitdepo \
   --set rootUrl=https://git.example.com/ \
   --set database.host=postgres.example.com:5432 \
-  --set database.existingSecret=spoved-db \
-  --set 'extraEnvFrom[0].secretRef.name=spoved-secrets'
+  --set database.existingSecret=gitdepo-db \
+  --set 'extraEnvFrom[0].secretRef.name=gitdepo-secrets'
 ```
 
 `rootUrl`, `database.host` and `database.existingSecret` are required. Without `SECRET_KEY` the web installer opens at the URL; with it, create the first administrator as `NOTES.txt` shows (`gitea admin user create --admin ...`).
@@ -34,7 +34,7 @@ See [`values.yaml`](values.yaml). The main ones:
 | `ingress.*` | `className`, `annotations`, `hosts`, `tls` |
 | `serviceAccount.annotations` | Workload identity |
 
-SSH is served by spoved itself on container port 2222. Set `sshDomain` (and `sshPort` if the load balancer isn't on 22) so clone URLs are right.
+SSH is served by gitdepo itself on container port 2222. Set `sshDomain` (and `sshPort` if the load balancer isn't on 22) so clone URLs are right.
 
 ## Per cloud
 

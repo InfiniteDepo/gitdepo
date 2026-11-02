@@ -2,15 +2,15 @@
 	<div class="admin-setting-content">
 		{{if .NeedMajorUpdate}}
 			<div class="ui negative message flash-error">
-				<p>{{ctx.Locale.Tr "admin.dashboard.new_major_version_hint" .RemoteVersion AppVer "https://github.com/InfiniteSpoved/spoved/releases"}}</p>
+				<p>{{ctx.Locale.Tr "admin.dashboard.new_major_version_hint" .RemoteVersion AppVer "https://github.com/InfiniteDepo/gitdepo/releases"}}</p>
 			</div>
 		{{else if .NeedMinorUpdate}}
 			<div class="ui negative message flash-error">
-				<p>{{ctx.Locale.Tr "admin.dashboard.new_minor_version_hint" .RemoteVersion AppVer "https://github.com/InfiniteSpoved/spoved/releases"}}</p>
+				<p>{{ctx.Locale.Tr "admin.dashboard.new_minor_version_hint" .RemoteVersion AppVer "https://github.com/InfiniteDepo/gitdepo/releases"}}</p>
 			</div>
 		{{else if .UpdateCheckerError}}
 			<div class="ui negative message flash-error">
-				<p>{{ctx.Locale.Tr "admin.dashboard.update_checker_error" .UpdateCheckerError "https://github.com/InfiniteSpoved/spoved/releases"}}</p>
+				<p>{{ctx.Locale.Tr "admin.dashboard.update_checker_error" .UpdateCheckerError "https://github.com/InfiniteDepo/gitdepo/releases"}}</p>
 			</div>
 		{{end}}
 		<h4 class="ui top attached header">
