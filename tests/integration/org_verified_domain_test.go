@@ -31,7 +31,7 @@ const verifiedDomainsURL = "/org/org3/settings/verified_domains"
 func mockDomainRecords(t *testing.T) {
 	// every domain has the record of org3
 	t.Cleanup(test.MockVariableValue(&org_service.LookupTXT, func(_ context.Context, name string) ([]string, error) {
-		domain := strings.TrimSuffix(strings.TrimPrefix(name, "_spoved-verify."), ".")
+		domain := strings.TrimSuffix(strings.TrimPrefix(name, "_gitdepo-verify."), ".")
 		return []string{org_service.DomainRecordValue(3, domain)}, nil
 	}))
 }
@@ -70,7 +70,7 @@ func TestOrgVerifiedDomainSettings(t *testing.T) {
 
 		doc = NewHTMLParser(t, owner.MakeRequest(t, NewRequest(t, "GET", verifiedDomainsURL+"?domain=Company.COM"), http.StatusOK).Body)
 		pending := doc.Find("#verified-domain-pending").Text()
-		assert.Contains(t, pending, "_spoved-verify.company.com")
+		assert.Contains(t, pending, "_gitdepo-verify.company.com")
 		assert.Contains(t, pending, org_service.DomainRecordValue(3, "company.com"))
 
 		owner.MakeRequest(t, NewRequestWithValues(t, "POST", verifiedDomainsURL+"/verify", map[string]string{"domain": "company.com"}), http.StatusSeeOther)

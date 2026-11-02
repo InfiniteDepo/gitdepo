@@ -16,7 +16,7 @@ import (
 )
 
 // productName is the product name in the locale override; the expected strings below use {product}.
-const productName = "spoved"
+const productName = "gitdepo"
 
 func TestTranslatePreExecutionWarning(t *testing.T) {
 	defer test.MockVariableValue(&setting.AppDocsVer, func() string { return "v0.0" })() // tests below use "foo" instead, to demonstrate that the given values are NOT derived from setting.AppDocsVer

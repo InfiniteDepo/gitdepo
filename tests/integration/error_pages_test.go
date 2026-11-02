@@ -54,7 +54,7 @@ func TestDemoErrorPages(t *testing.T) {
 		assert.NotContains(t, body, "codeberg.org")
 	})
 
-	t.Run("Server error reports to the spoved issues by default", func(t *testing.T) {
+	t.Run("Server error reports to the gitdepo issues by default", func(t *testing.T) {
 		defer tests.PrepareTestEnv(t)()
 
 		req := NewRequest(t, "GET", "/-/demo/error/500")

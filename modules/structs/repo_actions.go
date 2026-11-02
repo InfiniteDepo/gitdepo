@@ -74,7 +74,7 @@ type ActionRunner struct {
 	// Status indicates whether this runner is offline, or active, for example.
 	// enum: ["offline", "idle", "active"]
 	Status string `json:"status"`
-	// Version is the self-reported version string of the spoved runner.
+	// Version is the self-reported version string of the gitdepo runner.
 	Version string `json:"version"`
 	// Labels is a list of labels attached to this runner.
 	Labels []string `json:"labels"`

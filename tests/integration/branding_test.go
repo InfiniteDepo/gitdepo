@@ -38,11 +38,11 @@ func TestBranding(t *testing.T) {
 		}
 
 		page := NewHTMLParser(t, MakeRequest(t, NewRequest(t, "GET", "/"), http.StatusOK).Body)
-		assert.Contains(t, page.Find("title").Text(), "spoved")
-		assert.Contains(t, page.Find("footer").Text(), "Powered by spoved")
+		assert.Contains(t, page.Find("title").Text(), "gitdepo")
+		assert.Contains(t, page.Find("footer").Text(), "Powered by gitdepo")
 		page.AssertElement(t, `footer a.codehat-credit[href="https://forgejo.org"]`, true)
 		og, _ := page.Find(`meta[property="og:description"]`).Attr("content")
-		assert.Contains(t, og, "spoved")
+		assert.Contains(t, og, "gitdepo")
 	})
 
 	t.Run("Site admin", func(t *testing.T) {
@@ -92,8 +92,8 @@ func TestBranding(t *testing.T) {
 			assert.Empty(t, test.BrandMentions(resp.Body.String()), base)
 			page := NewHTMLParser(t, resp.Body)
 			setup := page.Find(".runner-container").Text()
-			assert.Contains(t, setup, "spoved runner", base)
-			assert.Contains(t, setup, "spoved:", base)
+			assert.Contains(t, setup, "gitdepo runner", base)
+			assert.Contains(t, setup, "gitdepo:", base)
 			assert.Contains(t, setup, "forgejo-runner daemon", base)
 		}
 	})

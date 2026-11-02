@@ -6,7 +6,7 @@ own session or access token; OAuth2 apps and authorized integrations can't use t
 
 ## Filters
 
-The page, `GET /api/v1/admin/audit` and `spoved admin audit export` take the same parameters, so a page URL is a
+The page, `GET /api/v1/admin/audit` and `gitdepo admin audit export` take the same parameters, so a page URL is a
 link to the same evidence in the API. All filters combine with AND.
 
 | Parameter | Selects |
@@ -38,7 +38,7 @@ with the filter), and its response carries a manifest:
 - when the export stopped at 100,000 rows, `X-Audit-Exported-Through` and a `Link: <…>; rel="next"` with the same
   filter plus `since` and `after_id`, which continues it.
 
-`spoved admin audit export --since … --until … [filters] --format csv|json [--output FILE]` has no row limit, writes
+`gitdepo admin audit export --since … --until … [filters] --format csv|json [--output FILE]` has no row limit, writes
 the same rows as the web export for the same filter, and prints the manifest to stderr. `--output` creates a new file
 with mode 0600.
 
@@ -54,7 +54,7 @@ Site administration → Log shipping can send the audit log to New Relic, any HT
 Every entry is sent whatever the destination's minimum level or filters are. The sealer ships each row once, right
 after it is committed, as one JSON event: the message is the action key, `seq` and `hash` tie it to the chain, and
 `data` is one JSON string (redacted like every shipped field, cut at 2 KB). With Loki, the labels are
-`service="spoved"`, `logtype="audit"` and `level` (`info` for a success, `warn` otherwise); put the tenant or
+`service="gitdepo"`, `logtype="audit"` and `level` (`info` for a success, `warn` otherwise); put the tenant or
 authorisation in a custom header. The audit page shows how many destinations this instance streams to.
 
 Shipping is best effort; the database is the source of truth. The receiver can find a gap from `seq` and `hash`.

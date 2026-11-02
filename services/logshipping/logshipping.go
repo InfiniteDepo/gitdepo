@@ -588,7 +588,7 @@ func Test(ctx context.Context, id string) (TestResult, error) {
 		return TestResult{Error: "invalid configuration"}, nil
 	}
 	event, _ := json.Marshal(map[string]any{
-		"timestamp": time.Now().UnixMilli(), "message": "spoved log shipping test event", "level": "INFO",
+		"timestamp": time.Now().UnixMilli(), "message": "gitdepo log shipping test event", "level": "INFO",
 		"logtype": "test", "logger": "test", "service": log.ServiceName,
 	})
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)

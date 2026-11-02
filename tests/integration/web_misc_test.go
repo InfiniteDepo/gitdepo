@@ -80,7 +80,7 @@ func TestManifestJsonCustomFile(t *testing.T) {
 }
 
 func TestBaseTemplateTitle(t *testing.T) {
-	siteTitleText := "spoved: Beyond coding. We Forge."
+	siteTitleText := "gitdepo: Beyond coding. We Forge."
 	defer tests.PrepareTestEnv(t)()
 
 	for _, testCase := range []struct {

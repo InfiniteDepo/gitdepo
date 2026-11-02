@@ -4,7 +4,7 @@
 		<div class="ui form">
 			<div class="field">
 				<label>{{svg "octicon-code"}} {{ctx.Locale.Tr "packages.cargo.registry"}}</label>
-				<div class="markup"><pre class="code-block"><code>[registries.spoved]
+				<div class="markup"><pre class="code-block"><code>[registries.gitdepo]
 index = "sparse+<origin-url data-url="{{AppSubUrl}}/api/packages/{{.PackageDescriptor.Owner.Name}}/cargo/"></origin-url>" # Sparse index
 # index = "<origin-url data-url="{{AppSubUrl}}/{{.PackageDescriptor.Owner.Name}}/_cargo-index.git"></origin-url>" # Git
 
@@ -13,7 +13,7 @@ git-fetch-with-cli = true</code></pre></div>
 			</div>
 			<div class="field">
 				<label>{{svg "octicon-terminal"}} {{ctx.Locale.Tr "packages.cargo.install"}}</label>
-				<div class="markup"><pre class="code-block"><code>cargo add {{.PackageDescriptor.Package.Name}}@{{.PackageDescriptor.Version.Version}} --registry spoved</code></pre></div>
+				<div class="markup"><pre class="code-block"><code>cargo add {{.PackageDescriptor.Package.Name}}@{{.PackageDescriptor.Version.Version}} --registry gitdepo</code></pre></div>
 			</div>
 			<div class="field">
 				<label>{{ctx.Locale.Tr "packages.registry.documentation" "Cargo" (AppDocsURL "user/packages/cargo/")}}</label>

@@ -18,12 +18,12 @@ func TestAuthRealmNamesTheProduct(t *testing.T) {
 
 	req := NewRequest(t, "GET", "/user2/repo2.git/info/refs?service=git-upload-pack")
 	resp := MakeRequest(t, req, http.StatusUnauthorized)
-	assert.Equal(t, `Basic realm="spoved"`, resp.Header().Get("WWW-Authenticate"))
+	assert.Equal(t, `Basic realm="gitdepo"`, resp.Header().Get("WWW-Authenticate"))
 
 	// user31 has private visibility (models/fixtures/user.yml); a public owner like user2 sends no challenge
 	req = NewRequest(t, "GET", "/api/packages/user31/generic/pkg/1.0/file.bin")
 	resp = MakeRequest(t, req, http.StatusUnauthorized)
-	assert.Equal(t, `Basic realm="spoved Package API"`, resp.Header().Get("WWW-Authenticate"))
+	assert.Equal(t, `Basic realm="gitdepo Package API"`, resp.Header().Get("WWW-Authenticate"))
 
 	req = NewRequest(t, "GET", "/api/packages/user2/generic/pkg/1.0/file.bin")
 	resp = MakeRequest(t, req, NoExpectedStatus)

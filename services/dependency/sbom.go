@@ -121,7 +121,7 @@ func (s *SBOM) downloadLocation(sha string) string {
 	return "git+" + clone + "@" + sha
 }
 
-func toolName() string { return "spoved-" + setting.AppVer }
+func toolName() string { return "gitdepo-" + setting.AppVer }
 
 func marshal(v any) ([]byte, error) {
 	b, err := json.Marshal(v)
@@ -247,14 +247,14 @@ func (s *SBOM) GenerateCycloneDX(now time.Time, id uuid.UUID) ([]byte, error) {
 	sha := s.Scan.CommitSHA
 	meta := map[string]any{
 		"timestamp": now.UTC().Format("2006-01-02T15:04:05Z"),
-		"tools":     map[string]any{"components": []cdxComponent{{Type: "application", BOMRef: "tool", Name: "spoved", Version: setting.AppVer}}},
+		"tools":     map[string]any{"components": []cdxComponent{{Type: "application", BOMRef: "tool", Name: "gitdepo", Version: setting.AppVer}}},
 		"component": cdxComponent{
 			Type: "application", BOMRef: root, Name: s.Repo.FullName(), Version: sha,
 			ExternalReferences: []map[string]string{{"type": "vcs", "url": s.Repo.CloneLink().HTTPS}},
 		},
 	}
 	if note := s.skippedNote(); note != "" {
-		meta["properties"] = []cdxProperty{{Name: "spoved:skipped-manifests", Value: note}}
+		meta["properties"] = []cdxProperty{{Name: "gitdepo:skipped-manifests", Value: note}}
 	}
 	comps := []cdxComponent{}
 	direct := []string{}
@@ -277,10 +277,10 @@ func (s *SBOM) GenerateCycloneDX(now time.Time, id uuid.UUID) ([]byte, error) {
 			}
 		}
 		for _, m := range c.manifests {
-			cc.Properties = append(cc.Properties, cdxProperty{Name: "spoved:manifest", Value: m})
+			cc.Properties = append(cc.Properties, cdxProperty{Name: "gitdepo:manifest", Value: m})
 		}
 		for _, r := range c.requirements {
-			cc.Properties = append(cc.Properties, cdxProperty{Name: "spoved:requirement", Value: r})
+			cc.Properties = append(cc.Properties, cdxProperty{Name: "gitdepo:requirement", Value: r})
 		}
 		comps = append(comps, cc)
 		if c.direct {

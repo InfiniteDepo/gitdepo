@@ -1,9 +1,9 @@
-spoved is a modified version of Forgejo (https://codeberg.org/forgejo/forgejo),
+gitdepo is a modified version of Forgejo (https://codeberg.org/forgejo/forgejo),
 which is a fork of Gitea (https://gitea.com), itself a fork of Gogs (https://gogs.io).
 Almost all of its code is their work; the original copyright and licence
-notices in each file are kept. See the git history for the changes made in spoved.
+notices in each file are kept. See the git history for the changes made in gitdepo.
 
-spoved is licensed under the GNU General Public License, version 3 or later
+gitdepo is licensed under the GNU General Public License, version 3 or later
 (see LICENSE). Third-party licences are listed in assets/go-licenses.json and
 in the licence output of the frontend build.
 
@@ -13,5 +13,9 @@ Rice, licensed under the MIT licence; its full text is in
 modules/secretdetection/rules.go and rules_gitleaks.go (the rules in
 rules_gitleaks_services.go are adapted from gitleaks too).
 
-"Forgejo" is a trademark of Codeberg e.V. spoved is not affiliated with or
+"Forgejo" is a trademark of Codeberg e.V. gitdepo is not affiliated with or
 endorsed by Forgejo or Codeberg e.V.
+
+"Git" is a trademark of the Software Freedom Conservancy. gitdepo uses Git but
+is not affiliated with or endorsed by the Git project or the Software Freedom
+Conservancy.

@@ -118,7 +118,7 @@ func TestSpovedShadowKeys(t *testing.T) {
 	for _, key := range spovedShadowKeys {
 		assert.True(t, upstreamEn.HasKey(key), "%s is no longer in locale_en-US.ini: update the shadow key and docs/branding.md", key)
 		value := en.TrString(key)
-		assert.Contains(t, value, "spoved", key)
+		assert.Contains(t, value, "gitdepo", key)
 		assert.Empty(t, test.BrandMentions(value), key)
 	}
 }
@@ -152,7 +152,7 @@ func TestSpovedLocaleNextValues(t *testing.T) {
 	require.NoError(t, json.Unmarshal(next, &values))
 	for key, v := range values {
 		if s, ok := v.(string); ok {
-			assert.NotRegexp(t, `CodeHat|GitHat|Spoved|SPOVED`, s, key)
+			assert.NotRegexp(t, `CodeHat|GitHat|(?i:\bspoved\b)|Gitdepo|GITDEPO`, s, key)
 		}
 	}
 }

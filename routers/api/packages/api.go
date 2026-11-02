@@ -69,7 +69,7 @@ func reqPackageAccess(accessMode perm.AccessMode) func(ctx *context.Context) {
 				}
 			}
 			if !scopeMatched {
-				ctx.Resp.Header().Set("WWW-Authenticate", `Basic realm="spoved Package API"`)
+				ctx.Resp.Header().Set("WWW-Authenticate", `Basic realm="gitdepo Package API"`)
 				ctx.Error(http.StatusUnauthorized, "reqPackageAccess", "user should have specific permission or be a site admin")
 				return
 			}
@@ -90,7 +90,7 @@ func reqPackageAccess(accessMode perm.AccessMode) func(ctx *context.Context) {
 		}
 
 		if ctx.Package.AccessMode < accessMode && !ctx.IsUserSiteAdmin() {
-			ctx.Resp.Header().Set("WWW-Authenticate", `Basic realm="spoved Package API"`)
+			ctx.Resp.Header().Set("WWW-Authenticate", `Basic realm="gitdepo Package API"`)
 			ctx.Error(http.StatusUnauthorized, "reqPackageAccess", "user should have specific permission or be a site admin")
 			return
 		}

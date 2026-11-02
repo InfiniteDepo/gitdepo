@@ -10,9 +10,9 @@ import (
 	"github.com/PuerkitoBio/goquery"
 )
 
-// brandRe matches the old names in any case, and the new one only when capitalised: spoved is always lowercase.
+// brandRe matches the old names in any case, and the new one only when capitalised: gitdepo is always lowercase.
 // Word boundaries keep "InfiniteSpoved" (the repository owner) and "MyForgejoTeam1" out.
-var brandRe = regexp.MustCompile(`.{0,40}((?i:\bforgejo|\bgithat|\bcodehat)|\bSpoved\b|\bSPOVED\b).{0,40}`)
+var brandRe = regexp.MustCompile(`.{0,40}((?i:\bforgejo|\bgithat|\bcodehat|\bspoved\b)|\bGitdepo\b|\bGITDEPO\b).{0,40}`)
 
 // BrandAllowed are the exact visible phrases that legitimately name Forgejo, the upstream project or its
 // external programs. BrandMentions ignores them; docs/branding.md explains each one.
@@ -25,10 +25,12 @@ var BrandAllowed = []string{
 	"forgejo.org/docs",
 	// the installer's placeholders for the domain and URL are upstream's example host
 	"next.forgejo.org",
+	// the repository and its container image keep the old name until they move
+	"InfiniteSpoved/spoved", "infinitespoved/spoved",
 }
 
-// BrandMentions returns every user-visible old product name ("Forgejo", "GitHat", "CodeHat") and capitalised
-// "Spoved" or "SPOVED" in an HTML page or mail, with some context.
+// BrandMentions returns every user-visible old product name ("Forgejo", "GitHat", "CodeHat", "spoved") and
+// capitalised "Gitdepo" or "GITDEPO" in an HTML page or mail, with some context.
 // It reads the title, meta contents, body text and the alt, title, placeholder and aria-label attributes,
 // and ignores the phrases in BrandAllowed.
 func BrandMentions(html string) []string {

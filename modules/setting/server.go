@@ -149,7 +149,7 @@ func generateDisplayName() string {
 
 func loadServerFrom(rootCfg ConfigProvider) {
 	sec := rootCfg.Section("server")
-	AppName = rootCfg.Section("").Key("APP_NAME").MustString("spoved")
+	AppName = rootCfg.Section("").Key("APP_NAME").MustString("gitdepo")
 	AppSlogan = rootCfg.Section("").Key("APP_SLOGAN").MustString("")
 	AppDisplayNameFormat = rootCfg.Section("").Key("APP_DISPLAY_NAME_FORMAT").MustString("{APP_NAME}: {APP_SLOGAN}")
 	AppDisplayName = generateDisplayName()

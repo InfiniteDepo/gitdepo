@@ -190,26 +190,26 @@ var baseRules = []Rule{
 	// `Authorization: token <hex>` (also as a JSON or YAML key), a .netrc
 	// password and the password of a URL (https://user:<hex>@host).
 	{
-		ID: "forgejo-access-token", Name: "Forgejo, Gitea or spoved access token", Type: "forgejo",
+		ID: "forgejo-access-token", Name: "Forgejo, Gitea or gitdepo access token", Type: "forgejo",
 		Keywords:    []string{"token"},
 		Regex:       `(?i:token)[\w.-]{0,20}(?:\\?["'])?\s*[:=]\s*(?:\\?["'])?([0-9a-f]{40})`,
 		SecretGroup: 1, MinEntropy: 3, TokenChars: alnumChars, Window: 512, Anchored: true, HitCheck: tokenHit,
 	},
 	{
-		ID: "forgejo-access-token-header", Name: "Forgejo, Gitea or spoved access token in an Authorization header", Type: "forgejo",
+		ID: "forgejo-access-token-header", Name: "Forgejo, Gitea or gitdepo access token in an Authorization header", Type: "forgejo",
 		Keywords:    []string{"authorization"},
 		Regex:       `(?i:authorization)["']?\s*[:=]\s*["']?(?i:token|bearer)\s+([0-9a-f]{40})`,
 		SecretGroup: 1, MinEntropy: 3, TokenChars: alnumChars,
 		Window: 512,
 	},
 	{
-		ID: "forgejo-access-token-netrc", Name: "Forgejo, Gitea or spoved access token in a .netrc file", Type: "forgejo",
+		ID: "forgejo-access-token-netrc", Name: "Forgejo, Gitea or gitdepo access token in a .netrc file", Type: "forgejo",
 		Keywords:    []string{"machine"},
 		Regex:       `machine\s+\S{1,64}\s+login\s+\S{1,64}\s+password\s+([0-9a-f]{40})`,
 		SecretGroup: 1, MinEntropy: 3, TokenChars: alnumChars,
 	},
 	{
-		ID: "forgejo-access-token-url", Name: "Forgejo, Gitea or spoved access token in a URL", Type: "forgejo",
+		ID: "forgejo-access-token-url", Name: "Forgejo, Gitea or gitdepo access token in a URL", Type: "forgejo",
 		Keywords:    []string{"://"},
 		Regex:       `://(?:[^\s/:@]{1,64}:)?([0-9a-f]{40})@`,
 		SecretGroup: 1, MinEntropy: 3, TokenChars: alnumChars,
@@ -217,7 +217,7 @@ var baseRules = []Rule{
 	{
 		// OAuth2 application client secrets (gto_) and authorization codes
 		// (gta_) of the instance: base32 of 32 random bytes (models/auth/oauth2.go).
-		ID: "forgejo-oauth2-secret", Name: "Forgejo, Gitea or spoved OAuth2 secret", Type: "forgejo",
+		ID: "forgejo-oauth2-secret", Name: "Forgejo, Gitea or gitdepo OAuth2 secret", Type: "forgejo",
 		Keywords:    []string{"gto_", "gta_"},
 		Regex:       `(gt[ao]_[a-z2-7]{52})`,
 		SecretGroup: 1, MinEntropy: 3, TokenChars: alnumChars,

@@ -162,8 +162,8 @@ test.describe('as fake users', () => {
       await page.getByRole('textbox', {name: 'Domain'}).fill(domain.toUpperCase());
       await page.getByRole('button', {name: 'Add domain'}).click();
       const pending = page.locator('#verified-domain-pending');
-      await expect(pending).toContainText(`_spoved-verify.${domain}`);
-      await expect(pending).toContainText('spoved-verification=');
+      await expect(pending).toContainText(`_gitdepo-verify.${domain}`);
+      await expect(pending).toContainText('gitdepo-verification=');
       await expect(pending.getByRole('button', {name: 'Verify without DNS'})).toHaveCount(0);
       await screenshot(page);
 

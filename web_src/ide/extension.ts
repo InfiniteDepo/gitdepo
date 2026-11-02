@@ -45,7 +45,7 @@ export function manifestFor(config: api.IDEConfig): IExtensionManifest {
         }],
       },
       configuration: {
-        title: 'spoved',
+        title: 'gitdepo',
         properties: {
           'spoved.commit.signoff': {type: 'boolean', default: false, description: s.signoff},
         },

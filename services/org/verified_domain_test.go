@@ -48,9 +48,9 @@ func TestNormalizeDomain(t *testing.T) {
 
 func TestDomainRecord(t *testing.T) {
 	defer test.MockVariableValue(&setting.SecretKey, "secret")()
-	assert.Equal(t, "_spoved-verify.example.com", DomainRecordName("example.com"))
+	assert.Equal(t, "_gitdepo-verify.example.com", DomainRecordName("example.com"))
 	v := DomainRecordValue(3, "example.com")
-	assert.Regexp(t, `^spoved-verification=[A-Za-z0-9_-]{43}$`, v)
+	assert.Regexp(t, `^gitdepo-verification=[A-Za-z0-9_-]{43}$`, v)
 	assert.Equal(t, v, DomainRecordValue(3, "example.com"))
 	assert.NotEqual(t, v, DomainRecordValue(6, "example.com"))
 	assert.NotEqual(t, v, DomainRecordValue(3, "example.org"))
@@ -78,13 +78,13 @@ func TestVerifyDomain(t *testing.T) {
 	admin := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
 
 	t.Run("mismatch", func(t *testing.T) {
-		asked := mockTXT(t, []string{"spoved-verification=wrong", DomainRecordValue(6, "example.com")}, nil)
+		asked := mockTXT(t, []string{"gitdepo-verification=wrong", DomainRecordValue(6, "example.com")}, nil)
 		err := VerifyDomain(ctx, org3, owner, "Example.com", false)
 		require.ErrorIs(t, err, ErrDomainRecordNotFound)
-		assert.Equal(t, "_spoved-verify.example.com.", *asked)
+		assert.Equal(t, "_gitdepo-verify.example.com.", *asked)
 	})
 	t.Run("dns error is neutral", func(t *testing.T) {
-		mockTXT(t, nil, errors.New("lookup _spoved-verify.example.com on 10.0.0.1: no such host"))
+		mockTXT(t, nil, errors.New("lookup _gitdepo-verify.example.com on 10.0.0.1: no such host"))
 		err := VerifyDomain(ctx, org3, owner, "example.com", false)
 		require.ErrorIs(t, err, ErrDomainRecordNotFound)
 		assert.NotContains(t, err.Error(), "10.0.0.1")

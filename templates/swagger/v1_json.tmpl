@@ -31553,7 +31553,7 @@
           "x-go-name": "UUID"
         },
         "version": {
-          "description": "Version is the self-reported version string of the spoved runner.",
+          "description": "Version is the self-reported version string of the gitdepo runner.",
           "type": "string",
           "x-go-name": "Version"
         }
@@ -42208,7 +42208,7 @@
       "x-go-package": "forgejo.org/modules/structs"
     },
     "SecretScanningLocationDetails": {
-      "description": "SecretScanningLocationDetails is where a secret was found: a file at a line, in the commit that brought it, as\nGitHub names them. Fields that spoved can't fill (the columns, the URLs of a wiki commit) are left out. Path and\nthe commit author are text from git, not checked by spoved: clients must escape them.",
+      "description": "SecretScanningLocationDetails is where a secret was found: a file at a line, in the commit that brought it, as\nGitHub names them. Fields that gitdepo can't fill (the columns, the URLs of a wiki commit) are left out. Path and\nthe commit author are text from git, not checked by gitdepo: clients must escape them.",
       "type": "object",
       "properties": {
         "blob_sha": {
@@ -42221,7 +42221,7 @@
           "x-go-name": "BlobURL"
         },
         "comment_id": {
-          "description": "spoved: for a place in a comment the caller may read, the ID of the comment",
+          "description": "gitdepo: for a place in a comment the caller may read, the ID of the comment",
           "type": "integer",
           "format": "int64",
           "x-go-name": "CommentID"
@@ -42231,7 +42231,7 @@
           "x-go-name": "CommitAuthorEmail"
         },
         "commit_author_name": {
-          "description": "spoved: the author of the commit, as it names itself (anyone can write any name)",
+          "description": "gitdepo: the author of the commit, as it names itself (anyone can write any name)",
           "type": "string",
           "x-go-name": "CommitAuthorName"
         },
@@ -42255,12 +42255,12 @@
           "x-go-name": "EndLine"
         },
         "field": {
-          "description": "spoved: for a place in text the caller may read, the part that holds the secret: title, body or comment",
+          "description": "gitdepo: for a place in text the caller may read, the part that holds the secret: title, body or comment",
           "type": "string",
           "x-go-name": "Field"
         },
         "html_url": {
-          "description": "spoved: the page of the file at that commit, or of the issue, pull request or comment, in the web interface\n(empty when the place has no commit and no text, and for the wiki)",
+          "description": "gitdepo: the page of the file at that commit, or of the issue, pull request or comment, in the web interface\n(empty when the place has no commit and no text, and for the wiki)",
           "type": "string",
           "x-go-name": "HTMLURL"
         },
@@ -42275,7 +42275,7 @@
           "x-go-name": "IssueCommentURL"
         },
         "issue_number": {
-          "description": "spoved: for a place in text the caller may read, the number of the issue or pull request",
+          "description": "gitdepo: for a place in text the caller may read, the number of the issue or pull request",
           "type": "integer",
           "format": "int64",
           "x-go-name": "IssueNumber"
@@ -42295,12 +42295,12 @@
           "x-go-name": "Path"
         },
         "poster": {
-          "description": "spoved: for a place in text the caller may read, the login of who wrote it (empty for an import)",
+          "description": "gitdepo: for a place in text the caller may read, the login of who wrote it (empty for an import)",
           "type": "string",
           "x-go-name": "Poster"
         },
         "pull_ref": {
-          "description": "spoved: true when only a refs/pull/* ref reaches the commit",
+          "description": "gitdepo: true when only a refs/pull/* ref reaches the commit",
           "type": "boolean",
           "x-go-name": "PullRef"
         },
@@ -42320,7 +42320,7 @@
           "x-go-name": "PullRequestTitleURL"
         },
         "removed": {
-          "description": "spoved: true when the text no longer holds the secret (the alert stays); on an issue_text or comment_text place with no other detail, true when the issue or comment was deleted (only said to a caller who reads issues and pull requests)",
+          "description": "gitdepo: true when the text no longer holds the secret (the alert stays); on an issue_text or comment_text place with no other detail, true when the issue or comment was deleted (only said to a caller who reads issues and pull requests)",
           "type": "boolean",
           "x-go-name": "Removed"
         },
@@ -43287,7 +43287,7 @@
       ],
       "properties": {
         "name": {
-          "description": "New name for the variable. If the field is empty, the variable name won't be updated. spoved will convert it to\nuppercase.",
+          "description": "New name for the variable. If the field is empty, the variable name won't be updated. gitdepo will convert it to\nuppercase.",
           "type": "string",
           "x-go-name": "Name"
         },

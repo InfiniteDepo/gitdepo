@@ -13,7 +13,7 @@ import (
 )
 
 // ServiceName is the "service" field of every JSON log event.
-const ServiceName = "spoved"
+const ServiceName = "gitdepo"
 
 const (
 	maxJSONMessage = 32 * 1024

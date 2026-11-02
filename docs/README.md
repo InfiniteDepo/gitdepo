@@ -1,4 +1,4 @@
-# spoved documentation
+# gitdepo documentation
 
 - [`branding.md`](branding.md): every place the rename from Forgejo touches, and how to keep it across upstream merges.
 - [`design-tokens.md`](design-tokens.md): the company design tokens and themes.
@@ -9,6 +9,6 @@
 - [`personal-repositories.md`](personal-repositories.md): the site policy for repositories in users' own namespaces.
 - [`web-ide.md`](web-ide.md): the Web IDE, its settings, how it is built and deployed, and its Content Security Policy.
 - [`search-engines.md`](search-engines.md): canonical URLs, structured data, robots.txt, sitemap and llms.txt for search engines and AI assistants.
-- [`performance.md`](performance.md): git push and pull load test against Forgejo, Gitea and Bitbucket Data Center, with 16 to 3,000 users, and what made spoved faster.
+- [`performance.md`](performance.md): git push and pull load test against Forgejo, Gitea and Bitbucket Data Center, with 16 to 3,000 users, and what made gitdepo faster.
 
-Forgejo's [documentation](https://forgejo.org/docs/latest/) applies to everything spoved inherits.
+Forgejo's [documentation](https://forgejo.org/docs/latest/) applies to everything gitdepo inherits.

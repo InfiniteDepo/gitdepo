@@ -29,6 +29,6 @@ test('Mismatched ROOT_URL', async ({browser}) => {
 
   await screenshot(page);
   const globalError = page.locator('.js-global-error');
-  await expect(globalError).toContainText('This spoved instance is configured to be served on ');
-  await expect(globalError).toContainText('You are currently viewing spoved through a different URL, which may cause parts of the application to break. The canonical URL is controlled by spoved admins via the ROOT_URL setting in the app.ini.');
+  await expect(globalError).toContainText('This gitdepo instance is configured to be served on ');
+  await expect(globalError).toContainText('You are currently viewing gitdepo through a different URL, which may cause parts of the application to break. The canonical URL is controlled by gitdepo admins via the ROOT_URL setting in the app.ini.');
 });

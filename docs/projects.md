@@ -1,6 +1,6 @@
 # URLs of repositories in projects
 
-A repository in a project has three path segments, `org/project/repo`, where a repository outside a project has two, `org/repo`. This page lists the forms for the web, git, LFS, the API and redirects, and what to update in tools that build repository URLs from `owner/repo`. The examples use `spoved.example.com`, the organization `acme`, the project `payments` and the repository `ledger`.
+A repository in a project has three path segments, `org/project/repo`, where a repository outside a project has two, `org/repo`. This page lists the forms for the web, git, LFS, the API and redirects, and what to update in tools that build repository URLs from `owner/repo`. The examples use `gitdepo.example.com`, the organization `acme`, the project `payments` and the repository `ledger`.
 
 A project has one level: a project holds repositories, and projects don't nest.
 
@@ -15,11 +15,11 @@ A project has one level: a project holds repositories, and projects don't nest.
 
 | What | URL |
 |---|---|
-| Repository | `https://spoved.example.com/acme/payments/ledger` |
-| A page | `https://spoved.example.com/acme/payments/ledger/issues` |
-| The same page with the separator | `https://spoved.example.com/acme/payments/ledger/-/issues` |
-| The project | `https://spoved.example.com/acme/payments` |
-| Project settings | `https://spoved.example.com/acme/payments/-/settings` |
+| Repository | `https://gitdepo.example.com/acme/payments/ledger` |
+| A page | `https://gitdepo.example.com/acme/payments/ledger/issues` |
+| The same page with the separator | `https://gitdepo.example.com/acme/payments/ledger/-/issues` |
+| The project | `https://gitdepo.example.com/acme/payments` |
+| Project settings | `https://gitdepo.example.com/acme/payments/-/settings` |
 
 - The `/-/` separator is optional for pages: both page forms above work, for repositories in projects and for those outside.
 - Raw files, archives, release downloads and attachments also work at `…/ledger/-/raw/…` style paths. Use these when a token must authenticate the download.
@@ -30,12 +30,12 @@ A project has one level: a project holds repositories, and projects don't nest.
 
 | What | URL |
 |---|---|
-| Clone over HTTPS | `https://spoved.example.com/acme/payments/ledger.git` |
-| Clone over SSH, port 22 | `git@spoved.example.com:acme/payments/ledger.git` |
-| Clone over SSH, other port | `ssh://git@spoved.example.com:2222/acme/payments/ledger.git` |
+| Clone over HTTPS | `https://gitdepo.example.com/acme/payments/ledger.git` |
+| Clone over SSH, port 22 | `git@gitdepo.example.com:acme/payments/ledger.git` |
+| Clone over SSH, other port | `ssh://git@gitdepo.example.com:2222/acme/payments/ledger.git` |
 | Wiki | the repository URL with `.wiki` before `.git` |
 | LFS | the HTTPS clone URL is enough; the LFS endpoint is `…/ledger.git/info/lfs` |
-| Go modules | `…/ledger?go-get=1` answers for `spoved.example.com/acme/payments/ledger` |
+| Go modules | `…/ledger?go-get=1` answers for `gitdepo.example.com/acme/payments/ledger` |
 
 - There is no `/-/` form for git. Use the `.git` URL the repository page shows.
 - LFS takes access tokens as the password of HTTP Basic authentication.
@@ -82,7 +82,7 @@ Run the command from the banner in each existing clone.
 
 ### Tools that link to repositories
 
-spoved states what it produces; how another tool reads it is not verified here. Test each on a staging instance before you cut over.
+gitdepo states what it produces; how another tool reads it is not verified here. Test each on a staging instance before you cut over.
 
 | Tool | What to check or update |
 |---|---|

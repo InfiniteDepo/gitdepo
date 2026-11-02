@@ -55,15 +55,15 @@ RUN chmod 644 /go/src/forgejo.org/contrib/autocompletion/bash_autocomplete
 
 FROM data.forgejo.org/oci/alpine:3.24
 ARG RELEASE_VERSION
-LABEL org.opencontainers.image.authors="spoved" \
+LABEL org.opencontainers.image.authors="gitdepo" \
       org.opencontainers.image.url="https://github.com/InfiniteSpoved/spoved" \
       org.opencontainers.image.documentation="https://github.com/InfiniteSpoved/spoved" \
       org.opencontainers.image.source="https://github.com/InfiniteSpoved/spoved" \
       org.opencontainers.image.version="${RELEASE_VERSION}" \
-      org.opencontainers.image.vendor="spoved" \
+      org.opencontainers.image.vendor="gitdepo" \
       org.opencontainers.image.licenses="GPL-3.0-or-later" \
-      org.opencontainers.image.title="spoved" \
-      org.opencontainers.image.description="spoved is a self-hosted Git forge for companies that need to pass security and compliance audits (a modified version of Forgejo)."
+      org.opencontainers.image.title="gitdepo" \
+      org.opencontainers.image.description="gitdepo is a self-hosted Git forge for companies that need to pass security and compliance audits (a modified version of Forgejo)."
 
 EXPOSE 2222 3000
 

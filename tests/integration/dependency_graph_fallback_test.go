@@ -90,7 +90,7 @@ func TestDependencyGraphFallbackManifests(t *testing.T) {
 		assert.Equal(t, list, byID)
 
 		cdx := session.MakeRequest(t, NewRequest(t, "GET", "/user2/dep-fallback/activity/dependencies/sbom?format=cyclonedx"), http.StatusOK).Body.String()
-		assert.Contains(t, cdx, `{"name":"spoved:requirement","value":"^4.18.0"}`)
+		assert.Contains(t, cdx, `{"name":"gitdepo:requirement","value":"^4.18.0"}`)
 		spdx := session.MakeRequest(t, NewRequest(t, "GET", "/user2/dep-fallback/activity/dependencies/sbom?format=spdx"), http.StatusOK).Body.String()
 		assert.Contains(t, spdx, `"comment":"not pinned (no lock file); declared range: ^4.18.0"`)
 	})

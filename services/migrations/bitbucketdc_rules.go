@@ -581,14 +581,14 @@ func (p *bitbucketPlanner) planHooks(owner *BitbucketImportItem, endpoint string
 			notes = append(notes, "events not mapped: "+strings.Join(unmapped, ", "))
 		}
 		if events == (webhook_module.HookEvents{}) {
-			p.add(item, BitbucketSkipped, strings.Join(append([]string{"no event spoved can send"}, notes...), "; "))
+			p.add(item, BitbucketSkipped, strings.Join(append([]string{"no event gitdepo can send"}, notes...), "; "))
 			continue
 		}
 		secret := h.Configuration["secret"]
 		if secret == "" {
 			notes = append(notes, "no secret: created inactive")
 		}
-		notes = append(notes, "payload format changes to spoved's")
+		notes = append(notes, "payload format changes to gitdepo's")
 		w := &webhook_model.Webhook{
 			URL: u.String(), HTTPMethod: "POST", ContentType: webhook_model.ContentTypeJSON, Secret: secret,
 			IsActive: h.Active && secret != "", Type: webhook_module.FORGEJO,
