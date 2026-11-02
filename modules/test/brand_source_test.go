@@ -19,7 +19,7 @@ var oldBrandRe = regexp.MustCompile(`Forgejo|Gitea|GitHat|CodeHat`)
 // BrandMentions only sees rendered HTML. These strings reach users another way (plain-text 500 pages, the git
 // login prompt, a Teams card, the JS error banner, API docs, package install snippets), so scan their source.
 func TestNoOldBrandInUserFacingSource(t *testing.T) {
-	literal := regexp.MustCompile("[\"`][^\"`\\n]*(Forgejo|Gitea|GitHat|CodeHat)[^\"`\\n]*[\"`]")
+	literal := regexp.MustCompile("[\"`][^\"`\\n]*(Forgejo|Gitea|GitHat|CodeHat|(?i:\\bspoved\\b))[^\"`\\n]*[\"`]")
 	for _, f := range []string{
 		"routers/common/errpage.go",
 		"services/context/context_response.go",
