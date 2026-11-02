@@ -1,4 +1,4 @@
-// Copyright 2026 The spoved contributors. All rights reserved.
+// Copyright 2026 The gitdepo contributors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // Package security holds what the organization Security tab and the instance pages share: the search form, the

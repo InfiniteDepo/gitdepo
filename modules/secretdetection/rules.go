@@ -1,4 +1,4 @@
-// Copyright 2026 The spoved contributors. All rights reserved.
+// Copyright 2026 The gitdepo contributors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // NOTICE: many of the patterns below are adapted from gitleaks v8.28.0,
@@ -159,8 +159,8 @@ var baseRules = []Rule{
 		// The legacy form is 40 hex characters, as an OAuth app's client
 		// secret: it counts after a github name that ends in a secret, pat,
 		// key or password word (github_secret, GITHUB_CLIENT_SECRET). A bare
-		// GITHUB_TOKEN is left to the Forgejo rules: Actions on spoved set
-		// it to spoved's own job token.
+		// GITHUB_TOKEN is left to the Forgejo rules: Actions on gitdepo set
+		// it to gitdepo's own job token.
 		ID: "github-legacy-token", Name: "GitHub token or client secret (40 hex characters)", Type: "github",
 		Keywords:    []string{"github"},
 		Regex:       `(?i:github)(?:[\w.-]{0,20}[_.-])?(?i:secret|pat|key|password)(?:\\?["'])?\s*[:=]\s*(?:\\?["'])?([0-9a-f]{40})`,
@@ -183,7 +183,7 @@ var baseRules = []Rule{
 		SecretGroup: 1, MinEntropy: 3, TokenChars: wordChars,
 		Window: 400,
 	},
-	// An access token of Forgejo, Gitea and spoved is 40 hex characters (hex
+	// An access token of Forgejo, Gitea and gitdepo is 40 hex characters (hex
 	// of 20 random bytes, models/auth/access_token.go) with no prefix, so it
 	// only counts in a context that says it is a credential. One rule per
 	// context, so each regex starts with its own words: `token = <hex>`,

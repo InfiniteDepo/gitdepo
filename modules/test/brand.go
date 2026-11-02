@@ -1,4 +1,4 @@
-// Copyright 2026 The spoved contributors. All rights reserved.
+// Copyright 2026 The gitdepo contributors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 package test
@@ -11,7 +11,7 @@ import (
 )
 
 // brandRe matches the old names in any case, and the new one only when capitalised: gitdepo is always lowercase.
-// Word boundaries keep "InfiniteSpoved" (the repository owner) and "MyForgejoTeam1" out.
+// Word boundaries keep "MyForgejoTeam1" out.
 var brandRe = regexp.MustCompile(`.{0,40}((?i:\bforgejo|\bgithat|\bcodehat|\bspoved\b)|\bGitdepo\b|\bGITDEPO\b).{0,40}`)
 
 // BrandAllowed are the exact visible phrases that legitimately name Forgejo, the upstream project or its
@@ -25,8 +25,6 @@ var BrandAllowed = []string{
 	"forgejo.org/docs",
 	// the installer's placeholders for the domain and URL are upstream's example host
 	"next.forgejo.org",
-	// the repository and its container image keep the old name until they move
-	"InfiniteSpoved/spoved", "infinitespoved/spoved",
 }
 
 // BrandMentions returns every user-visible old product name ("Forgejo", "GitHat", "CodeHat", "spoved") and

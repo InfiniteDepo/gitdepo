@@ -1,4 +1,4 @@
-// Copyright 2026 The spoved contributors. All rights reserved.
+// Copyright 2026 The gitdepo contributors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // Package mergeforward merges a pull request merged into a release branch forward: into every later release branch

@@ -2,8 +2,8 @@
 rootUrl: https://git.example.com/
 sshDomain: ssh.example.com
 database:
-  host: spoved.postgres.database.azure.com:5432
-  existingSecret: spoved-db
+  host: gitdepo.postgres.database.azure.com:5432
+  existingSecret: gitdepo-db
 persistence:
   storageClassName: managed-csi-premium
 service:
@@ -22,7 +22,7 @@ ingress:
   hosts:
     - host: git.example.com
   tls:
-    - secretName: spoved-tls
+    - secretName: gitdepo-tls
       hosts: [git.example.com]
 serviceAccount:
   annotations:

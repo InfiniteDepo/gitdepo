@@ -1,4 +1,4 @@
-// Copyright 2026 The spoved contributors. All rights reserved.
+// Copyright 2026 The gitdepo contributors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 package test
@@ -12,7 +12,7 @@ import (
 func TestBrandMentions(t *testing.T) {
 	assert.Empty(t, BrandMentions(`<html><head><title>gitdepo</title><script>var x = "Forgejo";</script></head>
 <body>Powered by gitdepo <a href="https://forgejo.org">based on Forgejo</a>
-<a href="https://github.com/InfiniteSpoved/spoved">InfiniteSpoved/spoved</a> MyForgejoTeam1
+<a href="https://github.com/InfiniteDepo/gitdepo">InfiniteDepo/gitdepo</a> MyForgejoTeam1
 <pre><code>$ forgejo-runner daemon</code></pre><input placeholder="next.forgejo.org"></body></html>`))
 
 	assert.Equal(t, []string{"Welcome to Forgejo"}, BrandMentions(`<body><p>Welcome to Forgejo</p></body>`))

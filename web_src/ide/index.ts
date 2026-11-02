@@ -1,5 +1,5 @@
 // The Web IDE: the VS Code workbench (MIT, built from microsoft/vscode by @codingame/monaco-vscode-api) with a
-// built-in extension that reads and writes the repository through spoved's web routes.
+// built-in extension that reads and writes the repository through gitdepo's web routes.
 import {IFileService, initialize, LogLevel, withReadyServices} from '@codingame/monaco-vscode-api';
 import {URI} from '@codingame/monaco-vscode-api/vscode/vs/base/common/uri';
 import {ExtensionHostKind, registerExtension} from '@codingame/monaco-vscode-api/extensions';

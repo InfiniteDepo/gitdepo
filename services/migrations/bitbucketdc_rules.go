@@ -1,4 +1,4 @@
-// Copyright 2026 The spoved contributors. All rights reserved.
+// Copyright 2026 The gitdepo contributors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 package migrations
@@ -190,7 +190,7 @@ func (p *bitbucketPlanner) planRules(owner *BitbucketImportItem, endpoint string
 		}
 		items, notes[m.item] = append(items, m.item), n
 	}
-	// Bitbucket applies every matching restriction, spoved only the first matching rule of a level: where rules may
+	// Bitbucket applies every matching restriction, gitdepo only the first matching rule of a level: where rules may
 	// overlap (a glob, or two plain names that differ only in case, since plain names match case-insensitively),
 	// every rule of the level gets the strictest combination of them all
 	names := map[string]bool{}
@@ -509,7 +509,7 @@ func applyBitbucketRule(ctx context.Context, org *organization.Organization, own
 	return pull_service.CheckPRsForBaseBranch(ctx, owner.repo, rule.RuleName)
 }
 
-// bitbucketHookEvents maps the Bitbucket webhook events to the events of a spoved hook; the rest is returned unmapped.
+// bitbucketHookEvents maps the Bitbucket webhook events to the events of a gitdepo hook; the rest is returned unmapped.
 func bitbucketHookEvents(events []string) (webhook_module.HookEvents, []string) {
 	var e webhook_module.HookEvents
 	var unmapped []string

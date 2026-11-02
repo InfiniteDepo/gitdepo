@@ -3,7 +3,7 @@ import type {SavedChanges} from './workspace.ts';
 
 function store(mode: IDBTransactionMode): Promise<IDBObjectStore> {
   return new Promise((resolve, reject) => {
-    const open = indexedDB.open('spoved-ide', 1);
+    const open = indexedDB.open('gitdepo-ide', 1);
     open.addEventListener('upgradeneeded', () => open.result.createObjectStore('changes'));
     open.addEventListener('success', () => resolve(open.result.transaction('changes', mode).objectStore('changes')));
     open.addEventListener('error', () => reject(open.error));

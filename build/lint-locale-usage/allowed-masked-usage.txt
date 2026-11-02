@@ -16,10 +16,10 @@ relativetime.
 # tests/integration/repo_archive_text_test.go
 repo.settings.
 
-# templates/status/500.tmpl uses the spoved key error.report_message_githat (its name predates the rename); the upstream string stays untouched to keep merges cheap
+# templates/status/500.tmpl uses the gitdepo key error.report_message_githat (its name predates the rename); the upstream string stays untouched to keep merges cheap
 error.report_message
 
-# templates/user/settings/appearance.tmpl no longer shows it (spoved has no translation project); the upstream string stays untouched to keep merges cheap
+# templates/user/settings/appearance.tmpl no longer shows it (gitdepo has no translation project); the upstream string stays untouched to keep merges cheap
 settings.language.localization_project
 
 # models/issues/pull_attention.go: PullAttention.KindLocaleKey

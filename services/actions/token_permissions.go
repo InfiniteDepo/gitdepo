@@ -1,4 +1,4 @@
-// Copyright 2026 The spoved contributors. All rights reserved.
+// Copyright 2026 The gitdepo contributors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 package actions
@@ -17,7 +17,7 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// tokenPermissionUnits maps the `permissions:` keys that spoved supports to repository units. Other keys
+// tokenPermissionUnits maps the `permissions:` keys that gitdepo supports to repository units. Other keys
 // (packages, statuses, deployments, id-token, ...) grant nothing and are reported as ignored.
 var tokenPermissionUnits = map[string][]unit.Type{
 	"contents":            {unit.TypeCode, unit.TypeReleases, unit.TypeWiki},
@@ -43,7 +43,7 @@ func allTokenPermissions(mode perm.AccessMode) actions_model.TokenPermissions {
 }
 
 // parseTokenPermissions reads a present `permissions:` block: the token gets what it grants and nothing else.
-// ignored lists the keys that grant nothing because spoved doesn't support them or their value is invalid
+// ignored lists the keys that grant nothing because gitdepo doesn't support them or their value is invalid
 // ("permissions" when the whole block is invalid).
 func parseTokenPermissions(node *yaml.Node) (p actions_model.TokenPermissions, ignored []string) {
 	switch {

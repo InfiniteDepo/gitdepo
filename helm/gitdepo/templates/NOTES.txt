@@ -1,13 +1,13 @@
-spoved {{ .Chart.AppVersion }} is starting (the first start can take a minute while the database is set up).
+gitdepo {{ .Chart.AppVersion }} is starting (the first start can take a minute while the database is set up).
 
 URL: {{ .Values.rootUrl }}
 {{- if not .Values.ingress.enabled }}
 No Ingress is enabled. To try it locally:
-  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "spoved.fullname" . }}-http {{ .Values.service.http.port }}:{{ .Values.service.http.port }}
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "gitdepo.fullname" . }}-http {{ .Values.service.http.port }}:{{ .Values.service.http.port }}
 {{- end }}
 
 First administrator:
   - If SECRET_KEY was not set, open the URL and finish the installer; the first account you register is the administrator.
   - If it was set (the install is locked), create one:
-    kubectl --namespace {{ .Release.Namespace }} exec -it deploy/{{ include "spoved.fullname" . }} -- \
+    kubectl --namespace {{ .Release.Namespace }} exec -it deploy/{{ include "gitdepo.fullname" . }} -- \
       gitea admin user create --admin --username <name> --email <email> --must-change-password

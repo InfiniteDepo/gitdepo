@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright 2026 The spoved contributors. All rights reserved.
+# Copyright 2026 The gitdepo contributors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Fails when a commit of a pull request lacks a Signed-off-by line (see

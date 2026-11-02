@@ -60,7 +60,7 @@ func TestDemoErrorPages(t *testing.T) {
 		req := NewRequest(t, "GET", "/-/demo/error/500")
 		resp := loginUser(t, "user1").MakeRequest(t, req, http.StatusInternalServerError)
 		href, _ := NewHTMLParser(t, resp.Body).Find(".status-page-500 p a[target=_blank]").Attr("href")
-		assert.Equal(t, "https://github.com/InfiniteSpoved/spoved/issues", href)
+		assert.Equal(t, "https://github.com/InfiniteDepo/gitdepo/issues", href)
 	})
 
 	t.Run("Page not found",

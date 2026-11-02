@@ -33,7 +33,7 @@ func (r *CheckerState) Name() string {
 	return "update-checker"
 }
 
-// GiteaUpdateChecker stores the latest spoved release (or the error) for the admin dashboard.
+// GiteaUpdateChecker stores the latest gitdepo release (or the error) for the admin dashboard.
 func GiteaUpdateChecker(httpEndpoint string) error {
 	v, err := getVersionHTTP(httpEndpoint)
 	var versions []string

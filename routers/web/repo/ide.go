@@ -1,4 +1,4 @@
-// Copyright 2026 The spoved Authors. All rights reserved.
+// Copyright 2026 The gitdepo Authors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 package repo
@@ -138,7 +138,7 @@ func WebIDE(ctx *context.Context) {
 		},
 	}
 	// the workbench needs inline styles and runs WebAssembly (syntax highlighting); the Markdown preview loads
-	// spoved's own styles, which may come from STATIC_URL_PREFIX
+	// gitdepo's own styles, which may come from STATIC_URL_PREFIX
 	assets := ideAssetOrigin()
 	ctx.Resp.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; "+
 		"style-src 'self' 'unsafe-inline'"+assets+"; img-src 'self' data: blob:"+assets+"; font-src 'self' data:"+assets+"; "+
@@ -156,7 +156,7 @@ func ideAssetOrigin() string {
 	return " " + u.Scheme + "://" + u.Host
 }
 
-// ideTheme maps a spoved theme to the VS Code theme family
+// ideTheme maps a gitdepo theme to the VS Code theme family
 func ideTheme(theme string) string {
 	switch {
 	case strings.Contains(theme, "high-contrast"):

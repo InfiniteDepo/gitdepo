@@ -153,7 +153,7 @@ func loadServerFrom(rootCfg ConfigProvider) {
 	AppSlogan = rootCfg.Section("").Key("APP_SLOGAN").MustString("")
 	AppDisplayNameFormat = rootCfg.Section("").Key("APP_DISPLAY_NAME_FORMAT").MustString("{APP_NAME}: {APP_SLOGAN}")
 	AppDisplayName = generateDisplayName()
-	IssueTrackerURL = sec.Key("ISSUE_TRACKER_URL").MustString("https://github.com/InfiniteSpoved/spoved/issues")
+	IssueTrackerURL = sec.Key("ISSUE_TRACKER_URL").MustString("https://github.com/InfiniteDepo/gitdepo/issues")
 	Domain = sec.Key("DOMAIN").MustString("localhost")
 	HTTPAddr = sec.Key("HTTP_ADDR").MustString("0.0.0.0")
 	HTTPPort = sec.Key("HTTP_PORT").MustString("3000")

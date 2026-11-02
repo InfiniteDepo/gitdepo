@@ -1,5 +1,5 @@
 image:
-  repository: ghcr.io/infinitespoved/spoved
+  repository: ghcr.io/infinitedepo/gitdepo
   # Defaults to the chart's appVersion.
   tag: ""
   pullPolicy: IfNotPresent
@@ -15,8 +15,8 @@ database:
   type: postgres
   # host:port of the external PostgreSQL server. Required.
   host: ""
-  name: spoved
-  user: spoved
+  name: gitdepo
+  user: gitdepo
   sslMode: require
   # Existing Secret holding the database password.
   existingSecret: ""
@@ -57,7 +57,7 @@ ingress:
   hosts: []
   # - host: git.example.com
   tls: []
-  # - secretName: spoved-tls
+  # - secretName: gitdepo-tls
   #   hosts: [git.example.com]
 
 serviceAccount:

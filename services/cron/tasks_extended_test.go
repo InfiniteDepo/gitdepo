@@ -69,5 +69,5 @@ func Test_UpdateCheckerDefaults(t *testing.T) {
 	task := GetTask("update_checker")
 	require.NotNil(t, task)
 	assert.False(t, task.IsEnabled())
-	assert.Equal(t, "https://api.github.com/repos/InfiniteSpoved/spoved/releases/latest", task.config.(*UpdateCheckerConfig).HTTPEndpoint)
+	assert.Equal(t, "https://api.github.com/repos/InfiniteDepo/gitdepo/releases/latest", task.config.(*UpdateCheckerConfig).HTTPEndpoint)
 }
