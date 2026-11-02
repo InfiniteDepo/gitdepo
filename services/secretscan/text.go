@@ -1,4 +1,4 @@
-// Copyright 2026 The spoved contributors. All rights reserved.
+// Copyright 2026 The gitdepo contributors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 package secretscan
@@ -441,7 +441,7 @@ func newTextScan(ctx context.Context, repo *repo_model.Repository, cfg setting.S
 
 func poster(id, originalAuthorID int64) int64 {
 	if originalAuthorID != 0 || id <= 0 {
-		return 0 // imported text has no spoved author; the Actions user and token identities write no text
+		return 0 // imported text has no gitdepo author; the Actions user and token identities write no text
 	}
 	return id
 }

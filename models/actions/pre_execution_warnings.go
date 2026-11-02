@@ -18,7 +18,7 @@ type PreExecutionWarning int64
 // PreExecutionWarningDetails, and so they can't be changed or reordered without creating a migration or a new error
 // code to represent the new argument details.
 const (
-	// WarningCodePermissions is no longer created: `permissions:` was ignored before spoved supported it.
+	// WarningCodePermissions is no longer created: `permissions:` was ignored before gitdepo supported it.
 	WarningCodePermissions PreExecutionWarning = iota + 1
 	// WarningCodePermissionsIgnored: details are the job ID and the ignored `permissions:` keys, comma-separated.
 	WarningCodePermissionsIgnored

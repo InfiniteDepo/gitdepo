@@ -1,4 +1,4 @@
-// Copyright 2026 The spoved contributors. All rights reserved.
+// Copyright 2026 The gitdepo contributors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 package integration
@@ -89,7 +89,7 @@ func (p *samlTestIDP) metadataXML() string {
 	return string(data)
 }
 
-// loadSP reads the SP metadata spoved serves for the source, as an admin would import it into the IdP.
+// loadSP reads the SP metadata gitdepo serves for the source, as an admin would import it into the IdP.
 func (p *samlTestIDP) loadSP(name string) {
 	resp := MakeRequest(p.t, NewRequest(p.t, "GET", "/user/saml/"+name+"/metadata"), http.StatusOK)
 	assert.Equal(p.t, "application/samlmetadata+xml", resp.Header().Get("Content-Type"))
@@ -173,7 +173,7 @@ func samlSignIn(t *testing.T, session *TestSession, name string, p *samlTestIDP,
 	return p.answer(samlStart(t, session, name), s)
 }
 
-// postACS posts a SAMLResponse as the IdP's page does: cross-site first, then again from spoved's own page.
+// postACS posts a SAMLResponse as the IdP's page does: cross-site first, then again from gitdepo's own page.
 func postACS(t *testing.T, session *TestSession, name, samlResponse string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := NewRequestWithValues(t, "POST", "/user/saml/"+name+"/acs", map[string]string{"SAMLResponse": samlResponse})

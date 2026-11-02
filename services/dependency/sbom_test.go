@@ -1,4 +1,4 @@
-// Copyright 2026 The spoved contributors. All rights reserved.
+// Copyright 2026 The gitdepo contributors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 package dependency
@@ -315,7 +315,7 @@ func TestSchemasRejectInvalid(t *testing.T) {
 }
 
 // A package of a manifest without a lock file has no version: a versionless purl, and the declared ranges as the
-// CycloneDX property spoved:requirement and in the SPDX package comment.
+// CycloneDX property gitdepo:requirement and in the SPDX package comment.
 func TestSBOMUnpinned(t *testing.T) {
 	defer test.MockVariableValue(&setting.AppURL, "https://git.example.com/")()
 	s := unpinnedSBOM()

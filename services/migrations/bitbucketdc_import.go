@@ -1,4 +1,4 @@
-// Copyright 2026 The spoved contributors. All rights reserved.
+// Copyright 2026 The gitdepo contributors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 package migrations
@@ -66,7 +66,7 @@ const (
 type BitbucketImportItem struct {
 	Kind      string `json:"kind"`             // "project", "repository", "team", "member", "group", "collaborator", "key", "rule", "hook", "branching_model" or "permission"
 	Bitbucket string `json:"bitbucket"`        // KEY, KEY/slug, a user or group name, "KEY key 1", ...
-	Name      string `json:"name"`             // the path, team, login, user group or key name in spoved
+	Name      string `json:"name"`             // the path, team, login, user group or key name in gitdepo
 	Target    string `json:"target,omitempty"` // the team, repository or project a grant or key lands on
 	Access    string `json:"access,omitempty"`
 	Expires   string `json:"expires,omitempty"`

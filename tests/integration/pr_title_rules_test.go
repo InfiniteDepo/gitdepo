@@ -1,4 +1,4 @@
-// Copyright 2026 The spoved contributors. All rights reserved.
+// Copyright 2026 The gitdepo contributors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 package integration
@@ -271,7 +271,7 @@ func TestPRTitleRuleBlockMerge(t *testing.T) {
 	resp = MakeRequest(t, NewRequestWithJSON(t, "POST", mergeURL, mergeBody).AddTokenAuth(readerToken), http.StatusMethodNotAllowed)
 	assert.NotContains(t, resp.Body.String(), "Start with ABC-1")
 
-	// marking as merged manually skips the title rule by design: nothing is merged by spoved
+	// marking as merged manually skips the title rule by design: nothing is merged by gitdepo
 	require.NoError(t, pull_service.CheckPullMergeable(t.Context(), owner, &perm, pr, pull_service.MergeCheckTypeManually, true, repo_model.MergeStyleMerge))
 
 	// a WIP pull request keeps its own error first

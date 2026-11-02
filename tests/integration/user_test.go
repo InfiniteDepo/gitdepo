@@ -485,7 +485,7 @@ func TestUserHints(t *testing.T) {
 			_, hintChecked := htmlDoc.Find(`input[name="enable_repo_unit_hints"]`).Attr("checked")
 			assert.Equal(t, enabled, hintChecked)
 
-			// spoved has no translation project to point to
+			// gitdepo has no translation project to point to
 			assert.Zero(t, htmlDoc.Find("form[action='/user/settings/appearance/language'] a").Length())
 			assert.NotContains(t, htmlDoc.Find("form[action='/user/settings/appearance/language']").Text(), "translate")
 		}

@@ -93,7 +93,7 @@ else
     FORGEJO_VERSION ?= $(GITEA_VERSION)
     FORGEJO_VERSION_API ?= $(GITEA_VERSION)+${GITEA_COMPATIBILITY}
   else
-    # spoved has no release tags: a build is named after its commit time (US Eastern, YYMMDDHHmm) and channel,
+    # gitdepo has no release tags: a build is named after its commit time (US Eastern, YYMMDDHHmm) and channel,
     # prod on the develop branch and dev anywhere else (a pull request, a detached commit), e.g. 2610131155-prod.
     # It parses as the semver 2610131155.0.0-prod, so later builds sort higher, except across the hour repeated
     # when DST ends. The zone is a POSIX rule (America/New_York since 2007), not a zone name: the Docker build

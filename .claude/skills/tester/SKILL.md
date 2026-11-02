@@ -1,6 +1,6 @@
 ---
 name: tester
-description: Run the local equivalent of spoved's CI on a branch or pull request head and report each failure as real, known-environmental or flaky. Use when asked to "test this PR", "run the checks", "run CI locally" or "is this failure mine".
+description: Run the local equivalent of gitdepo's CI on a branch or pull request head and report each failure as real, known-environmental or flaky. Use when asked to "test this PR", "run the checks", "run CI locally" or "is this failure mine".
 ---
 
 # Tester
@@ -23,7 +23,7 @@ Stop at the first stage that fails only if a later stage needs it to pass (a bui
 4. **Migrations**, if `models/forgejo_migrations` changed: `make generate-ini-sqlite` once, then `PROJECT_CONF=tests/sqlite.ini go test ./models/forgejo_migrations/...`. Never at the same time as the integration suite.
 5. **Integration**, for backend changes: the whole suite in one run, `make test-sqlite`, in the background (about 45 min); grep its output for `^(--- FAIL|FAIL|ok)`. Don't judge a PR on a partial or hand-made split.
 6. **E2E:** `make frontend` first, then the specs whose `@watch` covers the changed files: `make 'test-e2e-sqlite#<spec>.test.e2e'`. A Go e2e run stops at the first failing spec file, so check that every spec ran.
-7. **Other databases**, when the change adds SQL, a migration or a column type: CI runs SQLite, but spoved also runs on PostgreSQL and MySQL. Run the new tests there too (`make 'test-pgsql#TestName'`, `make 'test-mysql#TestName'`, and `make test-pgsql-migration` for a migration; each needs that database running, see `tests/pgsql.ini.tmpl`/`tests/mysql.ini.tmpl`). If you can't, list in the report what only those databases would catch: a value used as a column name, case-sensitive `LIKE`, `GROUP BY` without every selected column, string vs number comparison, `ON CONFLICT`/`INSERT IGNORE`, a failed statement aborting a PostgreSQL transaction.
+7. **Other databases**, when the change adds SQL, a migration or a column type: CI runs SQLite, but gitdepo also runs on PostgreSQL and MySQL. Run the new tests there too (`make 'test-pgsql#TestName'`, `make 'test-mysql#TestName'`, and `make test-pgsql-migration` for a migration; each needs that database running, see `tests/pgsql.ini.tmpl`/`tests/mysql.ini.tmpl`). If you can't, list in the report what only those databases would catch: a value used as a column name, case-sensitive `LIKE`, `GROUP BY` without every selected column, string vs number comparison, `ON CONFLICT`/`INSERT IGNORE`, a failed statement aborting a PostgreSQL transaction.
 8. **Performance**, when the change adds a list, a page or a query in a loop: no query per row (use one `GROUP BY` or a bulk load), a bounded page size, and an index for the new `WHERE`. Where a page must stay cheap, add a query-count test (see the query-count Learnings in `CLAUDE.md`).
 
 Stage nothing and commit nothing: `make lint`/`make frontend` may rewrite `package-lock.json`; restore it (`git checkout -- package-lock.json`) when you finish.

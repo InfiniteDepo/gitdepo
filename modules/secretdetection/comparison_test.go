@@ -1,4 +1,4 @@
-// Copyright 2026 The spoved contributors. All rights reserved.
+// Copyright 2026 The gitdepo contributors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 package secretdetection
@@ -87,8 +87,8 @@ func TestSlackTokenIsMatchedWhole(t *testing.T) {
 	assert.NotEqual(t, a[0].Fingerprint, b[0].Fingerprint)
 }
 
-// 40 hex after github_secret is a GitHub secret; after GITHUB_TOKEN it stays a Forgejo token (Actions on spoved set
-// GITHUB_TOKEN to spoved's own job token).
+// 40 hex after github_secret is a GitHub secret; after GITHUB_TOKEN it stays a Forgejo token (Actions on gitdepo set
+// GITHUB_TOKEN to gitdepo's own job token).
 func TestGitHubLegacyTokenAndForgejo(t *testing.T) {
 	d := allRulesDetector(t)
 	for content, rule := range map[string]string{

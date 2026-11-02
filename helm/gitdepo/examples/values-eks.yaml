@@ -2,8 +2,8 @@
 rootUrl: https://git.example.com/
 sshDomain: ssh.example.com
 database:
-  host: spoved.abcdefghij.eu-west-1.rds.amazonaws.com:5432
-  existingSecret: spoved-db
+  host: gitdepo.abcdefghij.eu-west-1.rds.amazonaws.com:5432
+  existingSecret: gitdepo-db
 persistence:
   storageClassName: gp3
 service:
@@ -28,4 +28,4 @@ ingress:
     - host: git.example.com
 serviceAccount:
   annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::111122223333:role/spoved
+    eks.amazonaws.com/role-arn: arn:aws:iam::111122223333:role/gitdepo

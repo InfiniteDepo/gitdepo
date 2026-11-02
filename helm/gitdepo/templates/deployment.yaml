@@ -4,27 +4,27 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "spoved.fullname" . }}
+  name: {{ include "gitdepo.fullname" . }}
   labels:
-    {{- include "spoved.labels" . | nindent 4 }}
+    {{- include "gitdepo.labels" . | nindent 4 }}
 spec:
   replicas: 1
   strategy:
     type: Recreate
   selector:
     matchLabels:
-      {{- include "spoved.selector" . | nindent 6 }}
+      {{- include "gitdepo.selector" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "spoved.selector" . | nindent 8 }}
+        {{- include "gitdepo.selector" . | nindent 8 }}
         {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
       {{- with .Values.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
-      serviceAccountName: {{ include "spoved.serviceAccountName" . }}
+      serviceAccountName: {{ include "gitdepo.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -37,7 +37,7 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: spoved
+        - name: gitdepo
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
@@ -103,7 +103,7 @@ spec:
       volumes:
         - name: data
           persistentVolumeClaim:
-            claimName: {{ .Values.persistence.existingClaim | default (include "spoved.fullname" .) }}
+            claimName: {{ .Values.persistence.existingClaim | default (include "gitdepo.fullname" .) }}
         - name: tmp
           emptyDir: {}
         - name: run

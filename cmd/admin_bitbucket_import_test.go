@@ -1,4 +1,4 @@
-// Copyright 2026 The spoved contributors. All rights reserved.
+// Copyright 2026 The gitdepo contributors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 package cmd
@@ -56,7 +56,7 @@ func TestBitbucketImportOutput(t *testing.T) {
 	report := &migrations.BitbucketImportReport{Items: []*migrations.BitbucketImportItem{
 		{Kind: "project", Bitbucket: "PAY", Name: "org3/pay", Status: "planned"},
 		{Kind: "repository", Bitbucket: "PAY/api", Name: "org3/pay/api", Status: "conflict", Reason: "bad\x1b[2Jname\r\n", OldSSH: "=HYPERLINK(\"x\")", OldHTTP: "https://bb.example.com/scm/pay/api.git"},
-		{Kind: "repository", Bitbucket: "PAY/web", Name: "org3/pay/web", Status: "created", NewHTTP: "https://spoved.example.com/org3/pay/web.git"},
+		{Kind: "repository", Bitbucket: "PAY/web", Name: "org3/pay/web", Status: "created", NewHTTP: "https://gitdepo.example.com/org3/pay/web.git"},
 		{Kind: "key", Bitbucket: "PAY key 1", Name: "ci", Target: "org3/pay", Status: "planned", Access: "read", Expires: "2030-01-02"},
 	}}
 
@@ -65,7 +65,7 @@ func TestBitbucketImportOutput(t *testing.T) {
 	assert.NotContains(t, out.String(), "\x1b")
 	assert.Equal(t, 4, strings.Count(out.String(), "\n"), "one line per item")
 	assert.Contains(t, out.String(), "on org3/pay, read, expires 2030-01-02")
-	assert.Contains(t, out.String(), "https://spoved.example.com/org3/pay/web.git", "the new URL is printed")
+	assert.Contains(t, out.String(), "https://gitdepo.example.com/org3/pay/web.git", "the new URL is printed")
 
 	out.Reset()
 	require.NoError(t, writeBitbucketCSV(&out, report))

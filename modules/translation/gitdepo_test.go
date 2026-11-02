@@ -1,4 +1,4 @@
-// Copyright 2026 The spoved contributors. All rights reserved.
+// Copyright 2026 The gitdepo contributors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 package translation
@@ -15,9 +15,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// spovedShadowKeys are upstream locale_en-US.ini keys that options/locale_next/locale_en-US.json
-// overrides with spoved wording (see docs/branding.md).
-var spovedShadowKeys = []string{
+// gitdepoShadowKeys are upstream locale_en-US.ini keys that options/locale_next/locale_en-US.json
+// overrides with gitdepo wording (see docs/branding.md).
+var gitdepoShadowKeys = []string{
 	"return_to_forgejo",
 	"repo.settings.web_hook_name_forgejo",
 	"startpage.platform_desc",
@@ -101,7 +101,7 @@ var boardsShadowKeys = []string{
 	"repo.permissions.projects.write",
 }
 
-func TestSpovedShadowKeys(t *testing.T) {
+func TestGitdepoShadowKeys(t *testing.T) {
 	ini, err := os.ReadFile("../../options/locale/locale_en-US.ini")
 	require.NoError(t, err)
 	next, err := os.ReadFile("../../options/locale_next/locale_en-US.json")
@@ -115,7 +115,7 @@ func TestSpovedShadowKeys(t *testing.T) {
 	upstreamEn, _ := upstream.Locale("en-US")
 	en, _ := shadowed.Locale("en-US")
 
-	for _, key := range spovedShadowKeys {
+	for _, key := range gitdepoShadowKeys {
 		assert.True(t, upstreamEn.HasKey(key), "%s is no longer in locale_en-US.ini: update the shadow key and docs/branding.md", key)
 		value := en.TrString(key)
 		assert.Contains(t, value, "gitdepo", key)
@@ -145,7 +145,7 @@ func TestBoardsShadowKeys(t *testing.T) {
 	}
 }
 
-func TestSpovedLocaleNextValues(t *testing.T) {
+func TestGitdepoLocaleNextValues(t *testing.T) {
 	next, err := os.ReadFile("../../options/locale_next/locale_en-US.json")
 	require.NoError(t, err)
 	var values map[string]any

@@ -34,10 +34,10 @@ func TestGetVersionHTTP(t *testing.T) {
 	}
 
 	t.Run("tag_name", func(t *testing.T) {
-		url, hits := serve(t, http.StatusOK, `{"tag_name": "v16.0.0-spoved.2"}`)
+		url, hits := serve(t, http.StatusOK, `{"tag_name": "v16.0.0-gitdepo.2"}`)
 		v, err := getVersionHTTP(url)
 		require.NoError(t, err)
-		assert.Equal(t, "16.0.0-spoved.2", v)
+		assert.Equal(t, "16.0.0-gitdepo.2", v)
 		assert.Equal(t, 1, *hits) // only the configured endpoint is contacted
 	})
 
@@ -79,18 +79,18 @@ func TestGiteaUpdateCheckerStoresHTTPError(t *testing.T) {
 	require.NoError(t, GiteaUpdateChecker(srv.URL))
 }
 
-func TestGetReleaseStateSpovedVersions(t *testing.T) {
-	defer test.MockVariableValue(&setting.AppVer, "16.0.0-spoved.1")()
+func TestGetReleaseStateGitdepoVersions(t *testing.T) {
+	defer test.MockVariableValue(&setting.AppVer, "16.0.0-gitdepo.1")()
 	state := system.NewMockStateStore(t)
 	state.On("Get", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
-		args.Get(1).(*CheckerState).SupportedVersions = []string{"16.0.0-spoved.2"}
+		args.Get(1).(*CheckerState).SupportedVersions = []string{"16.0.0-gitdepo.2"}
 	}).Return(nil)
 	defer test.MockVariableValue[system.StateStore](&system.AppState, state)()
 
 	rs, err := GetReleaseState(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, MinorReleaseOutOfDate, rs.MinorReleaseState)
-	assert.Equal(t, "16.0.0-spoved.2", rs.RecommendedUpgrade.ValueOrZeroValue())
+	assert.Equal(t, "16.0.0-gitdepo.2", rs.RecommendedUpgrade.ValueOrZeroValue())
 }
 
 func TestUpdateRemoteVersion(t *testing.T) {

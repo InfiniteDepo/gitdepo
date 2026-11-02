@@ -36,7 +36,7 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement privately through GitHub: use GitHub's report-abuse or report-content function on the profile or content concerned, or contact the owners of the InfiniteSpoved organization. Do not use the vulnerability reporting form for this. All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement privately through GitHub: use GitHub's report-abuse or report-content function on the profile or content concerned, or contact the owners of the InfiniteDepo organization. Do not use the vulnerability reporting form for this. All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the reporter of any incident.
 

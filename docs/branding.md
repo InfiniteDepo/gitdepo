@@ -15,7 +15,7 @@ Visible text keeps "Forgejo" where it names the upstream project or ecosystem, n
 - documentation links (`AppDocsURL`, "Forgejo documentation"), the translation-project line and the translators' strings `meta.last_line` and `test`;
 - the API (`/api/forgejo/v1`, swagger titles), CLI help and output (the `forgejo` binary and its subcommands are code identifiers), log messages, git hook messages (`remote: Forgejo: …`), the git `user.name`, the `X-Mailer` header and the migration/LFS User-Agents.
 
-`TestBranding` (`tests/integration/branding_test.go`) and the install, 500 and mail tests use `test.BrandMentions` (`modules/test/brand.go`). It fails on any visible old product name (Forgejo and the three earlier names GitHat, CodeHat and spoved, in any case) and on the capitalised "Gitdepo" and "GITDEPO": the name is always lowercase, even at the start of a sentence. It reads body text (including `<pre>` and `<code>`), the title and the `content`, `alt`, `title`, `placeholder` and `aria-label` attributes. Its `test.BrandAllowed` list holds the exact phrases above that appear on the pages it checks ("based on Forgejo", "Forgejo documentation", `forgejo-runner`, `forgejo.org/docs`, `next.forgejo.org`) and the repository and image paths `InfiniteSpoved/spoved` and `infinitespoved/spoved`, which keep the old name until the repository moves; each has a comment.
+`TestBranding` (`tests/integration/branding_test.go`) and the install, 500 and mail tests use `test.BrandMentions` (`modules/test/brand.go`). It fails on any visible old product name (Forgejo and the earlier product names, in any case) and on the capitalised "Gitdepo" and "GITDEPO": the name is always lowercase, even at the start of a sentence. It reads body text (including `<pre>` and `<code>`), the title and the `content`, `alt`, `title`, `placeholder` and `aria-label` attributes. Its `test.BrandAllowed` list holds the exact phrases above that appear on the pages it checks ("based on Forgejo", "Forgejo documentation", `forgejo-runner`, `forgejo.org/docs`, `next.forgejo.org`); each has a comment.
 
 ## Beyond the HTML pages
 
@@ -25,7 +25,7 @@ Text that never reaches the rendered pages `TestBranding` reads is guarded by `T
 
 `modules/translation/i18n/localestore.go` looks a key up in `options/locale_next/` before `options/locale/`. So instead of editing upstream's `locale_en-US.ini`, gitdepo adds the **same key** with gitdepo wording at the top of `options/locale_next/locale_en-US.json`. The ini line, templates and Go call sites stay untouched. Other languages are untouched too.
 
-Shadowed ini keys (also listed in `spovedShadowKeys`, `modules/translation/spoved_test.go`):
+Shadowed ini keys (also listed in `gitdepoShadowKeys`, `modules/translation/gitdepo_test.go`):
 
 - `return_to_forgejo`
 - `repo.settings.web_hook_name_forgejo`
@@ -100,7 +100,7 @@ New key: `based_on_forgejo` (footer credit).
 
 ## Boards
 
-Forgejo's kanban "Projects" are called **Boards** in the interface, so that "Projects" can mean a group of repositories. The rename is text only: locale keys (`repo.projects.*`, `user.projects`, ...), routes (`/{owner}/-/projects`, `/{owner}/{repo}/projects`), the API, templates and code keep the upstream "project" names. The English wording is shadowed like the product name above (same key in `options/locale_next/locale_en-US.json`), and the keys are listed in `boardsShadowKeys` (`modules/translation/spoved_test.go`); `TestBoardsShadowKeys` fails when upstream renames or removes one. Generic uses of "project" (a software project, a Pagure or Bitbucket project, package metadata) stay. A new upstream string that names the kanban feature shows up as "project": shadow it and add it to the list.
+Forgejo's kanban "Projects" are called **Boards** in the interface, so that "Projects" can mean a group of repositories. The rename is text only: locale keys (`repo.projects.*`, `user.projects`, ...), routes (`/{owner}/-/projects`, `/{owner}/{repo}/projects`), the API, templates and code keep the upstream "project" names. The English wording is shadowed like the product name above (same key in `options/locale_next/locale_en-US.json`), and the keys are listed in `boardsShadowKeys` (`modules/translation/gitdepo_test.go`); `TestBoardsShadowKeys` fails when upstream renames or removes one. Generic uses of "project" (a software project, a Pagure or Bitbucket project, package metadata) stay. A new upstream string that names the kanban feature shows up as "project": shadow it and add it to the list.
 
 ## Defaults and assets
 
@@ -114,12 +114,12 @@ Forgejo's kanban "Projects" are called **Boards** in the interface, so that "Pro
 
 ## Repository URLs
 
-These link to `github.com/InfiniteSpoved/spoved`; change them if the repository moves again: the footer, the home page (`startpage.install_desc` links to the releases, container package and repository; `startpage.license_desc` to the repository and its issues), the admin dashboard update hints, `ISSUE_TRACKER_URL` and the update checker's `HTTP_ENDPOINT` defaults (`modules/setting/server.go`, `services/cron/tasks_extended.go`, `custom/conf/app.example.ini` and their tests), README links, and the ACR OIDC subject comment in `.github/workflows/release-image.yml` (the subject itself is set in Azure). The image path is derived from the repository name, so the workflows need no change.
+These link to `github.com/InfiniteDepo/gitdepo`; change them if the repository moves again: the footer, the home page (`startpage.install_desc` links to the releases, container package and repository; `startpage.license_desc` to the repository and its issues), the admin dashboard update hints, `ISSUE_TRACKER_URL` and the update checker's `HTTP_ENDPOINT` defaults (`modules/setting/server.go`, `services/cron/tasks_extended.go`, `custom/conf/app.example.ini` and their tests), README links, and the ACR OIDC subject comment in `.github/workflows/release-image.yml` (the subject itself is set in Azure). The image path is derived from the repository name, so the workflows need no change.
 
 ## Merging upstream
 
 1. Merge as usual. Locale conflicts: keep both sides.
-2. Run `go test ./modules/translation/ -run TestSpovedShadowKeys`. It fails when upstream renames or removes a shadowed ini key: move the shadow to the new key, update the list above and in the test.
+2. Run `go test ./modules/translation/ -run TestGitdepoShadowKeys`. It fails when upstream renames or removes a shadowed ini key: move the shadow to the new key, update the list above and in the test.
 3. New upstream strings that name the product show up as "Forgejo": `make 'test-sqlite#TestBranding'` catches them on the pages it covers. Shadow them as above.
 4. Conflicts in the templates above: keep upstream's change and re-apply the gitdepo line.
 5. If upstream changes `assets/logo.svg`, keep ours and rerun `make generate-images`.

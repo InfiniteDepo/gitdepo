@@ -91,7 +91,7 @@ func TestIssueTrackerURL(t *testing.T) {
 	cfg, err := NewConfigProviderFromData(``)
 	require.NoError(t, err)
 	loadServerFrom(cfg)
-	assert.Equal(t, "https://github.com/InfiniteSpoved/spoved/issues", IssueTrackerURL)
+	assert.Equal(t, "https://github.com/InfiniteDepo/gitdepo/issues", IssueTrackerURL)
 
 	cfg, err = NewConfigProviderFromData(`
 [server]

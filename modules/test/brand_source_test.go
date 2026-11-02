@@ -1,10 +1,12 @@
-// Copyright 2026 The spoved contributors.
+// Copyright 2026 The gitdepo contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 package test
 
 import (
+	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -55,6 +57,35 @@ func TestNoOldBrandInUserFacingSource(t *testing.T) {
 	for i, line := range readLines(t, "../../templates/swagger/v1_json.tmpl") {
 		if text.MatchString(line) {
 			assert.Empty(t, oldBrandRe.FindString(allowed.Replace(line)), "swagger:%d", i+1)
+		}
+	}
+}
+
+// The product was called spoved before it became gitdepo. Only the brand guards may still name it, as the
+// text they detect.
+func TestNoOldProductNameInTree(t *testing.T) {
+	out, err := exec.Command("git", "-C", "../..", "ls-files", "-z").Output()
+	if err != nil {
+		t.Skip("not a git checkout:", err)
+	}
+	guards := map[string]bool{
+		"modules/test/brand.go":               true,
+		"modules/test/brand_test.go":          true,
+		"modules/test/brand_source_test.go":   true,
+		"modules/translation/gitdepo_test.go": true,
+	}
+	old := regexp.MustCompile(`(?i)spoved`)
+	for f := range strings.SplitSeq(strings.TrimRight(string(out), "\x00"), "\x00") {
+		assert.False(t, old.MatchString(f), "file name %s", f)
+		if guards[f] {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join("../..", f))
+		if err != nil || bytes.IndexByte(b, 0) >= 0 { // deleted in the worktree, or binary
+			continue
+		}
+		if loc := old.FindIndex(b); loc != nil {
+			assert.Fail(t, "old product name", "%s:%d", f, bytes.Count(b[:loc[0]], []byte("\n"))+1)
 		}
 	}
 }

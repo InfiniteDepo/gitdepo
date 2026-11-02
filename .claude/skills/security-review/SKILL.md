@@ -1,6 +1,6 @@
 ---
 name: security-review
-description: Review a spoved design or pull request diff for exploitable security problems (permissions, data exposure, injection, redirects, outbound requests, secrets) using the repository's own patterns. Use when asked to "security review", "check this PR for security issues", or before merging a change to auth, permissions, tokens, keys, webhooks, uploads or outbound requests.
+description: Review a gitdepo design or pull request diff for exploitable security problems (permissions, data exposure, injection, redirects, outbound requests, secrets) using the repository's own patterns. Use when asked to "security review", "check this PR for security issues", or before merging a change to auth, permissions, tokens, keys, webhooks, uploads or outbound requests.
 ---
 
 # Security review

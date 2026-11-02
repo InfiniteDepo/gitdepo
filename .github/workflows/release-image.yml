@@ -2,7 +2,7 @@ name: Release image
 
 # Builds the container image from Dockerfile.rootless and pushes it to the
 # GitHub Container Registry as ghcr.io/<owner>/<repo>, lowercased from the
-# repository name (today ghcr.io/infinitespoved/spoved). It runs only on demand:
+# repository name (today ghcr.io/infinitedepo/gitdepo). It runs only on demand:
 # Actions → Release image → Run workflow.
 #
 # Tags: sha-<commit> always. <version> and latest are added to the same digest
@@ -20,9 +20,9 @@ name: Release image
 #   1. A user-assigned managed identity (or app registration) with the role
 #      AcrPush on the registry only.
 #   2. A federated credential on it: issuer https://token.actions.githubusercontent.com,
-#      subject repo:InfiniteSpoved/spoved:environment:release, audience api://AzureADTokenExchange.
+#      subject repo:InfiniteDepo/gitdepo:environment:release, audience api://AzureADTokenExchange.
 #      Renaming or moving the repository changes the subject; update it then.
-#      The subject now names InfiniteSpoved/spoved: change the credential in Azure to match (outside this repository).
+#      The subject now names InfiniteDepo/gitdepo: change the credential in Azure to match (outside this repository).
 #   3. Repository variable ACR_NAME (registry name, not the login server). Unset
 #      means push-to-acr does nothing.
 #   4. Variables AZURE_CLIENT_ID, AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID in the
@@ -38,7 +38,7 @@ on:
         description: Branch, tag or commit to build.
         default: develop
       version:
-        description: Release version, semver (e.g. 16.0.0-spoved.1). Also tags the image as latest. Leave empty for a test build tagged with the commit only.
+        description: Release version, semver (e.g. 16.0.0-gitdepo.1). Also tags the image as latest. Leave empty for a test build tagged with the commit only.
         default: ''
       fail-on:
         description: Fail the run on fixable vulnerabilities of these severities.
@@ -81,7 +81,7 @@ jobs:
           fi
           if [ -n "$VERSION" ]; then
             if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
-              echo "::error::The version must be semver, e.g. 16.0.0-spoved.1"
+              echo "::error::The version must be semver, e.g. 16.0.0-gitdepo.1"
               exit 1
             fi
             # The Makefile takes the version from this file instead of git tags.

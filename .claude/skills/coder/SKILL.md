@@ -1,6 +1,6 @@
 ---
 name: coder
-description: Pick the next open spoved issue and take it to a mergeable pull request (choose, claim, design, test, code, CI, review). Use when someone asks to "work on the next issue", "pick an issue", "fix issue #N" or "open a PR for #N" in this repository.
+description: Pick the next open gitdepo issue and take it to a mergeable pull request (choose, claim, design, test, code, CI, review). Use when someone asks to "work on the next issue", "pick an issue", "fix issue #N" or "open a PR for #N" in this repository.
 ---
 
 # Coder
@@ -29,7 +29,7 @@ For anything beyond a small fix, write a short plan: what changes (files, functi
 ## 4. Tests, then code
 
 - Write the tests for each requirement, see them fail, then make them pass.
-- Follow the conventions in `CONTRIBUTING.md` and `CLAUDE.md` (migrations, locale strings, swagger, license headers, lowercase "spoved"). Read the `CLAUDE.md` Learnings that touch your area: they record mistakes already made once.
+- Follow the conventions in `CONTRIBUTING.md` and `CLAUDE.md` (migrations, locale strings, swagger, license headers, lowercase "gitdepo"). Read the `CLAUDE.md` Learnings that touch your area: they record mistakes already made once.
 - Never remove or skip existing tests, checks or validation to make something pass.
 - Permissions: every new route, API endpoint or query that returns data checks who may see it, and a hidden thing answers like a missing one.
 
