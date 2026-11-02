@@ -75,7 +75,7 @@ func TestNoOldProductNameInTree(t *testing.T) {
 		"modules/translation/gitdepo_test.go": true,
 	}
 	old := regexp.MustCompile(`(?i)spoved`)
-	for _, f := range strings.Split(strings.TrimRight(string(out), "\x00"), "\x00") {
+	for f := range strings.SplitSeq(strings.TrimRight(string(out), "\x00"), "\x00") {
 		assert.False(t, old.MatchString(f), "file name %s", f)
 		if guards[f] {
 			continue
