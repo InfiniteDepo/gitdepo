@@ -6,8 +6,8 @@ package structs
 import "time"
 
 // SecretScanningLocationDetails is where a secret was found: a file at a line, in the commit that brought it, as
-// GitHub names them. Fields that spoved can't fill (the columns, the URLs of a wiki commit) are left out. Path and
-// the commit author are text from git, not checked by spoved: clients must escape them.
+// GitHub names them. Fields that gitdepo can't fill (the columns, the URLs of a wiki commit) are left out. Path and
+// the commit author are text from git, not checked by gitdepo: clients must escape them.
 // swagger:model
 type SecretScanningLocationDetails struct {
 	Path      string `json:"path"`
@@ -21,23 +21,23 @@ type SecretScanningLocationDetails struct {
 	CommitURL string `json:"commit_url,omitempty"`
 	// the page, for the wiki
 	PageURL string `json:"page_url,omitempty"`
-	// spoved: the page of the file at that commit, or of the issue, pull request or comment, in the web interface
+	// gitdepo: the page of the file at that commit, or of the issue, pull request or comment, in the web interface
 	// (empty when the place has no commit and no text, and for the wiki)
 	HTMLURL string `json:"html_url,omitempty"`
-	// spoved: the author of the commit, as it names itself (anyone can write any name)
+	// gitdepo: the author of the commit, as it names itself (anyone can write any name)
 	CommitAuthorName  string `json:"commit_author_name"`
 	CommitAuthorEmail string `json:"commit_author_email"`
 	// swagger:strfmt date-time
 	CommitDate *time.Time `json:"commit_date,omitempty"`
-	// spoved: true when only a refs/pull/* ref reaches the commit
+	// gitdepo: true when only a refs/pull/* ref reaches the commit
 	PullRef bool `json:"pull_ref,omitempty"`
-	// spoved: for a place in text the caller may read, the number of the issue or pull request
+	// gitdepo: for a place in text the caller may read, the number of the issue or pull request
 	IssueNumber int64 `json:"issue_number,omitempty"`
-	// spoved: for a place in text the caller may read, the part that holds the secret: title, body or comment
+	// gitdepo: for a place in text the caller may read, the part that holds the secret: title, body or comment
 	Field string `json:"field,omitempty"`
-	// spoved: for a place in text the caller may read, the login of who wrote it (empty for an import)
+	// gitdepo: for a place in text the caller may read, the login of who wrote it (empty for an import)
 	Poster string `json:"poster,omitempty"`
-	// spoved: true when the text no longer holds the secret (the alert stays); on an issue_text or comment_text place with no other detail, true when the issue or comment was deleted (only said to a caller who reads issues and pull requests)
+	// gitdepo: true when the text no longer holds the secret (the alert stays); on an issue_text or comment_text place with no other detail, true when the issue or comment was deleted (only said to a caller who reads issues and pull requests)
 	Removed bool `json:"removed,omitempty"`
 	// the API URL of the issue, for an issue_title place
 	IssueTitleURL string `json:"issue_title_url,omitempty"`
@@ -51,7 +51,7 @@ type SecretScanningLocationDetails struct {
 	PullRequestBodyURL string `json:"pull_request_body_url,omitempty"`
 	// the API URL of the comment, for a pull_request_comment place
 	PullRequestCommentURL string `json:"pull_request_comment_url,omitempty"`
-	// spoved: for a place in a comment the caller may read, the ID of the comment
+	// gitdepo: for a place in a comment the caller may read, the ID of the comment
 	CommentID int64 `json:"comment_id,omitempty"`
 }
 

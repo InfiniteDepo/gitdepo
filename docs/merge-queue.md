@@ -1,7 +1,7 @@
 # Merge queue
 
 A merge queue keeps a busy branch green: instead of merging a pull request that was only tested against an older
-state of the branch, spoved tests each pull request on top of the branch and the pull requests ahead of it, and merges
+state of the branch, gitdepo tests each pull request on top of the branch and the pull requests ahead of it, and merges
 exactly the commit it tested. It works like the merge queues of GitHub and GitLab's merge trains.
 
 ## Turning it on

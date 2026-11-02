@@ -270,7 +270,7 @@ func TestCommitListActions(t *testing.T) {
 func TestTitleDisplayName(t *testing.T) {
 	session := emptyTestSession(t)
 	title := GetHTMLTitle(t, session, "/")
-	assert.Equal(t, "spoved: Beyond coding. We Forge.", title)
+	assert.Equal(t, "gitdepo: Beyond coding. We Forge.", title)
 }
 
 func TestHomeDisplayName(t *testing.T) {
@@ -278,7 +278,7 @@ func TestHomeDisplayName(t *testing.T) {
 	req := NewRequest(t, "GET", "/")
 	resp := session.MakeRequest(t, req, http.StatusOK)
 	htmlDoc := NewHTMLParser(t, resp.Body)
-	assert.Equal(t, "spoved: Beyond coding. We Forge.", strings.TrimSpace(htmlDoc.Find("h1.title").Text()))
+	assert.Equal(t, "gitdepo: Beyond coding. We Forge.", strings.TrimSpace(htmlDoc.Find("h1.title").Text()))
 }
 
 func TestOpenGraphDisplayName(t *testing.T) {
@@ -287,7 +287,7 @@ func TestOpenGraphDisplayName(t *testing.T) {
 	resp := session.MakeRequest(t, req, http.StatusOK)
 	htmlDoc := NewHTMLParser(t, resp.Body)
 	ogTitle, _ := htmlDoc.Find("meta[property='og:title']").Attr("content")
-	assert.Equal(t, "spoved: Beyond coding. We Forge.", ogTitle)
+	assert.Equal(t, "gitdepo: Beyond coding. We Forge.", ogTitle)
 	ogSiteName, _ := htmlDoc.Find("meta[property='og:site_name']").Attr("content")
-	assert.Equal(t, "spoved: Beyond coding. We Forge.", ogSiteName)
+	assert.Equal(t, "gitdepo: Beyond coding. We Forge.", ogSiteName)
 }

@@ -53,7 +53,7 @@ func findTextInContainer(c MSTeamsContainer, substr string) bool {
 }
 
 func TestMSTeamsPayload(t *testing.T) {
-	defer test.MockVariableValue(&setting.AppName, "spoved")()
+	defer test.MockVariableValue(&setting.AppName, "gitdepo")()
 	mc := msteamsConvertor{}
 
 	// helper to find text within the adaptive card body
@@ -88,7 +88,7 @@ func TestMSTeamsPayload(t *testing.T) {
 
 		// action button should point to branch
 		require.Len(t, pl.Actions, 1)
-		assert.Equal(t, "View in spoved", pl.Actions[0].Title)
+		assert.Equal(t, "View in gitdepo", pl.Actions[0].Title)
 		assert.Equal(t, "http://localhost:3000/test/repo/src/test", pl.Actions[0].URL)
 	})
 
@@ -109,7 +109,7 @@ func TestMSTeamsPayload(t *testing.T) {
 
 		// action button should point to branch
 		require.Len(t, pl.Actions, 1)
-		assert.Equal(t, "View in spoved", pl.Actions[0].Title)
+		assert.Equal(t, "View in gitdepo", pl.Actions[0].Title)
 		assert.Equal(t, "http://localhost:3000/test/repo", pl.Actions[0].URL)
 	})
 
@@ -129,7 +129,7 @@ func TestMSTeamsPayload(t *testing.T) {
 
 		// action button should point to repo
 		require.Len(t, pl.Actions, 1)
-		assert.Equal(t, "View in spoved", pl.Actions[0].Title)
+		assert.Equal(t, "View in gitdepo", pl.Actions[0].Title)
 		assert.Equal(t, "http://localhost:3000/test/repo", pl.Actions[0].URL)
 	})
 
@@ -153,7 +153,7 @@ func TestMSTeamsPayload(t *testing.T) {
 
 		// action button should point to compare
 		require.Len(t, pl.Actions, 1)
-		assert.Equal(t, "View in spoved", pl.Actions[0].Title)
+		assert.Equal(t, "View in gitdepo", pl.Actions[0].Title)
 		assert.Equal(t, "http://localhost:3000/test/repo/src/test", pl.Actions[0].URL)
 	})
 
@@ -175,7 +175,7 @@ func TestMSTeamsPayload(t *testing.T) {
 		assert.True(t, findTextInBody(pl, "issue body"))
 
 		require.Len(t, pl.Actions, 1)
-		assert.Equal(t, "View in spoved", pl.Actions[0].Title)
+		assert.Equal(t, "View in gitdepo", pl.Actions[0].Title)
 		assert.Equal(t, "http://localhost:3000/test/repo/issues/2", pl.Actions[0].URL)
 
 		p.Action = api.HookIssueClosed
@@ -204,7 +204,7 @@ func TestMSTeamsPayload(t *testing.T) {
 		assert.True(t, findTextInBody(pl, "more info needed"))
 
 		require.Len(t, pl.Actions, 1)
-		assert.Equal(t, "View in spoved", pl.Actions[0].Title)
+		assert.Equal(t, "View in gitdepo", pl.Actions[0].Title)
 		assert.Equal(t, "http://localhost:3000/test/repo/issues/2#issuecomment-4", pl.Actions[0].URL)
 	})
 
@@ -237,7 +237,7 @@ func TestMSTeamsPayload(t *testing.T) {
 		assert.True(t, findTextInBody(pl, "feature/test → refs/pull/2/head"))
 
 		require.Len(t, pl.Actions, 1)
-		assert.Equal(t, "View in spoved", pl.Actions[0].Title)
+		assert.Equal(t, "View in gitdepo", pl.Actions[0].Title)
 		assert.Equal(t, "http://localhost:3000/test/repo/pulls/12", pl.Actions[0].URL)
 	})
 
@@ -258,7 +258,7 @@ func TestMSTeamsPayload(t *testing.T) {
 		assert.True(t, findTextInBody(pl, "changes requested"))
 
 		require.Len(t, pl.Actions, 1)
-		assert.Equal(t, "View in spoved", pl.Actions[0].Title)
+		assert.Equal(t, "View in gitdepo", pl.Actions[0].Title)
 		assert.Equal(t, "http://localhost:3000/test/repo/pulls/12#issuecomment-4", pl.Actions[0].URL)
 	})
 
@@ -279,7 +279,7 @@ func TestMSTeamsPayload(t *testing.T) {
 		assert.True(t, findTextInBody(pl, "good job"))
 
 		require.Len(t, pl.Actions, 1)
-		assert.Equal(t, "View in spoved", pl.Actions[0].Title)
+		assert.Equal(t, "View in gitdepo", pl.Actions[0].Title)
 		assert.Equal(t, "http://localhost:3000/test/repo/pulls/12", pl.Actions[0].URL)
 	})
 
@@ -298,7 +298,7 @@ func TestMSTeamsPayload(t *testing.T) {
 		assert.True(t, findTextInBody(pl, "Repository created: test/repo"))
 
 		require.Len(t, pl.Actions, 1)
-		assert.Equal(t, "View in spoved", pl.Actions[0].Title)
+		assert.Equal(t, "View in gitdepo", pl.Actions[0].Title)
 		assert.Equal(t, "http://localhost:3000/test/repo", pl.Actions[0].URL)
 	})
 
@@ -319,7 +319,7 @@ func TestMSTeamsPayload(t *testing.T) {
 		assert.True(t, findTextInBody(pl, "Package created: GiteaContainer:latest"))
 
 		require.Len(t, pl.Actions, 1)
-		assert.Equal(t, "View in spoved", pl.Actions[0].Title)
+		assert.Equal(t, "View in gitdepo", pl.Actions[0].Title)
 		assert.Equal(t, "http://localhost:3000/user1/-/packages/container/GiteaContainer/latest", pl.Actions[0].URL)
 	})
 
@@ -339,7 +339,7 @@ func TestMSTeamsPayload(t *testing.T) {
 		assert.True(t, findTextInBody(pl, "New wiki page \"index\""))
 		assert.True(t, findTextInBody(pl, "Wiki change comment"))
 		require.Len(t, pl.Actions, 1)
-		assert.Equal(t, "View in spoved", pl.Actions[0].Title)
+		assert.Equal(t, "View in gitdepo", pl.Actions[0].Title)
 		assert.Equal(t, "http://localhost:3000/test/repo/wiki/index", pl.Actions[0].URL)
 
 		p.Action = api.HookWikiEdited
@@ -375,7 +375,7 @@ func TestMSTeamsPayload(t *testing.T) {
 		assert.True(t, findTextInBody(pl, "Release created: v1.0"))
 
 		require.Len(t, pl.Actions, 1)
-		assert.Equal(t, "View in spoved", pl.Actions[0].Title)
+		assert.Equal(t, "View in gitdepo", pl.Actions[0].Title)
 		assert.Equal(t, "http://localhost:3000/test/repo/releases/tag/v1.0", pl.Actions[0].URL)
 	})
 
@@ -445,7 +445,7 @@ func TestMSTeamsPayload(t *testing.T) {
 				assert.True(t, findTextInBody(payload, "Run: Update README.md"))
 
 				assert.Len(t, payload.Actions, 1)
-				assert.Equal(t, "View in spoved", payload.Actions[0].Title)
+				assert.Equal(t, "View in gitdepo", payload.Actions[0].Title)
 				assert.Equal(t, "https://example.com/acme/test/actions/runs/197719",
 					payload.Actions[0].URL)
 			})
@@ -522,7 +522,7 @@ func TestMSTeamsPayload(t *testing.T) {
 				assert.True(t, findTextInBody(payload, "Job: build-and-test"))
 
 				assert.Len(t, payload.Actions, 1)
-				assert.Equal(t, "View in spoved", payload.Actions[0].Title)
+				assert.Equal(t, "View in gitdepo", payload.Actions[0].Title)
 				assert.Equal(t, "https://example.com/acme/test/actions/runs/196540/jobs/3/attempt/1",
 					payload.Actions[0].URL)
 			})

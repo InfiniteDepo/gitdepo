@@ -65,7 +65,7 @@ func NormalizeDomain(s string) (string, error) {
 
 // DomainRecordName is the DNS name of the TXT record that verifies a domain.
 func DomainRecordName(domain string) string {
-	return "_spoved-verify." + domain
+	return "_gitdepo-verify." + domain
 }
 
 // DomainRecordValue is the TXT record value that proves the organization controls the domain. It is derived from the
@@ -73,7 +73,7 @@ func DomainRecordName(domain string) string {
 func DomainRecordValue(orgID int64, domain string) string {
 	mac := hmac.New(sha256.New, []byte(setting.SecretKey))
 	mac.Write([]byte("org-domain-verify:" + strconv.FormatInt(orgID, 10) + ":" + domain))
-	return "spoved-verification=" + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return "gitdepo-verification=" + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
 // VerifyDomain verifies a domain for an organization by its TXT record or, withoutDNS, on a site admin's word.

@@ -85,7 +85,7 @@ func TestLogShippingNewRelicAccessLog(t *testing.T) {
 	assert.Equal(t, key, headers[0].Get("Api-Key"))
 	mu.Unlock()
 	assert.Equal(t, "access", e["logger"])
-	assert.Equal(t, "spoved", e["service"])
+	assert.Equal(t, "gitdepo", e["service"])
 	assert.Equal(t, "203.0.113.7", e["ip"])
 	assert.Equal(t, "GET", e["method"])
 	assert.Equal(t, "nr-integration-agent", e["user_agent"])

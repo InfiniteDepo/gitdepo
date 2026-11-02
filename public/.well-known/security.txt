@@ -1,4 +1,4 @@
-# Report security problems in spoved privately through GitHub:
+# Report security problems in gitdepo privately through GitHub:
 # Security tab > Report a vulnerability. Details are in SECURITY.md.
 Contact: https://github.com/InfiniteSpoved/spoved/security/advisories/new
 Policy: https://github.com/InfiniteSpoved/spoved/blob/develop/SECURITY.md

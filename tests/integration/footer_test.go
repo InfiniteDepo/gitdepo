@@ -60,7 +60,7 @@ func testFooterContent(t *testing.T, session *TestSession, url string, expectPow
 	page := NewHTMLParser(t, session.MakeRequest(t, NewRequest(t, "GET", url), http.StatusOK).Body)
 	// AssertElement will only pass if there's just one such element
 	footerLeft := page.Find("footer .left-links").Text()
-	assert.Equal(t, expectPoweredBy, strings.Contains(footerLeft, "Powered by spoved"))
+	assert.Equal(t, expectPoweredBy, strings.Contains(footerLeft, "Powered by gitdepo"))
 	assert.Equal(t, expectVersion, strings.Contains(footerLeft, "Version"))
 	page.AssertElement(t, `footer .left-links a[href="/admin/config"]`, expectVersionLink)
 }

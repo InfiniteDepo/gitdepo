@@ -47,7 +47,7 @@ func TestAuditShippingToLoki(t *testing.T) {
 		defer mu.Unlock()
 		path = r.URL.Path
 		for _, s := range push.Streams {
-			if s.Stream["logtype"] == "audit" && s.Stream["service"] == "spoved" {
+			if s.Stream["logtype"] == "audit" && s.Stream["service"] == "gitdepo" {
 				for _, v := range s.Values {
 					lines = append(lines, v[1])
 				}

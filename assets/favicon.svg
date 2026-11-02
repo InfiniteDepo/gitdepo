@@ -1,5 +1,5 @@
 <svg viewBox="0 0 212 212" xmlns="http://www.w3.org/2000/svg">
-  <!-- spoved mark: a hat whose crown holds a code chevron pair -->
+  <!-- gitdepo mark: a hat whose crown holds a code chevron pair -->
   <path d="M46 150 L56 52 Q58 34 76 34 H136 Q154 34 156 52 L166 150 Z" fill="#1d4ed8" />
   <rect x="10" y="146" width="192" height="30" rx="15" fill="#60a5fa" />
   <path d="M90 70 L68 94 L90 118 M122 70 L144 94 L122 118" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" />

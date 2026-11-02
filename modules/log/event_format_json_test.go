@@ -34,7 +34,7 @@ func TestEventFormatJSON(t *testing.T) {
 	assert.Equal(t, "warn", m["level"])
 	assert.Equal(t, "application", m["logtype"])
 	assert.Equal(t, DEFAULT, m["logger"])
-	assert.Equal(t, "spoved", m["service"])
+	assert.Equal(t, "gitdepo", m["service"])
 	assert.Equal(t, "1.2.3", m["app_version"])
 	assert.NotEmpty(t, m["hostname"])
 	assert.NotContains(t, m, "stacktrace")
@@ -53,7 +53,7 @@ func TestEventFormatJSON(t *testing.T) {
 	assert.Equal(t, "1.2.3.4", m["ip"])
 	assert.InDelta(t, 200, m["status"], 0)
 	assert.Equal(t, "/x?password=[REDACTED]", m["path"])
-	assert.Equal(t, "spoved", m["service"], "fields must not override core keys")
+	assert.Equal(t, "gitdepo", m["service"], "fields must not override core keys")
 
 	m = formatJSON(t, &Event{Level: INFO, MsgSimpleText: strings.Repeat("é", 40000)})
 	assert.LessOrEqual(t, len(m["message"].(string)), 32*1024+len("…[truncated]"))

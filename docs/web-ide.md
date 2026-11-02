@@ -1,6 +1,6 @@
 # Web IDE
 
-The Web IDE is the VS Code workbench running in the browser, on a repository's files. It is built from the MIT-licensed `@codingame/monaco-vscode-api` packages (VS Code 1.138) and talks only to spoved's own web routes, with the signed-in session.
+The Web IDE is the VS Code workbench running in the browser, on a repository's files. It is built from the MIT-licensed `@codingame/monaco-vscode-api` packages (VS Code 1.138) and talks only to gitdepo's own web routes, with the signed-in session.
 
 ## Opening it
 
@@ -16,7 +16,7 @@ Signing in is required. Anyone who can read the code can open it; on a tag, a co
 - Source control view (`Ctrl+Shift+G`) with the changes, their diffs, discard and "view all changes".
 - Commit (`Ctrl+Enter` in the message box): all changes go into one commit, to the branch, to a new branch, or to a new branch with a pull request. Edits, new files, deletes and renames (kept as renames) are supported.
 - If the branch got new commits since the IDE opened, committing to it is refused and the IDE offers a new branch instead. A branch you can't push to (protected) only offers a new branch.
-- Files larger than `MAX_FILE_SIZE`, submodules and Git LFS files open read-only with a placeholder, and symbolic links are read-only. Other binary files get VS Code's binary-file notice. Images open in a preview; Markdown has a preview rendered by spoved's markup renderer in a sandboxed frame (no scripts).
+- Files larger than `MAX_FILE_SIZE`, submodules and Git LFS files open read-only with a placeholder, and symbolic links are read-only. Other binary files get VS Code's binary-file notice. Images open in a preview; Markdown has a preview rendered by gitdepo's markup renderer in a sandboxed frame (no scripts).
 - Uncommitted changes are kept in the browser (IndexedDB) and come back after a reload. If the branch moved meanwhile, they come back on the commit they were made on and must go to a new branch.
 
 Commits go through the same code as the web editor (`ChangeRepoFiles`), so branch protection, push rules, pre-receive hooks, quota, the personal repository size lock and the audit log apply.

@@ -54,4 +54,4 @@ Users choose a theme in Settings → Appearance.
 
 ## Branding
 
-The default logo, favicon and app name are spoved's (see [`branding.md`](branding.md)). To use your own, put `logo.svg`, `logo.png`, `favicon.svg` and `favicon.png` in `custom/public/assets/img/`, and set `APP_NAME` in `app.ini`.
+The default logo, favicon and app name are gitdepo's (see [`branding.md`](branding.md)). To use your own, put `logo.svg`, `logo.png`, `favicon.svg` and `favicon.png` in `custom/public/assets/img/`, and set `APP_NAME` in `app.ini`.

@@ -6,7 +6,7 @@
 	</div>
 	<div class="required field {{if .Err_PayloadURL}}error{{end}}">
 		<label for="username">{{ctx.Locale.Tr "repo.settings.discord_username"}}</label>
-		<input id="username" name="username" value="{{.HookMetadata.Username}}" autofocus required placeholder="spoved">
+		<input id="username" name="username" value="{{.HookMetadata.Username}}" autofocus required placeholder="gitdepo">
 	</div>
 	<div class="field">
 		<label for="icon_url">{{ctx.Locale.Tr "repo.settings.discord_icon_url"}}</label>

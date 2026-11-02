@@ -18,7 +18,7 @@ import (
 
 func TestOpenGraphProperties(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
-	siteName := "spoved: Beyond coding. We Forge."
+	siteName := "gitdepo: Beyond coding. We Forge."
 
 	cases := []struct {
 		name     string
@@ -31,7 +31,7 @@ func TestOpenGraphProperties(t *testing.T) {
 			expected: map[string]string{
 				"og:title":       siteName,
 				"og:url":         setting.AppURL,
-				"og:description": "spoved is a self-hosted Git forge.",
+				"og:description": "gitdepo is a self-hosted Git forge.",
 				"og:type":        "website",
 				"og:image":       setting.AppURL + "assets/img/logo.png",
 				"og:site_name":   siteName,

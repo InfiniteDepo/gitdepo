@@ -115,7 +115,7 @@ func Install(ctx *context.Context) {
 	ctx.Data["CurDbType"] = curDBType
 
 	// Application general settings
-	form.AppName = "spoved"
+	form.AppName = "gitdepo"
 	form.AppSlogan = "A self-hosted Git forge"
 	form.RepoRootPath = setting.RepoRootPath
 	form.LFSRootPath = setting.LFS.Storage.Path

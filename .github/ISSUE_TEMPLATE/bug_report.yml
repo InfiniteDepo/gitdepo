@@ -23,7 +23,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: spoved version or commit
+      label: gitdepo version or commit
       description: Shown in the page footer and under Site administration.
     validations:
       required: true

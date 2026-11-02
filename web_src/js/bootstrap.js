@@ -78,7 +78,7 @@ function initGlobalErrorHandler() {
     return;
   }
   if (!window.config) {
-    showGlobalErrorMessage(`spoved JavaScript code couldn't run correctly, please check your custom templates`);
+    showGlobalErrorMessage(`gitdepo JavaScript code couldn't run correctly, please check your custom templates`);
   }
   // we added an event handler for window error at the very beginning of <script> of page head the
   // handler calls `_globalHandlerErrors.push` (array method) to record all errors occur before

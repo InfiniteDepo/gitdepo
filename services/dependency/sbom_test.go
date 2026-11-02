@@ -119,7 +119,7 @@ func TestSBOMSchemas(t *testing.T) {
 		require.NoError(t, json.Unmarshal(doc, &out))
 		assert.Equal(t, "acme/payments/api", out.Name)
 		assert.Equal(t, "https://git.example.com/acme/payments/api/sbom/spdx/0123456789abcdef0123456789abcdef01234567/11111111-2222-3333-4444-555555555555", out.DocumentNamespace)
-		assert.Equal(t, []string{"Tool: spoved-11.0.0+test"}, out.CreationInfo.Creators)
+		assert.Equal(t, []string{"Tool: gitdepo-11.0.0+test"}, out.CreationInfo.Creators)
 		assert.Equal(t, "2026-10-25T12:00:00Z", out.CreationInfo.Created)
 		assert.Contains(t, out.Comment, "web/yarn.lock (parse_error)")
 		assert.Contains(t, out.Comment, "read only in part: web/yarn.lock (parse_error), Gemfile (partially_read, 2 lines)")
@@ -197,7 +197,7 @@ func TestSBOMSchemas(t *testing.T) {
 		assert.Equal(t, "application", out.Metadata.Component.Type)
 		assert.Equal(t, "acme/payments/api", out.Metadata.Component.Name)
 		assert.Equal(t, "0123456789abcdef0123456789abcdef01234567", out.Metadata.Component.Version)
-		assert.Equal(t, "spoved", out.Metadata.Tools.Components[0].Name)
+		assert.Equal(t, "gitdepo", out.Metadata.Tools.Components[0].Name)
 		assert.Contains(t, out.Metadata.Properties[0].Value, "web/yarn.lock (parse_error)")
 		assert.Len(t, out.Components, 11)
 		refs := map[string]bool{}
@@ -361,7 +361,7 @@ func TestSBOMUnpinned(t *testing.T) {
 	for _, c := range cd.Components {
 		var reqs []string
 		for _, p := range c.Properties {
-			if p.Name == "spoved:requirement" {
+			if p.Name == "gitdepo:requirement" {
 				reqs = append(reqs, p.Value)
 			}
 		}

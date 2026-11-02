@@ -16,7 +16,7 @@ type CreateVariableOption struct {
 // UpdateVariableOption defines the properties of the variable to update
 // swagger:model
 type UpdateVariableOption struct {
-	// New name for the variable. If the field is empty, the variable name won't be updated. spoved will convert it to
+	// New name for the variable. If the field is empty, the variable name won't be updated. gitdepo will convert it to
 	// uppercase.
 	Name string `json:"name"`
 	// Value of the variable to update. Special characters will be retained. Line endings will be normalized to LF to

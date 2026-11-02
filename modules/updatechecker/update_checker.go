@@ -61,7 +61,7 @@ func getVersionHTTP(httpEndpoint string) (string, error) {
 		return "", err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "spoved-update-checker")
+	req.Header.Set("User-Agent", "gitdepo-update-checker")
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", err

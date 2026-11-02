@@ -61,7 +61,7 @@ func StaticRedirect(target string) func(w http.ResponseWriter, req *http.Request
 }
 
 var defaultRobotsTxt = sync.OnceValue(func() []byte {
-	return []byte(`# The default spoved robots.txt
+	return []byte(`# The default gitdepo robots.txt
 # For more information: ` + setting.AppDocsURL("admin/advanced/search-engines/") + `
 
 User-agent: *
@@ -183,7 +183,7 @@ func defaultLlmsTxt() string {
 	if setting.UI.Meta.Description != "" {
 		b.WriteString("> " + oneLine.Replace(setting.UI.Meta.Description) + "\n\n")
 	}
-	b.WriteString("This site runs spoved, a self-hosted software forge: Git repositories, issues, pull requests, code review, packages and CI.\n")
+	b.WriteString("This site runs gitdepo, a self-hosted software forge: Git repositories, issues, pull requests, code review, packages and CI.\n")
 	if setting.Service.RequireSignInView {
 		b.WriteString("\nSign-in is required to view content on this site.\n")
 		return b.String()

@@ -118,7 +118,7 @@ await initialize({
     workspace: {folderUri: URI.from({scheme: SCHEME, path: rootPath(config)})},
   },
   developmentOptions: {logLevel: LogLevel.Warning},
-  productConfiguration: {nameShort: 'spoved Web IDE', nameLong: 'spoved Web IDE'},
+  productConfiguration: {nameShort: 'gitdepo Web IDE', nameLong: 'gitdepo Web IDE'},
   configurationDefaults: {
     'workbench.colorTheme': themes[config.theme] ?? themes.light,
     'window.autoDetectColorScheme': config.theme === 'auto',

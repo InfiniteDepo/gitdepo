@@ -92,7 +92,7 @@ func TestBitbucketImportPermissions(t *testing.T) {
 				usr("user10", "user4@example.com", true, "PROJECT_READ"),  // another user's email
 				usr("user14", "", true, "PROJECT_READ"),                   // the name only
 				usr("user11", "user11@example.com", true, "PROJECT_READ"), // not activated
-				usr("user9", "user9@example.com", true, "PROJECT_READ"),   // inactive in spoved
+				usr("user9", "user9@example.com", true, "PROJECT_READ"),   // inactive in gitdepo
 				usr("user37", "user37@example.com", true, "PROJECT_READ"), // login prohibited
 				usr("nobody", "nobody@example.com", true, "PROJECT_READ"),
 				usr("user12", "user12@example.com", false, "PROJECT_READ"), // inactive in Bitbucket

@@ -94,7 +94,7 @@ func TestAuditChainPage(t *testing.T) {
 		assert.Contains(t, body, fmt.Sprintf("Sealed through #%d (", head.Seq), name)
 		assert.Contains(t, body, " UTC) · 0 unsealed")
 		assert.Contains(t, body, fmt.Sprintf("Current anchor %d:%s", head.Seq, head.Hash))
-		assert.Contains(t, body, "spoved admin audit verify")
+		assert.Contains(t, body, "gitdepo admin audit verify")
 		assert.NotContains(t, body, "✓")
 		assert.NotContains(t, body, "&#10003;")
 	}

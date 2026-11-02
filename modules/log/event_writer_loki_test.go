@@ -40,7 +40,7 @@ func TestLokiEncode(t *testing.T) {
 	require.NoError(t, json.Unmarshal(body, &p))
 	byLabel := map[string][][]string{}
 	for _, s := range p.Streams {
-		assert.Equal(t, "spoved", s.Stream["service"])
+		assert.Equal(t, "gitdepo", s.Stream["service"])
 		assert.Len(t, s.Stream, 3)
 		byLabel[s.Stream["logtype"]+"/"+s.Stream["level"]] = append(byLabel[s.Stream["logtype"]+"/"+s.Stream["level"]], s.Values...)
 	}

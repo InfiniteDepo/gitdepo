@@ -1,6 +1,6 @@
 # Search engines and AI assistants
 
-spoved tells search engines (SEO) and AI assistants or answer engines (AEO) what a public page is. Nothing here exposes more than the page already shows to an anonymous visitor.
+gitdepo tells search engines (SEO) and AI assistants or answer engines (AEO) what a public page is. Nothing here exposes more than the page already shows to an anonymous visitor.
 
 ## What every page has
 
@@ -21,5 +21,5 @@ E-mail addresses, private and limited content are never included. Check a page w
 ## Crawler files
 
 - `/robots.txt` ends with a `Sitemap:` line when the sitemap is public (`[other] ENABLE_SITEMAP` on, and neither `REQUIRE_SIGNIN_VIEW` nor Explore's `REQUIRE_SIGNIN_VIEW` set). `custom/public/robots.txt` replaces the whole file, as before.
-- `/sitemap.xml` indexes public repositories, users and, new in spoved, public organizations that are not archived (`/explore/organizations/sitemap-N.xml`); `DISABLE_USERS_PAGE`/`DISABLE_ORGANIZATIONS_PAGE` leave their part out.
+- `/sitemap.xml` indexes public repositories, users and, new in gitdepo, public organizations that are not archived (`/explore/organizations/sitemap-N.xml`); `DISABLE_USERS_PAGE`/`DISABLE_ORGANIZATIONS_PAGE` leave their part out.
 - `/llms.txt` ([llmstxt.org](https://llmstxt.org)) is a short Markdown overview for AI assistants: the instance name and description, the Explore pages, the REST API and its reference, and the sitemap. With `REQUIRE_SIGNIN_VIEW` it only says sign-in is required. `custom/public/llms.txt` replaces it.

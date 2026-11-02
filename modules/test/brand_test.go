@@ -10,16 +10,18 @@ import (
 )
 
 func TestBrandMentions(t *testing.T) {
-	assert.Empty(t, BrandMentions(`<html><head><title>spoved</title><script>var x = "Forgejo";</script></head>
-<body>Powered by spoved <a href="https://forgejo.org">based on Forgejo</a>
+	assert.Empty(t, BrandMentions(`<html><head><title>gitdepo</title><script>var x = "Forgejo";</script></head>
+<body>Powered by gitdepo <a href="https://forgejo.org">based on Forgejo</a>
 <a href="https://github.com/InfiniteSpoved/spoved">InfiniteSpoved/spoved</a> MyForgejoTeam1
 <pre><code>$ forgejo-runner daemon</code></pre><input placeholder="next.forgejo.org"></body></html>`))
 
 	assert.Equal(t, []string{"Welcome to Forgejo"}, BrandMentions(`<body><p>Welcome to Forgejo</p></body>`))
 	assert.Equal(t, []string{"GitHat"}, BrandMentions(`<head><title>GitHat</title></head>`))
 	assert.Equal(t, []string{"CodeHat"}, BrandMentions(`<head><title>CodeHat</title></head>`))
+	assert.Equal(t, []string{"spoved"}, BrandMentions(`<head><title>spoved</title></head>`))
 	assert.Equal(t, []string{"Spoved"}, BrandMentions(`<head><title>Spoved</title></head>`))
-	assert.Equal(t, []string{"SPOVED"}, BrandMentions(`<head><title>SPOVED</title></head>`))
+	assert.Equal(t, []string{"Gitdepo"}, BrandMentions(`<head><title>Gitdepo</title></head>`))
+	assert.Equal(t, []string{"GITDEPO"}, BrandMentions(`<head><title>GITDEPO</title></head>`))
 	assert.Equal(t, []string{"forgejo"}, BrandMentions(`<p>forgejo</p>`))
 	assert.Equal(t, []string{"$ forgejo daemon"}, BrandMentions(`<pre><code>$ forgejo daemon</code></pre>`))
 	assert.Equal(t, []string{"Forgejo"}, BrandMentions(`<input placeholder="Forgejo">`))

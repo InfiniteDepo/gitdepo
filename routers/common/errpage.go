@@ -50,6 +50,6 @@ func RenderPanicErrorPage(w http.ResponseWriter, req *http.Request, err any) {
 	if err != nil {
 		log.Error("Error occurs again when rendering error page: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte("Internal server error, please collect error logs and report to spoved issue tracker"))
+		_, _ = w.Write([]byte("Internal server error, please collect error logs and report to gitdepo issue tracker"))
 	}
 }

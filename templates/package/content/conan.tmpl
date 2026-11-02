@@ -4,11 +4,11 @@
 		<div class="ui form">
 			<div class="field">
 				<label>{{svg "octicon-terminal"}} {{ctx.Locale.Tr "packages.common.registry"}}</label>
-				<div class="markup"><pre class="code-block"><code>conan remote add spoved <origin-url data-url="{{AppSubUrl}}/api/packages/{{.PackageDescriptor.Owner.Name}}/conan"></origin-url></code></pre></div>
+				<div class="markup"><pre class="code-block"><code>conan remote add gitdepo <origin-url data-url="{{AppSubUrl}}/api/packages/{{.PackageDescriptor.Owner.Name}}/conan"></origin-url></code></pre></div>
 			</div>
 			<div class="field">
 				<label>{{svg "octicon-terminal"}} {{ctx.Locale.Tr "packages.conan.install"}}</label>
-				<div class="markup"><pre class="code-block"><code>conan install --remote=spoved {{.PackageDescriptor.Package.Name}}/{{.PackageDescriptor.Version.Version}}</code></pre></div>
+				<div class="markup"><pre class="code-block"><code>conan install --remote=gitdepo {{.PackageDescriptor.Package.Name}}/{{.PackageDescriptor.Version.Version}}</code></pre></div>
 			</div>
 			<div class="field">
 				<label>{{ctx.Locale.Tr "packages.registry.documentation" "Conan" (AppDocsURL "user/packages/conan/")}}</label>

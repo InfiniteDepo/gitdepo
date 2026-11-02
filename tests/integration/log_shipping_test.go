@@ -139,7 +139,7 @@ func TestLogShippingDestinationLifecycle(t *testing.T) {
 	require.Eventually(t, sink.has(isMarker), 20*time.Second, 100*time.Millisecond) // flushed every 5 s
 	e := sink.find(isMarker)
 	assert.Equal(t, "access", e["logtype"])
-	assert.Equal(t, "spoved", e["service"])
+	assert.Equal(t, "gitdepo", e["service"])
 	assert.Equal(t, "GET", e["method"])
 	assert.Nil(t, sink.find(func(e map[string]any) bool { return e["logtype"] == "application" }), "application events are not selected")
 	assert.Equal(t, shipHeader, sink.auth[0])
