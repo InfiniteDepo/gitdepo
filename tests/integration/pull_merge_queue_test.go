@@ -707,10 +707,13 @@ func settleMergeQueues(t *testing.T) {
 	keys, err := pull_model.FindMergeQueueKeys(db.DefaultContext)
 	require.NoError(t, err)
 	for _, k := range keys {
+		var passErr error
 		assert.Eventually(t, func() bool {
 			ran, err := mergequeue.TryProcess(db.DefaultContext, k.RepoID, k.BaseBranch)
+			passErr = err
 			return ran || err != nil
 		}, 30*time.Second, 50*time.Millisecond)
+		assert.NoError(t, passErr)
 	}
 }
 
