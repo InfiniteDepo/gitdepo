@@ -41,7 +41,7 @@ Run what `CONTRIBUTING.md` lists for your change (`make fmt`, the lints, unit te
 - `security-review` on your diff when it touches sign-in, permissions, roles, tokens, keys or secrets, input that reaches HTML, SQL, git or a shell, uploads, redirects, webhooks or outbound requests. Fix what it finds before opening the pull request.
 - `screenshots` when the interface changes, and fix what it reports.
 
-If the change adds or changes a user-visible feature, update the feature list in `README.md` and any page under `docs/` it affects, in the same pull request.
+If the change adds or changes a user-visible feature, update the feature list in `docs/features.md` and any page under `docs/` it affects, in the same pull request.
 
 ## 6. Commit and open the pull request
 
