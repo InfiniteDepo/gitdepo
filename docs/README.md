@@ -1,5 +1,6 @@
 # gitdepo documentation
 
+- [`features.md`](features.md): every feature gitdepo adds to Forgejo, with the pull requests that added them.
 - [`branding.md`](branding.md): every place the rename from Forgejo touches, and how to keep it across upstream merges.
 - [`design-tokens.md`](design-tokens.md): the company design tokens and themes.
 - [`actions-projects.md`](actions-projects.md): secrets, variables, context names and OIDC claims for repositories in projects.
