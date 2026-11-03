@@ -120,6 +120,7 @@ jobs:
 		add := func(t *testing.T, s *TestSession, pr *issues_model.PullRequest) {
 			t.Helper()
 			testPullMergeForm(t, s, http.StatusOK, owner.Name, repo.Name, index(pr), optionsPullMerge{"do": "merge"})
+			settleMergeQueues(t)
 		}
 		entry := func(pr *issues_model.PullRequest) *pull_model.MergeQueueEntry {
 			e, err := pull_model.GetMergeQueueEntryByPullID(t.Context(), pr.ID)
@@ -358,9 +359,11 @@ jobs:
 			require.NotNil(t, entry(a))
 			timeutil.MockSet(now.Add(59 * time.Minute))
 			require.NoError(t, mergequeue.TriggerAll(t.Context()))
+			settleMergeQueues(t)
 			require.NotNil(t, entry(a))
 			timeutil.MockSet(now.Add(61 * time.Minute))
 			require.NoError(t, mergequeue.TriggerAll(t.Context()))
+			settleMergeQueues(t)
 			assert.Nil(t, entry(a))
 			assert.Equal(t, mergequeue.ReasonTimeout, removedReason(a))
 		})
@@ -397,6 +400,7 @@ jobs:
 			assert.False(t, merged(c))
 			timeutil.MockSet(now.Add(6 * time.Minute))
 			require.NoError(t, mergequeue.TriggerAll(t.Context()))
+			settleMergeQueues(t)
 			assert.True(t, merged(c))
 		})
 
@@ -682,6 +686,7 @@ jobs:
 			req := NewRequestWithJSON(t, "PATCH", fmt.Sprintf("/api/v1/repos/%s/branch_protections/main", repo.FullName()), &api.EditBranchProtectionOption{RequireMergeQueue: new(bool)}).AddTokenAuth(token)
 			MakeRequest(t, req, http.StatusOK)
 			require.NoError(t, mergequeue.TriggerAll(t.Context()))
+			settleMergeQueues(t)
 			assert.Nil(t, entry(a))
 			assert.Equal(t, mergequeue.ReasonDisabled, removedReason(a))
 		})
@@ -691,6 +696,22 @@ jobs:
 func setStatus(t *testing.T, ctx APITestContext, sha string, state api.CommitStatusState) {
 	t.Helper()
 	doAPICreateCommitStatus(ctx, sha, api.CreateStatusOption{State: state, Context: "ci"})(t)
+	settleMergeQueues(t)
+}
+
+// settleMergeQueues runs a pass of every merge queue in the test's own goroutine. A pass started elsewhere (the pull
+// request check after a merge runs in a goroutine) can hold a branch, and a status or merge request then returns
+// before that pass took it into account; waiting until a pass of our own runs means the test sees the result.
+func settleMergeQueues(t *testing.T) {
+	t.Helper()
+	keys, err := pull_model.FindMergeQueueKeys(db.DefaultContext)
+	require.NoError(t, err)
+	for _, k := range keys {
+		assert.Eventually(t, func() bool {
+			ran, err := mergequeue.TryProcess(db.DefaultContext, k.RepoID, k.BaseBranch)
+			return ran || err != nil
+		}, 30*time.Second, 50*time.Millisecond)
+	}
 }
 
 // a repository in a project: the queue's builds, pushes and pages use the repository's own path

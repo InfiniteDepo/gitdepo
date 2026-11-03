@@ -344,9 +344,16 @@ type pass struct {
 // Process looks at the merge queue of the branch: it removes the entries that may no longer be merged, merges the
 // ones whose builds passed, and builds the next ones.
 func Process(ctx context.Context, repoID int64, branch string) error {
+	_, err := TryProcess(ctx, repoID, branch)
+	return err
+}
+
+// TryProcess is Process that reports whether it ran: false when a pass of the branch was already running (which then
+// runs once more instead).
+func TryProcess(ctx context.Context, repoID int64, branch string) (bool, error) {
 	key := shared.Key(repoID, branch)
 	if !claim(key) {
-		return nil
+		return false, nil
 	}
 	more := false
 	defer func() {
@@ -358,14 +365,14 @@ func Process(ctx context.Context, repoID int64, branch string) error {
 	for range maxRounds {
 		again, err := processOnce(ctx, repoID, branch)
 		if err != nil {
-			return err
+			return true, err
 		}
 		if !next(key, again) {
-			return nil
+			return true, nil
 		}
 	}
 	more = true
-	return nil
+	return true, nil
 }
 
 func processOnce(ctx context.Context, repoID int64, branch string) (again bool, err error) {
