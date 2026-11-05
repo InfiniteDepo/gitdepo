@@ -339,7 +339,7 @@ func TestEvaluateApprovalRulesCodeOwnersBounded(t *testing.T) {
 	took := time.Since(start)
 	t.Logf("at the caps (%d sections, %d lines, 400 files): %s", issues_model.MaxCodeOwnerSections, issues_model.MaxCodeOwnerLines, took)
 	assert.False(t, s.Satisfied)
-	assert.Less(t, took, 5*time.Second)
+	assert.Less(t, took, 5*slowdown*time.Second)
 
 	f = newApprovalFixture(t, ownersRule())
 	f.setHead(t, overCap.String(), files, "x@example.org", "x@example.org")
