@@ -130,7 +130,7 @@ func (r *environmentRow) HasRules() bool {
 		len(e.RunnerLabels) > 0 || len(e.AllowedWorkflows) > 0
 }
 
-// environmentSummary is the one line of the rules of an environment with that many reviewers.
+// environmentSummary is the one line of the rules of an environment with that many reviewers ("" without rules).
 func environmentSummary(ctx *context.Context, e *actions_model.ActionEnvironment, reviewers int) template.HTML {
 	var parts []string
 	if e.ReviewsRequired {
@@ -157,9 +157,6 @@ func environmentSummary(ctx *context.Context, e *actions_model.ActionEnvironment
 	}
 	if len(e.AllowedWorkflows) > 0 {
 		parts = append(parts, string(ctx.Tr("actions.environments.summary.workflows", strings.Join(e.AllowedWorkflows, ", "))))
-	}
-	if len(parts) == 0 {
-		parts = append(parts, string(ctx.Tr("actions.environments.no_protection")))
 	}
 	return template.HTML(strings.Join(parts, " · ")) // every part is escaped above
 }

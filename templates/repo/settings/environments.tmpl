@@ -22,14 +22,14 @@
 								</div>
 								<div class="flex-item-body">
 									{{if and .CreatedByWorkflow (not .HasRules)}}
-										<span>{{ctx.Locale.Tr "actions.environments.created_by_workflow"}} <a href="{{$.EnvironmentsLink}}/{{.ID}}">{{ctx.Locale.Tr "actions.environments.add_rules"}}</a></span>
-									{{else}}
-										<span>{{svg "octicon-shield"}} {{.Summary}}</span>
+										<span>{{ctx.Locale.Tr "actions.environments.created_by_workflow"}} <a href="{{$.EnvironmentsLink}}/{{.ID}}">{{ctx.Locale.Tr "actions.environments.add_rules"}}</a> ·</span>
+									{{else if .HasRules}}
+										<span>{{svg "octicon-shield"}} {{.Summary}} ·</span>
 									{{end}}
 									<span>{{ctx.Locale.TrN .Secrets "actions.environments.secrets_count_1" "actions.environments.secrets_count_n" .Secrets}} · {{ctx.Locale.TrN .Variables "actions.environments.variables_count_1" "actions.environments.variables_count_n" .Variables}}</span>
 								</div>
 								{{if .NoReviewer}}
-									<div class="flex-item-body text red">{{svg "octicon-alert"}} {{ctx.Locale.Tr "actions.environments.no_eligible_reviewer"}}</div>
+									<div class="flex-item-body text red"><span>{{svg "octicon-alert"}} {{ctx.Locale.Tr "actions.environments.no_eligible_reviewer"}}</span></div>
 								{{end}}
 							</div>
 							<div class="flex-item-trailing">
