@@ -336,9 +336,11 @@ func checkForInvalidation(ctx context.Context, requests issues_model.PullRequest
 func AddTestPullRequestTask(ctx context.Context, doer *user_model.User, repoID int64, branch string, isSync bool, oldCommitID, newCommitID string, timeNano int64) {
 	description := fmt.Sprintf("AddTestPullRequestTask [head_repo_id: %d, head_branch: %s]: only pull requests created before nano time %d will be considered", repoID, branch, timeNano)
 	log.Trace(description)
-	go graceful.GetManager().RunWithShutdownContext(func(shutdownCtx context.Context) {
-		// make it a process to allow for cancellation (especially during integration tests where no global shutdown happens)
-		ctx, _, finished := process.GetManager().AddContext(shutdownCtx, description)
+	// make it a process to allow for cancellation (especially during integration tests where no global shutdown happens).
+	// It is added before the goroutine starts, so it is listed from the moment the caller returns: a test (or the test
+	// cleanup) waiting for these processes can't miss one that hasn't started yet.
+	ctx, _, finished := process.GetManager().AddContext(graceful.GetManager().ShutdownContext(), description)
+	go graceful.GetManager().RunWithShutdownContext(func(context.Context) {
 		defer finished()
 		// There is no sensible way to shut this down ":-("
 		// If you don't let it run all the way then you will lose data
