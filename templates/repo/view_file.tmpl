@@ -17,6 +17,18 @@
 		</div>
 	{{end}}
 
+	{{- if .CodeOwnerMarks}}
+		<div class="ui warning message codeowners-ineligible">
+			<div class="header">{{ctx.Locale.Tr "repo.codeowners.ineligible_header"}}</div>
+			<ul class="tw-m-0 tw-text-left">
+				{{range .CodeOwnerMarks}}
+					<li><a href="#L{{.Line}}">{{ctx.Locale.Tr "repo.codeowners.line" .Line}}</a>: {{range $i, $m := .Marks}}{{if $i}}; {{end}}{{$m.Text ctx.Locale}}{{end}}</li>
+				{{end}}
+				{{if .CodeOwnerMarksMore}}<li>{{ctx.Locale.Tr "repo.codeowners.more"}}</li>{{end}}
+			</ul>
+		</div>
+	{{end}}
+
 	{{if not .ReadmeInList}}
 		<div id="repo-file-commit-box" class="ui segment list-header tw-mb-4 tw-flex tw-justify-between">
 			<div class="latest-commit">

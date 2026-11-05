@@ -113,7 +113,7 @@ func TestRepoGroupActionsSecretsVariables(t *testing.T) {
 		t.Run("a row of another level or project is not found and stays untouched", func(t *testing.T) {
 			for _, s := range []*secret_model.Secret{orgSecret, repoSecret, otherSecret} {
 				owner.MakeRequest(t, NewRequestWithValues(t, "POST", fmt.Sprintf("%s/%d/edit", secretsLink, s.ID), map[string]string{"name": "hijacked", "data": value2}), http.StatusNotFound)
-				owner.MakeRequest(t, NewRequest(t, "POST", fmt.Sprintf("%s/%d/delete", secretsLink, s.ID)), http.StatusBadRequest) // JSON error, nothing deleted
+				owner.MakeRequest(t, NewRequest(t, "POST", fmt.Sprintf("%s/%d/delete", secretsLink, s.ID)), http.StatusNotFound)
 				stored := unittest.AssertExistsAndLoadBean(t, &secret_model.Secret{ID: s.ID})
 				assert.Equal(t, s.Name, stored.Name)
 				assert.Equal(t, s.GroupID, stored.GroupID)
@@ -122,8 +122,8 @@ func TestRepoGroupActionsSecretsVariables(t *testing.T) {
 				assert.Equal(t, value, plain)
 			}
 			for _, v := range []*actions_model.ActionVariable{orgVar, otherVar} {
-				owner.MakeRequest(t, NewRequestWithValues(t, "POST", fmt.Sprintf("%s/%d/edit", varsLink, v.ID), map[string]string{"name": "HIJACKED", "data": "x"}), http.StatusBadRequest)
-				owner.MakeRequest(t, NewRequest(t, "POST", fmt.Sprintf("%s/%d/delete", varsLink, v.ID)), http.StatusBadRequest)
+				owner.MakeRequest(t, NewRequestWithValues(t, "POST", fmt.Sprintf("%s/%d/edit", varsLink, v.ID), map[string]string{"name": "HIJACKED", "data": "x"}), http.StatusNotFound)
+				owner.MakeRequest(t, NewRequest(t, "POST", fmt.Sprintf("%s/%d/delete", varsLink, v.ID)), http.StatusNotFound)
 				assert.Equal(t, v.Name, unittest.AssertExistsAndLoadBean(t, &actions_model.ActionVariable{ID: v.ID}).Name)
 			}
 			// the project of another organization's ID in the path, or a missing one

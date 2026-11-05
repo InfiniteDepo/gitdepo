@@ -1,0 +1,23 @@
+/* the Actions environments settings (templates/repo/settings/environment*.tmpl) */
+.flex-item .flex-item-title a.environment-name {
+  color: var(--color-primary);
+}
+
+/* a reviewer who can't approve now, in the picker and as a chosen label */
+#environment-reviewers .environment-reviewer-ineligible {
+  color: var(--color-text-light-2);
+}
+
+#environment-reviewers .ui.label.environment-reviewer-ineligible {
+  opacity: 0.65;
+}
+
+#environment-reviewers .environment-reviewer-ineligible .help {
+  color: var(--color-text-light-3);
+  font-style: italic;
+}
+
+#environment-reviewers .ui.label .help {
+  display: inline;
+  margin-inline-start: 0.25em;
+}

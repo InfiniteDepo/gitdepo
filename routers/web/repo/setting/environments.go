@@ -1,0 +1,642 @@
+// Copyright 2026 The gitdepo contributors. All rights reserved.
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+package setting
+
+import (
+	"errors"
+	"html"
+	"html/template"
+	"net/http"
+	"slices"
+	"strconv"
+	"strings"
+
+	actions_model "forgejo.org/models/actions"
+	"forgejo.org/models/db"
+	org_model "forgejo.org/models/organization"
+	repo_model "forgejo.org/models/repo"
+	secret_model "forgejo.org/models/secret"
+	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/base"
+	"forgejo.org/modules/timeutil"
+	"forgejo.org/modules/util"
+	"forgejo.org/modules/web"
+	shared_actions "forgejo.org/routers/web/shared/actions"
+	shared_secrets "forgejo.org/routers/web/shared/secrets"
+	actions_service "forgejo.org/services/actions"
+	"forgejo.org/services/context"
+	"forgejo.org/services/forms"
+)
+
+const (
+	tplEnvironments base.TplName = "repo/settings/environments"
+	tplEnvironment  base.TplName = "repo/settings/environment"
+)
+
+// environmentsLink is the list of the repository's environments.
+func environmentsLink(ctx *context.Context) string {
+	return ctx.Repo.RepoLink + "/settings/actions/environments"
+}
+
+// RequireEnvironmentManager lets only who may manage the environments through the API (reqOwner(unit.TypeActions))
+// reach the pages: the owner, for an organization its owners, and site administrators (their permission is Owner).
+// Admin collaborators get the 404 the other settings give to whoever can't see them.
+func RequireEnvironmentManager(ctx *context.Context) {
+	if !ctx.Repo.IsOwner() {
+		ctx.NotFound("RequireEnvironmentManager", nil)
+		return
+	}
+	ctx.Data["PageIsSharedSettingsEnvironments"] = true
+	ctx.Data["Title"] = ctx.Tr("actions.environments")
+}
+
+// EnvironmentAssignment finds the environment of the URL in the repository; one of another repository is not found.
+func EnvironmentAssignment(ctx *context.Context) {
+	env, err := actions_model.GetRepoEnvironmentByID(ctx, ctx.Repo.Repository.ID, ctx.ParamsInt64(":environment_id"))
+	if errors.Is(err, actions_model.ErrEnvironmentNotFound) {
+		ctx.NotFound("GetRepoEnvironmentByID", err)
+		return
+	} else if err != nil {
+		ctx.ServerError("GetRepoEnvironmentByID", err)
+		return
+	}
+	ctx.Data["Environment"] = env
+	ctx.Data["EnvironmentLink"] = environmentsLink(ctx) + "/" + strconv.FormatInt(env.ID, 10)
+}
+
+func assignedEnvironment(ctx *context.Context) (*actions_model.ActionEnvironment, string) {
+	return ctx.Data["Environment"].(*actions_model.ActionEnvironment), ctx.Data["EnvironmentLink"].(string)
+}
+
+// environmentDeployment is a deployment as the pages show it.
+type environmentDeployment struct {
+	*actions_model.ActionDeployment
+	RefName string
+	RunLink string
+	Task    *actions_model.ActionTask // the outcome of a released deployment, nil until a runner takes the job
+	When    timeutil.TimeStamp        // the last change: of the task, else of the deployment
+}
+
+// lastDeployments returns the newest deployment of each environment with the link of its run and, once released,
+// its job attempt's task.
+func lastDeployments(ctx *context.Context, repo *repo_model.Repository, ids []int64) (map[int64]*environmentDeployment, error) {
+	last, err := actions_model.FindLastDeployments(ctx, repo.ID, ids)
+	if err != nil {
+		return nil, err
+	}
+	runIDs := make([]int64, 0, len(last))
+	for _, d := range last {
+		runIDs = append(runIDs, d.RunID)
+	}
+	var runs []*actions_model.ActionRun
+	if len(runIDs) > 0 {
+		if err := db.GetEngine(ctx).In("id", runIDs).And("repo_id = ?", repo.ID).Cols("id", "index").Find(&runs); err != nil {
+			return nil, err
+		}
+	}
+	ds := make([]*actions_model.ActionDeployment, 0, len(last))
+	for _, d := range last {
+		ds = append(ds, d)
+	}
+	tasks, err := actions_model.FindDeploymentTasks(ctx, repo.ID, ds)
+	if err != nil {
+		return nil, err
+	}
+	links := make(map[int64]string, len(runs))
+	for _, r := range runs {
+		links[r.ID] = repo.Link() + "/actions/runs/" + strconv.FormatInt(r.Index, 10)
+	}
+	out := make(map[int64]*environmentDeployment, len(last))
+	for id, d := range last {
+		_, name := actions_model.EnvironmentRefKind(d.Ref)
+		if name == "" {
+			name = d.Ref
+		}
+		row := &environmentDeployment{ActionDeployment: d, RefName: name, RunLink: links[d.RunID], Task: tasks[d.ID], When: d.Updated}
+		if row.Task != nil && row.Task.Updated > row.When {
+			row.When = row.Task.Updated
+		}
+		out[id] = row
+	}
+	return out, nil
+}
+
+// environmentRow is one environment of the list.
+type environmentRow struct {
+	*actions_model.ActionEnvironment
+	Secrets    int64
+	Variables  int64
+	Last       *environmentDeployment
+	NoReviewer bool
+	Summary    template.HTML
+}
+
+// HasRules tells if the environment protects anything.
+func (r *environmentRow) HasRules() bool {
+	e := r.ActionEnvironment
+	return e.ReviewsRequired || e.RefPolicy != actions_model.EnvironmentRefAny || e.WaitTimerMinutes > 0 ||
+		len(e.RunnerLabels) > 0 || len(e.AllowedWorkflows) > 0
+}
+
+// environmentSummary is the one line of the rules of an environment with that many reviewers ("" without rules).
+func environmentSummary(ctx *context.Context, e *actions_model.ActionEnvironment, reviewers int) template.HTML {
+	var parts []string
+	if e.ReviewsRequired {
+		parts = append(parts, string(ctx.TrN(reviewers, "actions.environments.summary.reviewers_1", "actions.environments.summary.reviewers_n", reviewers)))
+		if e.PreventSelfReview {
+			parts = append(parts, string(ctx.Tr("actions.environments.prevent_self_review")))
+		}
+	}
+	switch e.RefPolicy {
+	case actions_model.EnvironmentRefProtectedBranches:
+		parts = append(parts, string(ctx.Tr("actions.environments.summary.protected_branches")))
+	case actions_model.EnvironmentRefPatterns:
+		names := make([]string, len(e.RefPatterns))
+		for i, p := range e.RefPatterns {
+			names[i] = p.Pattern
+		}
+		parts = append(parts, html.EscapeString(strings.Join(names, ", ")))
+	}
+	if e.WaitTimerMinutes > 0 {
+		parts = append(parts, string(ctx.Tr("actions.environments.summary.wait", e.WaitTimerMinutes)))
+	}
+	if len(e.RunnerLabels) > 0 {
+		parts = append(parts, string(ctx.Tr("actions.environments.summary.runners", strings.Join(e.RunnerLabels, ", "))))
+	}
+	if len(e.AllowedWorkflows) > 0 {
+		parts = append(parts, string(ctx.Tr("actions.environments.summary.workflows", strings.Join(e.AllowedWorkflows, ", "))))
+	}
+	return template.HTML(strings.Join(parts, " · ")) // every part is escaped above
+}
+
+// Environments lists the environments of the repository.
+func Environments(ctx *context.Context) {
+	repo := ctx.Repo.Repository
+	envs, _, err := actions_model.FindRepoEnvironments(ctx, repo.ID, db.ListOptions{})
+	if err != nil {
+		ctx.ServerError("FindRepoEnvironments", err)
+		return
+	}
+	ids := make([]int64, len(envs))
+	for i, e := range envs {
+		ids[i] = e.ID
+	}
+	secrets, variables, err := actions_model.CountEnvironmentSecretsAndVariables(ctx, repo.ID, ids)
+	if err != nil {
+		ctx.ServerError("CountEnvironmentSecretsAndVariables", err)
+		return
+	}
+	reviewers, err := actions_model.FindReviewersOfEnvironments(ctx, ids)
+	if err != nil {
+		ctx.ServerError("FindReviewersOfEnvironments", err)
+		return
+	}
+	check, err := actions_service.CheckEnvironmentReviewers(ctx, repo, ctx.Doer, envs, reviewers)
+	if err != nil {
+		ctx.ServerError("CheckEnvironmentReviewers", err)
+		return
+	}
+	last, err := lastDeployments(ctx, repo, ids)
+	if err != nil {
+		ctx.ServerError("lastDeployments", err)
+		return
+	}
+	rows := make([]*environmentRow, len(envs))
+	for i, e := range envs {
+		rows[i] = &environmentRow{
+			ActionEnvironment: e, Secrets: secrets[e.ID], Variables: variables[e.ID], Last: last[e.ID],
+			NoReviewer: check.NoReviewer[e.ID], Summary: environmentSummary(ctx, e, len(reviewers[e.ID])),
+		}
+	}
+	ctx.Data["Environments"] = rows
+	ctx.Data["EnvironmentsLink"] = environmentsLink(ctx)
+	ctx.Data["MaxEnvironments"] = actions_model.MaxEnvironmentsPerRepo
+	ctx.HTML(http.StatusOK, tplEnvironments)
+}
+
+// environmentFormView holds the values of the form, from the stored environment or as posted.
+type environmentFormView struct {
+	Name              string
+	Reviewers         string
+	PreventSelfReview bool
+	WaitTimer         int
+	RefPolicy         int
+	Patterns          []actions_model.EnvironmentRefPattern
+	RunnerLabels      string
+	AllowedWorkflows  string
+}
+
+// reviewerOption is one entry of the reviewer picker.
+type reviewerOption struct {
+	Key    string
+	User   *user_model.User
+	Team   *org_model.Team
+	Reason string // why it can't approve now, "" if it can
+	// Unknown is a listed reviewer that no longer exists or the doer can't see: shown only to be removed
+	Unknown bool
+}
+
+// parseReviewers reads the listed reviewers of the form ("user:<id>" and "team:<id>", comma separated): at most
+// MaxEnvironmentReviewers of them, with ErrTooManyReviewers for more and errBadReviewer for an entry that is neither.
+func parseReviewers(keys string) (listed []*actions_model.ActionEnvironmentReviewer, err error) {
+	for key := range strings.SplitSeq(keys, ",") {
+		if key = strings.TrimSpace(key); key == "" {
+			continue
+		}
+		kind, id, _ := strings.Cut(key, ":")
+		n, parseErr := strconv.ParseInt(id, 10, 64)
+		r := &actions_model.ActionEnvironmentReviewer{}
+		switch {
+		case parseErr != nil || n <= 0:
+			err = errBadReviewer
+			continue
+		case kind == "user":
+			r.UserID = n
+		case kind == "team":
+			r.TeamID = n
+		default:
+			err = errBadReviewer
+			continue
+		}
+		if len(listed) == actions_model.MaxEnvironmentReviewers {
+			return listed, actions_service.ErrTooManyReviewers
+		}
+		listed = append(listed, r)
+	}
+	return listed, err
+}
+
+// prepareEnvironmentForm fills the data of the new/edit page; env is nil on the new page, stored are its reviewers.
+func prepareEnvironmentForm(ctx *context.Context, env *actions_model.ActionEnvironment, stored []*actions_model.ActionEnvironmentReviewer, view *environmentFormView) {
+	ctx.Data["Form"] = view
+	ctx.Data["EnvironmentsLink"] = environmentsLink(ctx)
+	ctx.Data["MaxReviewers"] = actions_model.MaxEnvironmentReviewers
+	ctx.Data["MaxWaitTimer"] = actions_model.MaxWaitTimerMinutes
+	ctx.Data["MaxWaitTimerDays"] = actions_model.MaxWaitTimerMinutes / (24 * 60)
+	ctx.Data["EmptyPattern"] = actions_model.EnvironmentRefPattern{}
+	repo := ctx.Repo.Repository
+	ctx.Data["ReviewerTeams"] = repo.Owner.IsOrganization()
+
+	// The picker offers the users who can approve through their access to the repository and the teams of its
+	// owner, and keeps the listed entries (one it can't name is an unknown reviewer, to be removed); nobody the doer
+	// can't see. One bulk check decides them all, and the stored reviewers for the warning.
+	listed, _ := parseReviewers(view.Reviewers) // the error is the page's already
+
+	var teams []*org_model.Team
+	if repo.Owner.IsOrganization() {
+		var err error
+		if teams, err = org_model.FindOrgTeams(ctx, repo.OwnerID); err != nil {
+			ctx.ServerError("FindOrgTeams", err)
+			return
+		}
+	}
+	offered := slices.Clone(listed)
+	for _, t := range teams {
+		offered = append(offered, &actions_model.ActionEnvironmentReviewer{TeamID: t.ID})
+	}
+	envs := []*actions_model.ActionEnvironment{{}} // the form's reviewers, under ID 0
+	reviewers := map[int64][]*actions_model.ActionEnvironmentReviewer{0: offered}
+	if env != nil {
+		// the warning and the delete confirmation read the stored environment, not the form
+		envs = append(envs, env)
+		reviewers[env.ID] = stored
+	}
+	check, err := actions_service.CheckEnvironmentReviewers(ctx, repo, ctx.Doer, envs, reviewers)
+	if err != nil {
+		ctx.ServerError("CheckEnvironmentReviewers", err)
+		return
+	}
+	users := slices.Clone(check.Readers)
+	for _, r := range listed {
+		if u := check.Users[r.UserID]; u != nil && !slices.ContainsFunc(users, func(x *user_model.User) bool { return x.ID == u.ID }) {
+			users = append(users, u)
+		}
+	}
+	visible, err := user_model.VisibleToViewer(ctx, users, ctx.Doer)
+	if err != nil {
+		ctx.ServerError("VisibleToViewer", err)
+		return
+	}
+	options := make([]*reviewerOption, 0, len(users)+len(teams))
+	known := map[string]bool{}
+	for _, u := range users {
+		if u.IsIndividual() && visible.Contains(u.ID) {
+			key := (&actions_model.ActionEnvironmentReviewer{UserID: u.ID}).Key()
+			options = append(options, &reviewerOption{Key: key, User: u, Reason: check.Ineligible[key]})
+			known[key] = true
+		}
+	}
+	for _, t := range teams {
+		key := (&actions_model.ActionEnvironmentReviewer{TeamID: t.ID}).Key()
+		options = append(options, &reviewerOption{Key: key, Team: t, Reason: check.Ineligible[key]})
+		known[key] = true
+	}
+	for _, r := range listed {
+		if key := r.Key(); !known[key] {
+			options = append(options, &reviewerOption{Key: key, Unknown: true})
+			known[key] = true
+		}
+	}
+	ctx.Data["ReviewerOptions"] = options
+	if env == nil {
+		return
+	}
+	ctx.Data["NoReviewer"] = check.NoReviewer[env.ID]
+	last, err := lastDeployments(ctx, repo, []int64{env.ID})
+	if err != nil {
+		ctx.ServerError("lastDeployments", err)
+		return
+	}
+	ctx.Data["LastDeployment"] = last[env.ID]
+
+	link := ctx.Data["EnvironmentLink"].(string)
+	ctx.Data["SecretsLink"], ctx.Data["VariablesLink"] = link+"/secrets", link+"/variables"
+	ctx.Data["ActionsReadOnly"] = repo.IsArchived
+	ctx.Data["SecretsTitle"], ctx.Data["VariablesTitle"] = ctx.Tr("actions.environments.secrets"), ctx.Tr("actions.environments.variables")
+	ctx.Data["SecretsDescription"] = ctx.Tr("actions.environments.secrets.desc", env.Name)
+	ctx.Data["VariablesDescription"] = ctx.Tr("actions.environments.variables.desc", template.HTML("<code>vars.NAME</code>"), env.Name)
+	shared_secrets.SetSecretsContext(ctx, 0, 0, repo.ID, env.ID)
+	shared_actions.SetVariablesContext(ctx, 0, 0, repo.ID, env.ID)
+	if ctx.Written() {
+		return
+	}
+	// the names the environment's values replace for its jobs
+	overrides := map[string]bool{}
+	repoSecrets, err := db.Find[secret_model.Secret](ctx, secret_model.FindSecretsOptions{RepoID: repo.ID})
+	if err != nil {
+		ctx.ServerError("FindSecrets", err)
+		return
+	}
+	repoVars, err := db.Find[actions_model.ActionVariable](ctx, actions_model.FindVariablesOpts{RepoID: repo.ID})
+	if err != nil {
+		ctx.ServerError("FindVariables", err)
+		return
+	}
+	for _, s := range repoSecrets {
+		overrides[s.Name] = true
+	}
+	for _, v := range repoVars {
+		overrides[v.Name] = true
+	}
+	ctx.Data["OverridesRepo"] = overrides
+}
+
+// EnvironmentNew shows the form of a new environment.
+func EnvironmentNew(ctx *context.Context) {
+	prepareEnvironmentForm(ctx, nil, nil, &environmentFormView{})
+	if !ctx.Written() {
+		ctx.HTML(http.StatusOK, tplEnvironment)
+	}
+}
+
+// EnvironmentEdit shows the form of an environment with its secrets and variables.
+func EnvironmentEdit(ctx *context.Context) {
+	env, _ := assignedEnvironment(ctx)
+	reviewers, err := actions_model.FindEnvironmentReviewers(ctx, env.ID)
+	if err != nil {
+		ctx.ServerError("FindEnvironmentReviewers", err)
+		return
+	}
+	keys := make([]string, len(reviewers))
+	for i, r := range reviewers {
+		keys[i] = r.Key()
+	}
+	prepareEnvironmentForm(ctx, env, reviewers, &environmentFormView{
+		Name: env.Name, Reviewers: strings.Join(keys, ","), PreventSelfReview: env.PreventSelfReview,
+		WaitTimer: env.WaitTimerMinutes, RefPolicy: env.RefPolicy, Patterns: env.RefPatterns,
+		RunnerLabels: strings.Join(env.RunnerLabels, "\n"), AllowedWorkflows: strings.Join(env.AllowedWorkflows, "\n"),
+	})
+	if !ctx.Written() {
+		ctx.HTML(http.StatusOK, tplEnvironment)
+	}
+}
+
+func lines(s string) []string {
+	var out []string
+	for l := range strings.SplitSeq(s, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// environmentFromForm reads the posted form into the rules of an environment of the repository and the IDs of its
+// reviewers. A wait timer or ref policy that is no number, or a reviewer list parseReviewers refuses, is the error of
+// that rule.
+func environmentFromForm(form *forms.EnvironmentForm, repo *repo_model.Repository) (env *actions_model.ActionEnvironment, view *environmentFormView, userIDs, teamIDs []int64, err error) {
+	view = &environmentFormView{
+		Name: form.Name, Reviewers: form.Reviewers, PreventSelfReview: form.PreventSelfReview,
+		RunnerLabels: form.RunnerLabels, AllowedWorkflows: form.AllowedWorkflows,
+	}
+	var parseErr error
+	if wait := strings.TrimSpace(form.WaitTimer); wait != "" {
+		if view.WaitTimer, parseErr = strconv.Atoi(wait); parseErr != nil {
+			err = actions_model.ErrInvalidEnvironmentRule{Field: "wait_timer"}
+		}
+	}
+	if view.RefPolicy, parseErr = strconv.Atoi(form.RefPolicy); parseErr != nil {
+		err = actions_model.ErrInvalidEnvironmentRule{Field: "ref_policy"}
+	}
+	for i, p := range form.Patterns {
+		if p = strings.TrimSpace(p); p != "" && i < len(form.PatternTypes) {
+			view.Patterns = append(view.Patterns, actions_model.EnvironmentRefPattern{Type: form.PatternTypes[i], Pattern: p})
+		}
+	}
+	env = &actions_model.ActionEnvironment{
+		RepoID: repo.ID, Name: form.Name, PreventSelfReview: form.PreventSelfReview, WaitTimerMinutes: view.WaitTimer,
+		RefPolicy: view.RefPolicy, RunnerLabels: lines(form.RunnerLabels), AllowedWorkflows: lines(form.AllowedWorkflows),
+	}
+	if env.RefPolicy == actions_model.EnvironmentRefPatterns {
+		env.RefPatterns = view.Patterns // the rows of another choice are left in the page, not saved
+	}
+	listed, parseErr := parseReviewers(form.Reviewers)
+	if parseErr != nil {
+		err = parseErr
+	}
+	for _, r := range listed {
+		if r.TeamID > 0 {
+			teamIDs = append(teamIDs, r.TeamID)
+		} else {
+			userIDs = append(userIDs, r.UserID)
+		}
+	}
+	return env, view, userIDs, teamIDs, err
+}
+
+var errBadReviewer = util.NewInvalidArgumentErrorf("a reviewer is a user or a team")
+
+// environmentError is the message of a refused save; the values the user typed go in as arguments, which Tr escapes.
+func environmentError(ctx *context.Context, err error) template.HTML {
+	var rule actions_model.ErrInvalidEnvironmentRule
+	switch {
+	case errors.As(err, &rule):
+		switch rule.Field {
+		case "name":
+			return ctx.Tr("actions.environments.error.name", actions_model.MaxEnvironmentName)
+		case "ref_policy":
+			return ctx.Tr("actions.environments.error.ref_policy")
+		case "ref_patterns":
+			if rule.Value != "" {
+				return ctx.Tr("actions.environments.error.pattern", rule.Value)
+			}
+			return ctx.Tr("actions.environments.error.patterns", actions_model.MaxRefPatterns)
+		case "wait_timer":
+			return ctx.Tr("actions.environments.error.wait_timer", actions_model.MaxWaitTimerMinutes)
+		case "runner_labels":
+			if rule.Value != "" {
+				return ctx.Tr("actions.environments.error.runner_label", rule.Value)
+			}
+			return ctx.Tr("actions.environments.error.runner_labels", actions_model.MaxRunnerLabels)
+		case "allowed_workflows":
+			if rule.Value != "" {
+				return ctx.Tr("actions.environments.error.workflow", rule.Value)
+			}
+			return ctx.Tr("actions.environments.error.workflows", actions_model.MaxAllowedWorkflows)
+		}
+	case errors.Is(err, actions_model.ErrEnvironmentExists):
+		return ctx.Tr("actions.environments.error.name_taken")
+	case errors.Is(err, actions_model.ErrEnvironmentLimit):
+		return ctx.Tr("actions.environments.error.limit", actions_model.MaxEnvironmentsPerRepo)
+	case errors.Is(err, actions_service.ErrTooManyReviewers):
+		return ctx.Tr("actions.environments.error.too_many_reviewers", actions_model.MaxEnvironmentReviewers)
+	case errors.Is(err, actions_service.ErrReviewerNotMember):
+		return ctx.Tr("actions.environments.error.reviewer_not_member")
+	case errors.Is(err, actions_service.ErrReviewerTwice):
+		return ctx.Tr("actions.environments.error.reviewer_twice")
+	case errors.Is(err, actions_service.ErrUnknownReviewer), errors.Is(err, errBadReviewer):
+		return ctx.Tr("actions.environments.error.reviewers", actions_model.MaxEnvironmentReviewers)
+	}
+	// a refusal without a message of its own (e.g. a reviewer deleted while saving): its text, escaped by Tr
+	return ctx.Tr("actions.environments.error.other", err.Error())
+}
+
+// saveEnvironment saves the posted form: a new environment when env is nil, otherwise its rules.
+func saveEnvironment(ctx *context.Context, env *actions_model.ActionEnvironment) {
+	form := web.GetForm(ctx).(*forms.EnvironmentForm)
+	e, view, userIDs, teamIDs, err := environmentFromForm(form, ctx.Repo.Repository)
+	if env != nil {
+		e.ID, e.Name, view.Name = env.ID, env.Name, env.Name // the name is not edited
+	}
+	if err == nil && env == nil {
+		err = actions_service.CreateEnvironment(ctx, ctx.Doer, e, userIDs, teamIDs)
+	} else if err == nil {
+		_, err = actions_service.SaveEnvironment(ctx, ctx.Doer, e, userIDs, teamIDs)
+	}
+	switch {
+	case err == nil:
+		ctx.Flash.Success(ctx.Tr("actions.environments.saved", e.Name))
+		ctx.Redirect(environmentsLink(ctx) + "/" + strconv.FormatInt(e.ID, 10))
+		return
+	case errors.Is(err, util.ErrPermissionDenied):
+		ctx.Error(http.StatusForbidden)
+		return
+	case errors.Is(err, util.ErrNotExist): // deleted by another request meanwhile
+		ctx.NotFound("SaveEnvironment", err)
+		return
+	case !errors.Is(err, util.ErrInvalidArgument) && !errors.Is(err, util.ErrAlreadyExist):
+		ctx.ServerError("SaveEnvironment", err)
+		return
+	}
+	var stored []*actions_model.ActionEnvironmentReviewer
+	if env != nil {
+		var loadErr error
+		if stored, loadErr = actions_model.FindEnvironmentReviewers(ctx, env.ID); loadErr != nil {
+			ctx.ServerError("FindEnvironmentReviewers", loadErr)
+			return
+		}
+	}
+	prepareEnvironmentForm(ctx, env, stored, view)
+	if ctx.Written() {
+		return
+	}
+	ctx.RenderWithErr(ctx.Tr("actions.environments.error", environmentError(ctx, err)), tplEnvironment, nil)
+}
+
+// EnvironmentNewPost creates an environment.
+func EnvironmentNewPost(ctx *context.Context) {
+	saveEnvironment(ctx, nil)
+}
+
+// EnvironmentEditPost saves the rules of an environment.
+func EnvironmentEditPost(ctx *context.Context) {
+	env, _ := assignedEnvironment(ctx)
+	saveEnvironment(ctx, env)
+}
+
+// EnvironmentDeletePost deletes an environment once its name is typed.
+func EnvironmentDeletePost(ctx *context.Context) {
+	env, link := assignedEnvironment(ctx)
+	if ctx.Req.FormValue("confirm_name") != env.Name { // the exact name, as the button's check
+		ctx.Flash.Error(ctx.Tr("actions.environments.delete.mismatch"))
+		ctx.Redirect(link)
+		return
+	}
+	err := actions_service.DeleteEnvironment(ctx, env)
+	switch {
+	case errors.Is(err, util.ErrPermissionDenied):
+		ctx.Error(http.StatusForbidden)
+		return
+	case errors.Is(err, util.ErrNotExist):
+		ctx.NotFound("DeleteEnvironment", err)
+		return
+	case err != nil:
+		ctx.ServerError("DeleteEnvironment", err)
+		return
+	}
+	ctx.Flash.Success(ctx.Tr("actions.environments.deleted", env.Name))
+	ctx.Redirect(environmentsLink(ctx))
+}
+
+// EnvironmentSecretCreate adds a secret to the environment.
+func EnvironmentSecretCreate(ctx *context.Context) {
+	env, link := assignedEnvironment(ctx)
+	if ctx.HasError() {
+		ctx.JSONError(ctx.GetErrMsg())
+		return
+	}
+	shared_secrets.CreateSecretPost(ctx, 0, 0, env.RepoID, env.ID, link)
+}
+
+// EnvironmentSecretEdit changes a secret of the environment.
+func EnvironmentSecretEdit(ctx *context.Context) {
+	env, link := assignedEnvironment(ctx)
+	if ctx.HasError() {
+		ctx.JSONError(ctx.GetErrMsg())
+		return
+	}
+	shared_secrets.EditSecretPost(ctx, 0, 0, env.RepoID, env.ID, ctx.ParamsInt64(":secret_id"), link)
+}
+
+// EnvironmentSecretDelete deletes a secret of the environment.
+func EnvironmentSecretDelete(ctx *context.Context) {
+	env, link := assignedEnvironment(ctx)
+	shared_secrets.DeleteSecretPost(ctx, 0, 0, env.RepoID, env.ID, ctx.ParamsInt64(":secret_id"), link)
+}
+
+// EnvironmentVariableCreate adds a variable to the environment.
+func EnvironmentVariableCreate(ctx *context.Context) {
+	env, link := assignedEnvironment(ctx)
+	if ctx.HasError() {
+		ctx.JSONError(ctx.GetErrMsg())
+		return
+	}
+	shared_actions.CreateVariable(ctx, 0, 0, env.RepoID, env.ID, link)
+}
+
+// EnvironmentVariableUpdate changes a variable of the environment.
+func EnvironmentVariableUpdate(ctx *context.Context) {
+	env, link := assignedEnvironment(ctx)
+	if ctx.HasError() {
+		ctx.JSONError(ctx.GetErrMsg())
+		return
+	}
+	shared_actions.UpdateVariable(ctx, 0, 0, env.RepoID, env.ID, link)
+}
+
+// EnvironmentVariableDelete deletes a variable of the environment.
+func EnvironmentVariableDelete(ctx *context.Context) {
+	env, link := assignedEnvironment(ctx)
+	shared_actions.DeleteVariable(ctx, 0, 0, env.RepoID, env.ID, link)
+}

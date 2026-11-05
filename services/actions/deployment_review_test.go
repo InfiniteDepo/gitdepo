@@ -39,11 +39,25 @@ type reviewFixture struct {
 }
 
 // setReviewers makes the users and teams the reviewers of the environment as it is stored, keeping its rules, as the
-// site administrator.
+// site administrator. A listed user is made a read collaborator first if they have no path to the repository (only
+// members can be listed): a test takes the access away to see the reviewer refused.
 func setReviewers(ctx context.Context, e *actions_model.ActionEnvironment, userIDs, teamIDs []int64) error {
 	stored, err := actions_model.GetRepoEnvironmentByID(ctx, e.RepoID, e.ID)
 	if err != nil {
 		return err
+	}
+	repo, err := repo_model.GetRepositoryByID(ctx, e.RepoID)
+	if err != nil {
+		return err
+	}
+	for _, id := range userIDs {
+		u, err := user_model.GetUserByID(ctx, id)
+		if err != nil || !u.IsIndividual() || u.ID == repo.OwnerID {
+			continue // refused by the save, or the owner
+		}
+		if err := repo_module.AddCollaborator(ctx, repo, u, perm.AccessModeRead); err != nil {
+			return err
+		}
 	}
 	admin, err := user_model.GetUserByID(ctx, 1) // sees every reviewer
 	if err != nil {
@@ -115,6 +129,15 @@ func auditActions(t *testing.T, since int64, action string) []*audit_model.Entry
 	var entries []*audit_model.Entry
 	require.NoError(t, db.GetEngine(t.Context()).Where("id > ? AND action = ?", since, action).Find(&entries))
 	return entries
+}
+
+// revokeActionsRead removes the collaboration of the user on repository 63 (setReviewers adds one for a listed user).
+func revokeActionsRead(t *testing.T, userID int64) {
+	t.Helper()
+	_, err := db.GetEngine(t.Context()).Exec("DELETE FROM collaboration WHERE user_id = ? AND repo_id = 63", userID)
+	require.NoError(t, err)
+	_, err = db.GetEngine(t.Context()).Exec("DELETE FROM access WHERE user_id = ? AND repo_id = 63", userID)
+	require.NoError(t, err)
 }
 
 func grantActionsRead(t *testing.T, userID int64) {
@@ -304,7 +327,10 @@ func TestReviewDeployments(t *testing.T) {
 				name: "a listed user with read access", users: []int64{4}, doer: 4, allowed: true,
 				setup: func(t *testing.T, f *reviewFixture) { grantActionsRead(t, 4) },
 			},
-			{name: "a listed user without access to Actions", users: []int64{4}, doer: 4},
+			{
+				name: "a listed user without access to Actions", users: []int64{4}, doer: 4,
+				setup: func(t *testing.T, f *reviewFixture) { revokeActionsRead(t, 4) },
+			},
 			{
 				name: "a user with read access who is not listed", users: []int64{2}, doer: 4,
 				setup: func(t *testing.T, f *reviewFixture) { grantActionsRead(t, 4) },

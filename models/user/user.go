@@ -1551,6 +1551,49 @@ func isUserVisibleToViewerCond(viewer *User) builder.Cond {
 	)
 }
 
+// VisibleToViewer returns the IDs of the users the viewer can see, by the rule of IsUserVisibleToViewer, with at most
+// three queries whatever the number of users.
+func VisibleToViewer(ctx context.Context, users []*User, viewer *User) (container.Set[int64], error) {
+	if viewer != nil && viewer.IsAccessTokenBot() {
+		viewer = nil
+	}
+	visible := container.Set[int64]{}
+	var private []int64
+	for _, u := range users {
+		switch {
+		case viewer != nil && (viewer.IsAdmin || viewer.ID == u.ID), u.Visibility == structs.VisibleTypePublic:
+			visible.Add(u.ID)
+		case viewer == nil || viewer.IsRestricted:
+		case u.Visibility == structs.VisibleTypeLimited:
+			visible.Add(u.ID)
+		case u.Visibility == structs.VisibleTypePrivate:
+			private = append(private, u.ID)
+		}
+	}
+	if len(private) == 0 {
+		return visible, nil
+	}
+	// they follow the viewer, or they share an organization with the viewer
+	var ids []int64
+	if err := db.GetEngine(ctx).Table("follow").In("user_id", private).And("follow_id = ?", viewer.ID).Cols("user_id").Find(&ids); err != nil {
+		return nil, err
+	}
+	visible.AddMultiple(ids...)
+	ids = ids[:0]
+	viewerOrgs := builder.Select("org_id").From("team_user").Where(builder.Eq{"uid": viewer.ID})
+	if err := db.GetEngine(ctx).Table("team_user").Where(builder.In("uid", private).And(builder.In("org_id", viewerOrgs))).
+		Cols("uid").Find(&ids); err != nil {
+		return nil, err
+	}
+	visible.AddMultiple(ids...)
+	if err := db.GetEngine(ctx).Table("team_user").Where(builder.Eq{"uid": viewer.ID}.And(builder.In("org_id", private))).
+		Cols("org_id").Find(&ids); err != nil {
+		return nil, err
+	}
+	visible.AddMultiple(ids...)
+	return visible, nil
+}
+
 // IsUserVisibleToViewer check if viewer is able to see user profile
 func IsUserVisibleToViewer(ctx context.Context, u, viewer *User) bool {
 	if viewer.IsAccessTokenBot() { // no member of the instance: sees what an anonymous viewer sees

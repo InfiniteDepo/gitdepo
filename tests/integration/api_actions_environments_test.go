@@ -17,6 +17,7 @@ import (
 	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
+	"forgejo.org/models/perm"
 	repo_model "forgejo.org/models/repo"
 	secret_model "forgejo.org/models/secret"
 	"forgejo.org/models/unit"
@@ -118,12 +119,19 @@ func TestAPIActionsEnvironments(t *testing.T) {
 		}
 
 		t.Run("create, read, update and delete record one entry each", func(t *testing.T) {
+			// a user without a path to the repository (user10) is refused, with the answer every such user gets
+			resp := MakeRequest(t, NewRequestWithJSON(t, "PUT", base+"/Production", envRules(api.CreateOrUpdateEnvironmentOption{
+				Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 4}, {Type: "user", ID: 10}},
+			})).AddTokenAuth(ownerToken), http.StatusUnprocessableEntity)
+			assert.Contains(t, resp.Body.String(), "a reviewer is the owner, a member of a team of the repository or a collaborator")
+			unittest.AssertNotExistsBean(t, &actions_model.ActionEnvironment{RepoID: repo.ID, LowerName: "production"})
+
 			since := auditNow()
 			env := put(ownerToken, "Production", api.CreateOrUpdateEnvironmentOption{
 				RefPolicy: "patterns", RefPatterns: []*api.ActionEnvironmentRefPattern{{Type: "branch", Pattern: "release/*"}, {Type: "tag", Pattern: "v*"}},
 				WaitTimer: new(5), PreventSelfReview: new(true), RunnerLabels: []string{"deploy"}, AllowedWorkflows: []string{"deploy-*.yml"},
-				// a user without access is accepted: who may approve is decided at review time
-				Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 4}, {Type: "user", ID: 10}},
+				// a reader is accepted: who may approve is decided at review time
+				Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 4}, {Type: "user", ID: 5}},
 			}, http.StatusCreated)
 			assert.Equal(t, "Production", env.Name)
 			assert.Equal(t, "patterns", env.RefPolicy)
@@ -135,7 +143,7 @@ func TestAPIActionsEnvironments(t *testing.T) {
 			entries := auditSince(since, "repo.actions_env")
 			require.Len(t, entries, 1, "a creation with reviewers is one entry")
 			assert.Equal(t, "repo.actions_env.created", entries[0].Action)
-			assert.Equal(t, []any{"user:10", "user:4"}, entryData(t, entries[0])["reviewers"])
+			assert.Equal(t, []any{"user:4", "user:5"}, entryData(t, entries[0])["reviewers"])
 
 			stored := unittest.AssertExistsAndLoadBean(t, &actions_model.ActionEnvironment{ID: env.ID})
 			assert.Equal(t, 5, stored.WaitTimerMinutes)
@@ -146,7 +154,7 @@ func TestAPIActionsEnvironments(t *testing.T) {
 			again := put(ownerToken, "PRODUCTION", api.CreateOrUpdateEnvironmentOption{
 				RefPolicy: "patterns", RefPatterns: []*api.ActionEnvironmentRefPattern{{Type: "branch", Pattern: "release/*"}, {Type: "tag", Pattern: "v*"}},
 				WaitTimer: new(5), PreventSelfReview: new(true), RunnerLabels: []string{"deploy"}, AllowedWorkflows: []string{"deploy-*.yml"},
-				Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 10}, {Type: "user", ID: 4}},
+				Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 5}, {Type: "user", ID: 4}},
 			}, http.StatusOK)
 			assert.Equal(t, env.ID, again.ID)
 			assert.Equal(t, "Production", again.Name, "the stored name stays")
@@ -161,10 +169,10 @@ func TestAPIActionsEnvironments(t *testing.T) {
 			require.Len(t, entries, 1)
 			assert.Equal(t, "repo.actions_env.updated", entries[0].Action)
 			before := entryData(t, entries[0])["before"].(map[string]any)
-			assert.Equal(t, []any{"user:10", "user:4"}, before["reviewers"], "the entry has the removed reviewers")
+			assert.Equal(t, []any{"user:4", "user:5"}, before["reviewers"], "the entry has the removed reviewers")
 			assert.Equal(t, true, before["reviews_required"])
 
-			resp := MakeRequest(t, NewRequest(t, "GET", base+"/pRoDuCtIoN").AddTokenAuth(readOnlyToken), http.StatusOK)
+			resp = MakeRequest(t, NewRequest(t, "GET", base+"/pRoDuCtIoN").AddTokenAuth(readOnlyToken), http.StatusOK)
 			got := new(api.ActionEnvironment)
 			DecodeJSON(t, resp, got)
 			assert.Equal(t, env.ID, got.ID)
@@ -382,7 +390,8 @@ func TestAPIActionsEnvironments(t *testing.T) {
 			}
 			assert.Len(t, messages, 1, "one answer for unknown, hidden and wrong-type reviewers")
 			assert.False(t, unittest.BeanExists(t, &actions_model.ActionEnvironment{RepoID: repo.ID, LowerName: "hidden-reviewer"}))
-			// a site administrator sees user31
+			// a site administrator sees user31, who can be listed once a member
+			require.NoError(t, db.Insert(t.Context(), &repo_model.Collaboration{RepoID: repo.ID, UserID: 31, Mode: perm.AccessModeRead}))
 			put(siteAdminToken, "hidden-reviewer", api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 31}}}, http.StatusCreated)
 			MakeRequest(t, NewRequest(t, "DELETE", base+"/hidden-reviewer").AddTokenAuth(ownerToken), http.StatusNoContent)
 		})

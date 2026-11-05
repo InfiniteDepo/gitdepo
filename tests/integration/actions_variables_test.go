@@ -38,10 +38,6 @@ func TestActionsVariablesModification(t *testing.T) {
 	adminSess := loginUser(t, admin.Name)
 	sess := loginUser(t, user.Name)
 
-	type errorJSON struct {
-		Error string `json:"errorMessage"`
-	}
-
 	test := func(t *testing.T, fail bool, baseURL string, id int64) {
 		defer tests.PrintCurrentTest(t, 1)()
 		t.Helper()
@@ -56,10 +52,8 @@ func TestActionsVariablesModification(t *testing.T) {
 			"data": "   \r\n\tI'm fine. Two plus two is...ten, in base four, I'm fine!   \r\n",
 		})
 		if fail {
-			resp := sess.MakeRequest(t, req, http.StatusBadRequest)
-			var error errorJSON
-			DecodeJSON(t, resp, &error)
-			assert.Equal(t, "Failed to find the variable.", error.Error)
+			// a variable of another level is not found, for edit and delete alike
+			sess.MakeRequest(t, req, http.StatusNotFound)
 		} else {
 			sess.MakeRequest(t, req, http.StatusOK)
 			flashCookie := sess.GetCookie(app_context.CookieNameFlash)
@@ -73,10 +67,8 @@ func TestActionsVariablesModification(t *testing.T) {
 
 		req = NewRequest(t, "POST", baseURL+fmt.Sprintf("/%d/delete", id))
 		if fail {
-			resp := sess.MakeRequest(t, req, http.StatusBadRequest)
-			var error errorJSON
-			DecodeJSON(t, resp, &error)
-			assert.Equal(t, "Failed to find the variable.", error.Error)
+			// a variable of another level is not found, for edit and delete alike
+			sess.MakeRequest(t, req, http.StatusNotFound)
 		} else {
 			sess.MakeRequest(t, req, http.StatusOK)
 			flashCookie := sess.GetCookie(app_context.CookieNameFlash)

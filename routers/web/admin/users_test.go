@@ -198,3 +198,24 @@ func TestNewUserPost_VisibilityPrivate(t *testing.T) {
 	// As default user visibility
 	assert.True(t, u.Visibility.IsPrivate())
 }
+
+func TestIsLocalLink(t *testing.T) {
+	for link, want := range map[string]bool{
+		"/user2/repo1/settings":  true,
+		"/":                      true,
+		"//host":                 false,
+		`/\host`:                 false,
+		`/\\host`:                false,
+		"/\t/host":               false,
+		"/\n/host":               false,
+		"/a\rb":                  false,
+		"/a\x00b":                false,
+		"/a\u0085b":              false,
+		"/a\x7fb":                false,
+		"https://evil.example/x": false,
+		"":                       false,
+		"user2/repo1":            false,
+	} {
+		assert.Equal(t, want, isLocalLink(link), "%q", link)
+	}
+}

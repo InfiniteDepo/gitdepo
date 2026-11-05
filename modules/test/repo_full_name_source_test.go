@@ -25,9 +25,11 @@ func TestNoRepoNameConcatenation(t *testing.T) {
 		`routers/web/repo/editor.go: Owner.Name + "/" + repo.Name`:                                "compare head grammar owner/repo:branch; forks into projects come later",
 		`templates/repo/issue/view_content/sidebar/pull_review.tmpl: OwnerName}}/{{.Team.Name`:    "a team, org/team",
 		`templates/repo/issue/view_content/sidebar/pull_reviewers.tmpl: OwnerName}}/{{.Team.Name`: "a team, org/team",
+		`templates/repo/settings/environment.tmpl: Owner.Name}}/{{.Team.Name`:                     "a team, org/team",
 		`services/packages/container/common.go: OwnerName+"/"+p.LowerName`:                        "a package name, not a repository",
 		`routers/private/serv.go: OwnerName + "/" + results.RepoName`:                             "the path a git client asked for, before any repository is loaded",
 		`routers/private/serv.go: OwnerName + "/" + groupName`:                                    "the path a git client asked for, before any repository is loaded",
+		`services/pull/owner_eligibility.go: Owner.Name + "/" + t.Name`:                           "a team, org/team",
 		`services/metrics/pulls.go: OwnerName + "/" + row.RepoName`:                               "metrics rows carry the owner and leaf only; references and mail come with their own PR",
 	}
 	seen := map[string]bool{}

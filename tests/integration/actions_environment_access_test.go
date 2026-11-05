@@ -307,7 +307,9 @@ func TestActionsEnvironmentAccess(t *testing.T) {
 			d := deployment(job)
 			require.Equal(t, actions_model.DeploymentWaitingTimer, d.Status)
 			require.EqualValues(t, 4, d.ReviewedBy)
-			// user4 is replaced by user10 (no access to the repository) and the timer is due
+			// user4 is replaced by user10 (a collaborator who didn't approve) and the timer is due
+			MakeRequest(t, NewRequestWithJSON(t, "PUT", fmt.Sprintf("/api/v1/repos/%s/%s/collaborators/user10", user2.Name, repo.Name),
+				&api.AddCollaboratorOption{Permission: new("read")}).AddTokenAuth(owner), http.StatusNoContent)
 			put(owner, "swap", api.CreateOrUpdateEnvironmentOption{WaitTimer: new(0), Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 10}}}, http.StatusOK)
 			_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET release_after_unix = ? WHERE job_id = ?", timeutil.TimeStampNow()-1, job.ID)
 			require.NoError(t, err)
