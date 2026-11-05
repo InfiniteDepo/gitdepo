@@ -324,6 +324,23 @@ func TestActionsEnvironmentReviews(t *testing.T) {
 			runner.execTask(t, runner.fetchTask(t), &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
 		})
 
+		t.Run("a review with an authorized integration is refused, the reviewer's own token is not", func(t *testing.T) {
+			newEnv("integration-rv", []int64{user2.ID}, nil) // the integration acts as user2
+			run, job := pushJob("", "rv-g", "    environment: integration-rv\n", "echo")
+			ait := newAITester(t)
+			defer ait.close()
+			jwtToken := ait.signedJWT()
+			since := auditNow()
+			review(jwtToken, run, api.ReviewDeploymentsOption{State: "approved"}, http.StatusForbidden)
+			review(jwtToken, run, api.ReviewDeploymentsOption{State: "rejected", Comment: "no"}, http.StatusForbidden)
+			assert.False(t, list(jwtToken, run, http.StatusOK)[0].Reviewers.CanReview)
+			assert.True(t, list(ownerToken, run, http.StatusOK)[0].Reviewers.CanReview)
+			assert.Equal(t, actions_model.DeploymentWaitingReview, deployment(job, 1).Status)
+			assert.Zero(t, auditCount(since, "repo.actions_deployment.approved")+auditCount(since, "repo.actions_deployment.rejected"))
+			review(ownerToken, run, api.ReviewDeploymentsOption{State: "approved"}, http.StatusOK)
+			runner.execTask(t, runner.fetchTask(t), &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
+		})
+
 		t.Run("a review in an archived repository is refused", func(t *testing.T) {
 			newEnv("archived-rv", []int64{user4.ID}, nil)
 			run, job := pushJob("", "rv-g", "    environment: archived-rv\n", "echo")

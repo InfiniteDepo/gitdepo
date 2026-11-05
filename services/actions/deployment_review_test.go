@@ -83,7 +83,7 @@ func (f *reviewFixture) emit(t *testing.T) *actions_model.ActionRunJob {
 func (f *reviewFixture) review(t *testing.T, doerID int64, approve bool, comment string) ([]*actions_model.ActionDeployment, error) {
 	t.Helper()
 	doer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: doerID})
-	return ReviewDeployments(f.ctx, doer, f.run, nil, approve, comment)
+	return ReviewDeployments(f.ctx, doer, f.run, []int64{f.job.ID}, approve, comment)
 }
 
 func auditActions(t *testing.T, since int64, action string) []*audit_model.Entry {
@@ -375,7 +375,7 @@ func TestReviewDeployments(t *testing.T) {
 			"token":        user_model.NewAccessTokenBot(&auth_model.AccessToken{ID: 5, OwnerID: 63}),
 			"nobody":       nil,
 		} {
-			_, err := ReviewDeployments(f.ctx, doer, f.run, nil, true, "")
+			_, err := ReviewDeployments(f.ctx, doer, f.run, []int64{f.job.ID}, true, "")
 			require.ErrorIs(t, err, ErrReviewForbidden, name)
 		}
 		// not even when a listed user's ID is the one the identity would carry
@@ -393,7 +393,7 @@ func TestReviewDeployments(t *testing.T) {
 		ds, err := ReviewDeployments(f.ctx, doer, f.run, []int64{f.job.ID}, true, "")
 		require.NoError(t, err)
 		assert.Len(t, ds, 1)
-		_, err = ReviewDeployments(f.ctx, doer, f.run, nil, true, "")
+		_, err = ReviewDeployments(f.ctx, doer, f.run, []int64{f.job.ID}, true, "")
 		require.ErrorIs(t, err, ErrReviewNotWaiting, "none left")
 	})
 
@@ -409,7 +409,7 @@ func TestReviewDeployments(t *testing.T) {
 		_, err = db.GetEngine(t.Context()).Exec("UPDATE action_run_job SET status = ?, attempt = 1, run_id = ? WHERE id = 601", actions_model.StatusBlocked, f.run.ID)
 		require.NoError(t, err)
 		doer4 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 4})
-		ds, err := ReviewDeployments(f.ctx, doer4, f.run, nil, true, "")
+		ds, err := ReviewDeployments(f.ctx, doer4, f.run, []int64{601}, true, "")
 		require.NoError(t, err)
 		require.Len(t, ds, 1)
 		assert.EqualValues(t, 601, ds[0].JobID)
