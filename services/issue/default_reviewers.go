@@ -146,20 +146,22 @@ func DefaultReviewerRequests(ctx context.Context, issue *issues_model.Issue, pr 
 	return notifiers, nil
 }
 
-// newlyApplies returns whether the rule asks now: when the pull request opens or is retargeted (push false) if it
-// applies to the files, and after a push only if it starts to apply:
+// newlyApplies returns whether the rule asks now: when the pull request opens or is retargeted (push false) if its
+// paths match the files, and after a push only if they start to match. Paths that can't be matched
+// (git_model.ApprovalRule.MatchesPaths) ask nobody: requests are advisory.
 //
-//	rule with paths:    applies to files && !applies to oldFiles
+//	rule with paths:    matches files && !matches oldFiles
 //	rule without paths: files changed now && no files changed at the old head (a pull request that opened empty)
 func newlyApplies(r *git_model.ApprovalRule, files, oldFiles []string, push bool) bool {
-	switch {
-	case !push:
-		return r.AppliesTo(files)
-	case r.PathPatterns == "":
+	if push && r.PathPatterns == "" {
 		return len(files) > 0 && len(oldFiles) == 0
-	default:
-		return r.AppliesTo(files) && !r.AppliesTo(oldFiles)
 	}
+	matches, decided := r.MatchesPaths(files)
+	if !matches || !decided || !push {
+		return matches && decided
+	}
+	oldMatches, oldDecided := r.MatchesPaths(oldFiles)
+	return oldDecided && !oldMatches
 }
 
 // requestUnofficially adds a review request with add and, unless official, makes it advisory, in one transaction.

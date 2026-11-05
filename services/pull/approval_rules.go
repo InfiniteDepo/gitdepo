@@ -256,8 +256,10 @@ func countUncoveredFiles(ctx context.Context, pb *git_model.ProtectedBranch, pr 
 	var shortfalls []*SectionShortfall
 	reported := map[*issues_model.CodeOwnerSection]bool{}
 	byLine := map[*issues_model.CodeOwnerRule]map[int64]bool{} // lines are shared by many files
+	// paths that can't be matched put every file in the scope of the rule (fails closed)
+	_, decided := rule.MatchesPaths(files)
 	for _, f := range files {
-		if !rule.AppliesTo([]string{f}) {
+		if decided && !rule.AppliesTo([]string{f}) {
 			continue
 		}
 		var sections []*issues_model.CodeOwnerSection // in the order of the file

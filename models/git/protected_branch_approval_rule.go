@@ -42,6 +42,14 @@ type ApprovalRule struct {
 	SourceBranchPattern string             `xorm:"VARCHAR(255) NOT NULL DEFAULT ''"`
 	CreatedUnix         timeutil.TimeStamp `xorm:"created"`
 	UpdatedUnix         timeutil.TimeStamp `xorm:"updated"`
+
+	paths *pathMatcher `xorm:"-"` // PathPatterns compiled once, by pathMatcher
+}
+
+// pathMatcher holds the compiled path patterns of a rule; invalid if a stored pattern is beyond the limits.
+type pathMatcher struct {
+	patterns []*regexp.Regexp
+	invalid  bool
 }
 
 func init() {
@@ -93,6 +101,9 @@ func setApprovalRules(ctx context.Context, protectedBranchID int64, rules []*App
 			return util.NewInvalidArgumentErrorf("approval rule %q: source branch pattern: %v", r.Name, err)
 		}
 		names[r.Name] = true
+		if len(r.PathPatterns) > maxPathPatternBytes || strings.Count(r.PathPatterns, ";") >= maxPathPatterns {
+			return util.NewInvalidArgumentErrorf("approval rule %q: at most %d path patterns and %d bytes are allowed", r.Name, maxPathPatterns, maxPathPatternBytes)
+		}
 		for expr := range strings.SplitSeq(r.PathPatterns, ";") {
 			if err := ValidateGlobPattern(strings.TrimSpace(expr), '.', '/'); err != nil {
 				return util.NewInvalidArgumentErrorf("approval rule %q: invalid path pattern %q: %v", r.Name, expr, err)
@@ -132,27 +143,70 @@ func (r *ApprovalRule) IsApprover(ctx context.Context, userID int64) (bool, erro
 	return organization.IsUserInTeams(ctx, userID, r.TeamIDs)
 }
 
-// AppliesTo returns true if the rule has no path patterns or one of the changed files matches.
+// Bounds of approval-rule path matching. A rule holds at most maxPathPatterns patterns of maxPathPatternBytes in
+// total, and matching a rule against the changed files of a pull request may take at most maxPathMatchWork path
+// bytes times patterns (10,000 files of 100 bytes against 8 patterns, under 0.4 s for the slowest patterns); beyond
+// it the files are not matched.
+const (
+	maxPathPatterns     = 100
+	maxPathPatternBytes = 8 << 10
+	maxPathMatchWork    = 8 << 20
+)
+
+// AppliesTo returns true if the rule has no path patterns or one of the changed files matches. If the paths can't be
+// matched (MatchesPaths), the rule applies: it fails closed.
 func (r *ApprovalRule) AppliesTo(changedFiles []string) bool {
-	var patterns []*regexp.Regexp
+	matches, decided := r.MatchesPaths(changedFiles)
+	return matches || !decided
+}
+
+// MatchesPaths returns whether the rule has no path patterns or one of the changed files matches, and whether that
+// could be decided: not when a stored pattern is beyond the limits, or when matching the files would take more than
+// the bound of approval-rule path matching.
+func (r *ApprovalRule) MatchesPaths(changedFiles []string) (matches, decided bool) {
+	m := r.pathMatcher()
+	if m.invalid {
+		return false, false
+	}
+	// patterns that don't compile to any glob must not switch the rule off
+	if len(m.patterns) == 0 {
+		return true, true
+	}
+	work := 0
+	for _, f := range changedFiles {
+		if work += len(f) * len(m.patterns); work > maxPathMatchWork {
+			return false, false
+		}
+	}
+	return slices.ContainsFunc(changedFiles, func(f string) bool {
+		f = strings.ToLower(strings.TrimSpace(f))
+		return slices.ContainsFunc(m.patterns, func(g *regexp.Regexp) bool { return g.MatchString(f) })
+	}), true
+}
+
+// pathMatcher compiles the path patterns of the rule once.
+func (r *ApprovalRule) pathMatcher() *pathMatcher {
+	if r.paths != nil {
+		return r.paths
+	}
+	r.paths = &pathMatcher{}
+	// a stored rule beyond the limits is never matched
+	if len(r.PathPatterns) > maxPathPatternBytes || strings.Count(r.PathPatterns, ";") >= maxPathPatterns {
+		r.paths.invalid = true
+		return r.paths
+	}
 	for expr := range strings.SplitSeq(strings.ToLower(r.PathPatterns), ";") {
 		if expr = strings.TrimSpace(expr); expr == "" {
 			continue
 		}
 		g, err := compileGlobPattern(expr, '.', '/')
 		if err != nil {
-			return true // a stored pattern beyond the limits is never matched: the rule applies (fails closed)
+			r.paths.invalid = true
+			return r.paths
 		}
-		patterns = append(patterns, g)
+		r.paths.patterns = append(r.paths.patterns, g)
 	}
-	// patterns that don't compile to any glob must not switch the rule off
-	if len(patterns) == 0 {
-		return true
-	}
-	return slices.ContainsFunc(changedFiles, func(f string) bool {
-		f = strings.ToLower(strings.TrimSpace(f))
-		return slices.ContainsFunc(patterns, func(g *regexp.Regexp) bool { return g.MatchString(f) })
-	})
+	return r.paths
 }
 
 // MatchesSourceBranch returns true if the rule has no source branch pattern or the branch matches it. It only decides

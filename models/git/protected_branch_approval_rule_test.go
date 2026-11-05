@@ -92,10 +92,15 @@ func TestSetApprovalRules(t *testing.T) {
 		"source glob":      {Name: "A", RequiredCount: 0, RequestReviews: true, UserIDs: []int64{user2.ID}, SourceBranchPattern: "[a"},
 		"source too long":  {Name: "A", RequiredCount: 1, RequestReviews: true, UserIDs: []int64{user2.ID}, SourceBranchPattern: strings.Repeat("a", 256)},
 		"request no users": {Name: "A", RequiredCount: 0, RequestReviews: true},
+		"101 paths":        {Name: "A", RequiredCount: 1, UserIDs: []int64{user2.ID}, PathPatterns: strings.Repeat("a;", 100) + "a"},
+		"path bytes":       {Name: "A", RequiredCount: 1, UserIDs: []int64{user2.ID}, PathPatterns: strings.Repeat("a", 200) + strings.Repeat(";"+strings.Repeat("a", 200), 40)},
 	} {
 		err := git_model.SetApprovalRules(t.Context(), repo, pb.ID, []*git_model.ApprovalRule{bad})
 		require.ErrorIs(t, err, util.ErrInvalidArgument, name)
 	}
+	// 100 path patterns and 8 KiB of them are allowed
+	require.NoError(t, git_model.SetApprovalRules(t.Context(), repo, pb.ID, []*git_model.ApprovalRule{{Name: "Paths", RequiredCount: 1, UserIDs: []int64{user2.ID}, PathPatterns: strings.Repeat("a;", 99) + "a"}}))
+	require.NoError(t, git_model.SetApprovalRules(t.Context(), repo, pb.ID, []*git_model.ApprovalRule{{Name: "Paths", RequiredCount: 1, UserIDs: []int64{user2.ID}, PathPatterns: strings.Repeat("a", 200) + strings.Repeat(";"+strings.Repeat("a", 200), 39)}}))
 	// 0 approvals is a request-only rule
 	require.ErrorIs(t, git_model.SetApprovalRules(t.Context(), repo, pb.ID, []*git_model.ApprovalRule{{Name: "Ask", RequestReviews: true, RequireCodeOwners: true, UserIDs: []int64{user2.ID}}}), util.ErrInvalidArgument)
 	require.NoError(t, git_model.SetApprovalRules(t.Context(), repo, pb.ID, []*git_model.ApprovalRule{{Name: "Ask", RequiredCount: 0, RequestReviews: true, SourceBranchPattern: "feature/*", UserIDs: []int64{user2.ID}}}))
@@ -166,4 +171,38 @@ func TestGlobPatternLinearTime(t *testing.T) {
 	require.Error(t, git_model.ValidateGlobPattern(slow, '/'), "refused when saved")
 	assert.True(t, (&git_model.ApprovalRule{PathPatterns: slow}).AppliesTo([]string{"unrelated.txt"}))
 	assert.False(t, (&git_model.ApprovalRule{SourceBranchPattern: slow}).MatchesSourceBranch(strings.Repeat("a", 250)+"c"))
+}
+
+// The work of approval-rule path matching is bounded: 100 patterns against 2000 changed files of 4 KiB are not
+// matched, the rule applies (fails closed) and asks nobody (MatchesPaths isn't decided); a stored rule beyond the
+// pattern caps applies too.
+func TestApprovalRulePathMatchingBound(t *testing.T) {
+	patterns := make([]string, 100)
+	for i := range patterns {
+		patterns[i] = fmt.Sprintf("**/a*b*c%d/**", i)
+	}
+	files := make([]string, 2000)
+	for i := range files {
+		files[i] = strings.Repeat("ab/", 1365) + fmt.Sprint(i)
+	}
+	r := &git_model.ApprovalRule{PathPatterns: strings.Join(patterns, ";")}
+	start := time.Now()
+	assert.True(t, r.AppliesTo(files))
+	_, decided := r.MatchesPaths(files)
+	assert.False(t, decided)
+	assert.Less(t, time.Since(start), 50*slowdown*time.Millisecond)
+
+	// within the bound the files are matched
+	matches, decided := r.MatchesPaths([]string{"src/x/a1b2c7/y.go", "README.md"})
+	assert.True(t, matches && decided)
+	matches, decided = r.MatchesPaths([]string{"README.md"})
+	assert.True(t, !matches && decided)
+	assert.False(t, r.AppliesTo([]string{"README.md"}))
+
+	for _, stored := range []string{strings.Repeat("a;", 100) + "a", strings.Repeat("a", 8<<10+1)} {
+		r := &git_model.ApprovalRule{PathPatterns: stored}
+		assert.True(t, r.AppliesTo([]string{"unrelated.txt"}))
+		_, decided := r.MatchesPaths([]string{"unrelated.txt"})
+		assert.False(t, decided)
+	}
 }
