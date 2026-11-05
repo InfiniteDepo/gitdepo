@@ -267,10 +267,12 @@ test.describe('Runners of user2', () => {
 
     const area = page.locator('.page-content');
 
-    // We have to create a new runner because changes to fixtures affect the remainder of the tests in this file.
+    // We have to create a new runner because changes to fixtures affect the remainder of the tests in this file. Its
+    // name is unique, so a retry (or another browser) doesn't find the runner an earlier attempt left behind.
+    const name = `runner-${globalThis.crypto.randomUUID()}`;
     await area.getByRole('link', {name: 'Create new runner'}).click();
-    await area.getByRole('textbox', {name: 'Name *'}).fill('runner-660332');
-    await area.getByRole('textbox', {name: 'Description'}).fill('Description of runner-660332');
+    await area.getByRole('textbox', {name: 'Name *'}).fill(name);
+    await area.getByRole('textbox', {name: 'Description'}).fill(`Description of ${name}`);
     await area.getByRole('button', {name: 'Create'}).click();
 
     // Go back to list of runners.
@@ -278,10 +280,10 @@ test.describe('Runners of user2', () => {
     const runnerList = page.locator('.runner-list');
 
     await expect(area.getByRole('heading', {name: 'Manage runners'})).toBeVisible();
-    await expect(runnerList).toContainText('runner-660332');
+    await expect(runnerList).toContainText(name);
 
     // Delete the runner that was just created.
-    await runnerList.getByRole('button', {name: 'Delete runner-660332'}).click();
+    await runnerList.getByRole('button', {name: `Delete ${name}`}).click();
 
     // Confirm deletion
     const modal = page.locator('#runner-delete-modal');
@@ -292,7 +294,7 @@ test.describe('Runners of user2', () => {
 
     // Verify that the runner is gone.
     await expect(area.locator('#flash-message')).toHaveText('Runner deleted successfully');
-    await expect(runnerList).not.toContainText('runner-660332');
+    await expect(runnerList).not.toContainText(name);
   });
 });
 
@@ -547,10 +549,12 @@ test.describe('Global runners', () => {
 
     const area = page.locator('.page-content');
 
-    // We have to create a new runner because changes to fixtures affect the remainder of the tests in this file.
+    // We have to create a new runner because changes to fixtures affect the remainder of the tests in this file. Its
+    // name is unique, so a retry (or another browser) doesn't find the runner an earlier attempt left behind.
+    const name = `runner-${globalThis.crypto.randomUUID()}`;
     await area.getByRole('link', {name: 'Create new runner'}).click();
-    await area.getByRole('textbox', {name: 'Name *'}).fill('runner-650332');
-    await area.getByRole('textbox', {name: 'Description'}).fill('Description of runner-650332');
+    await area.getByRole('textbox', {name: 'Name *'}).fill(name);
+    await area.getByRole('textbox', {name: 'Description'}).fill(`Description of ${name}`);
     await area.getByRole('button', {name: 'Create'}).click();
 
     // Go back to list of runners.
@@ -558,10 +562,10 @@ test.describe('Global runners', () => {
     const runnerList = page.locator('.runner-list');
 
     await expect(area.getByRole('heading', {name: 'Manage runners'})).toBeVisible();
-    await expect(runnerList).toContainText('runner-650332');
+    await expect(runnerList).toContainText(name);
 
     // Delete the runner that was just created.
-    await runnerList.getByRole('button', {name: 'Delete runner-650332'}).click();
+    await runnerList.getByRole('button', {name: `Delete ${name}`}).click();
 
     // Confirm deletion
     const modal = page.locator('#runner-delete-modal');
@@ -572,7 +576,7 @@ test.describe('Global runners', () => {
 
     // Verify that the runner is gone.
     await expect(area.locator('#flash-message')).toHaveText('Runner deleted successfully');
-    await expect(runnerList).not.toContainText('runner-650332');
+    await expect(runnerList).not.toContainText(name);
   });
 });
 
