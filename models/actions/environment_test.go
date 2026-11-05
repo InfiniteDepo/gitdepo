@@ -4,6 +4,7 @@
 package actions
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -209,7 +210,7 @@ func TestEnvironmentLifecycle(t *testing.T) {
 	other, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 1, staging.ID, "token", "other")
 	require.NoError(t, err)
 	require.NoError(t, db.Insert(ctx, &ActionDeployment{RepoID: 1, EnvironmentID: prod.ID, JobID: 1, Attempt: 1, Status: DeploymentReleased}))
-	require.NoError(t, DeleteEnvironment(ctx, prod))
+	require.NoError(t, DeleteEnvironment(ctx, prod, func(context.Context) error { return nil }))
 	_, err = GetRepoEnvironmentByID(ctx, 1, prod.ID)
 	require.ErrorIs(t, err, ErrEnvironmentNotFound)
 	unittest.AssertNotExistsBean(t, &secret_model.Secret{ID: secret.ID})

@@ -425,7 +425,7 @@ func TestGateEnvironment(t *testing.T) {
 		b, err := gateEnvironment(t.Context(), job)
 		require.NoError(t, err)
 		require.Equal(t, behaviourHoldJob, b)
-		require.NoError(t, actions_model.DeleteEnvironment(audit_model.WithSystem(t.Context(), "test"), env))
+		require.NoError(t, DeleteEnvironment(audit_model.WithSystem(t.Context(), "test"), env))
 		timeutil.MockSet(time.Now().Add(time.Hour))
 		defer timeutil.MockUnset()
 		b, err = gateEnvironment(t.Context(), job)
@@ -677,6 +677,39 @@ func TestEnvironmentSecretsAndVariables(t *testing.T) {
 		vars, err = varsOf(job)
 		require.NoError(t, err)
 		assert.NotContains(t, vars, "PROD_ONLY")
+	})
+
+	t.Run("a task reads the deployment of its own attempt", func(t *testing.T) {
+		job := gateJob(t, envWorkflow("    environment: prod\n"), "refs/heads/main")
+		release(t, job, prod)
+		task := &actions_model.ActionTask{Job: job, Attempt: job.Attempt}
+		_, err := getSecretsOfJob(ctx, jobOfTask(task))
+		require.NoError(t, err)
+		task.Attempt = job.Attempt + 1 // the row says one thing, the task another
+		_, err = getSecretsOfJob(ctx, jobOfTask(task))
+		require.ErrorIs(t, err, errEnvironmentNotReleased)
+		_, err = getVariablesOfJob(ctx, jobOfTask(task))
+		require.ErrorIs(t, err, errEnvironmentNotReleased)
+	})
+
+	t.Run("another failure is not a refusal of the gate: the job stays queued", func(t *testing.T) {
+		job := gateJob(t, envWorkflow("    environment: prod\n"), "refs/heads/main")
+		release(t, job, prod)
+		rows, err := db.Find[secret_model.Secret](ctx, secret_model.FindSecretsOptions{RepoID: 63, EnvironmentID: prod.ID})
+		require.NoError(t, err)
+		require.NotEmpty(t, rows)
+		defer func() {
+			for _, row := range rows {
+				_, err := db.GetEngine(ctx).Exec("UPDATE secret SET data = ? WHERE id = ?", row.Data, row.ID)
+				require.NoError(t, err)
+			}
+		}()
+		_, err = db.GetEngine(ctx).Exec("UPDATE secret SET data = 'x' WHERE environment_id = ?", prod.ID)
+		require.NoError(t, err)
+		got, err := secretsOf(job)
+		require.Error(t, err)
+		require.NotErrorIs(t, err, errEnvironmentNotReleased)
+		assert.Nil(t, got)
 	})
 
 	t.Run("a job without an environment doesn't get them even if a deployment of its attempt exists", func(t *testing.T) {

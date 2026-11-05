@@ -17,7 +17,7 @@ import (
 )
 
 func getSecretsOfTask(ctx context.Context, task *actions_model.ActionTask) (map[string]string, error) {
-	secrets, err := getSecretsOfJob(ctx, task.Job)
+	secrets, err := getSecretsOfJob(ctx, jobOfTask(task))
 	if err != nil {
 		return nil, err
 	}

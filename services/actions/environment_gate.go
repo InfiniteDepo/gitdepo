@@ -29,7 +29,7 @@ import (
 // maxDueDeploymentRuns is how many runs one tick of the wait timer task looks at.
 const maxDueDeploymentRuns = 100
 
-// errEnvironmentNotReleased is what a job gets when the secrets or variables of its environment can't be resolved, for
+// errEnvironmentNotReleased is what a job gets when no released deployment of an existing environment stands behind it, for
 // example because the environment was deleted after its release: such a job fails, it is never retried.
 var errEnvironmentNotReleased = errors.New("the environment of the job did not release it")
 
@@ -274,6 +274,14 @@ func recordDeploymentRefused(ctx context.Context, run *actions_model.ActionRun, 
 	})
 }
 
+// jobOfTask is the task's job at the attempt the task runs: the deployment that released it is read for that attempt,
+// whatever the job row says by then.
+func jobOfTask(task *actions_model.ActionTask) *actions_model.ActionRunJob {
+	job := *task.Job
+	job.Attempt = task.Attempt
+	return &job
+}
+
 // releasedEnvironment returns the environment that released this attempt of the job. Without a released deployment of
 // an environment that still exists in the job's repository there is none: a job that names an environment never runs
 // without its gate.
@@ -300,8 +308,9 @@ func getEnvironmentSecrets(ctx context.Context, job *actions_model.ActionRunJob)
 	}
 	secrets, err := secret_model.FetchEnvironmentSecrets(ctx, env.RepoID, env.ID)
 	if err != nil {
-		// no details, as for the other secrets: FetchEnvironmentSecrets logs them
-		return nil, fmt.Errorf("%w: failure to fetch secrets", errEnvironmentNotReleased)
+		// no details, as for the other secrets: FetchEnvironmentSecrets logs them. Not errEnvironmentNotReleased: a
+		// failure of the database or of decryption fails the request and the job stays queued.
+		return nil, errors.New("failure to fetch environment secrets")
 	}
 	return secrets, nil
 }
@@ -325,7 +334,7 @@ func getVariablesOfJob(ctx context.Context, job *actions_model.ActionRunJob) (ma
 	}
 	envVars, err := actions_model.FindVariables(ctx, actions_model.FindVariablesOpts{RepoID: env.RepoID, EnvironmentID: env.ID})
 	if err != nil {
-		return nil, fmt.Errorf("%w: failure to fetch variables", errEnvironmentNotReleased)
+		return nil, fmt.Errorf("failure to fetch environment variables: %w", err)
 	}
 	for _, v := range envVars {
 		vars[v.Name] = v.Data
@@ -411,7 +420,7 @@ func notifyFailedJobs(ctx context.Context, failures []*jobFailure) {
 // release them any more, and a job never runs without its gate.
 func DeleteEnvironment(ctx context.Context, e *actions_model.ActionEnvironment) error {
 	var failures []*jobFailure
-	if err := db.WithTx(ctx, func(ctx context.Context) error {
+	if err := actions_model.DeleteEnvironment(ctx, e, func(ctx context.Context) error {
 		failures = failures[:0]
 		jobs, err := actions_model.FindUnpickedEnvironmentJobs(ctx, e.RepoID, e.ID)
 		if err != nil {
@@ -424,7 +433,7 @@ func DeleteEnvironment(ctx context.Context, e *actions_model.ActionEnvironment) 
 				failures = append(failures, f)
 			}
 		}
-		return actions_model.DeleteEnvironment(ctx, e)
+		return nil
 	}); err != nil {
 		return err
 	}

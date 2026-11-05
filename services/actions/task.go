@@ -106,7 +106,7 @@ func pickTask(ctx context.Context, runner *actions_model.ActionRunner, requestKe
 			return fmt.Errorf("GetSecretsOfTask: %w", err)
 		}
 
-		vars, err := getVariablesOfJob(ctx, t.Job)
+		vars, err := getVariablesOfJob(ctx, jobOfTask(t))
 		if err != nil {
 			return fmt.Errorf("getVariablesOfJob: %w", err)
 		}
@@ -178,7 +178,7 @@ func RecoverTasks(ctx context.Context, tasks []*actions_model.ActionTask) ([]*ru
 				return fmt.Errorf("GetSecretsOfTask: %w", err)
 			}
 
-			vars, err := getVariablesOfJob(ctx, t.Job)
+			vars, err := getVariablesOfJob(ctx, jobOfTask(t))
 			if errors.Is(err, errEnvironmentNotReleased) {
 				failed = append(failed, t)
 				continue

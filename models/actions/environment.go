@@ -351,10 +351,16 @@ func UpdateEnvironment(ctx context.Context, e *ActionEnvironment) error {
 }
 
 // DeleteEnvironment deletes the environment with its secrets and variables and records it. Its deployments stay as
-// history. It doesn't touch the jobs that wait for the environment: callers use services/actions DeleteEnvironment,
-// which fails them in the same transaction.
-func DeleteEnvironment(ctx context.Context, e *ActionEnvironment) error {
+// history. It doesn't touch the jobs that wait for the environment: failUnpickedJobs does, in the same transaction and
+// before the rows go (it is required, so no caller forgets them). Only services/actions DeleteEnvironment should call it.
+func DeleteEnvironment(ctx context.Context, e *ActionEnvironment, failUnpickedJobs func(context.Context) error) error {
+	if failUnpickedJobs == nil {
+		return errors.New("DeleteEnvironment needs a function that fails the jobs waiting for the environment")
+	}
 	return db.WithTx(ctx, func(ctx context.Context) error {
+		if err := failUnpickedJobs(ctx); err != nil {
+			return err
+		}
 		stored, err := GetRepoEnvironmentByID(ctx, e.RepoID, e.ID)
 		if err != nil {
 			return err

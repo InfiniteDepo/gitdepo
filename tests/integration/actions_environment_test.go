@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	secret_model "forgejo.org/models/secret"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/git"
 	"forgejo.org/modules/optional"
 	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
@@ -442,6 +444,42 @@ jobs:
 			}
 		})
 
+		t.Run("a name is never resolved to a branch that is named like another ref", func(t *testing.T) {
+			newEnv("tag-v", func(e *actions_model.ActionEnvironment) {
+				e.RefPolicy = actions_model.EnvironmentRefPatterns
+				e.RefPatterns = []actions_model.EnvironmentRefPattern{{Type: actions_model.EnvironmentPatternTag, Pattern: "v*"}}
+			})
+			sha, _, rsErr := git.NewCommand(t.Context(), "rev-parse").AddDynamicArguments(repo.DefaultBranch).RunStdString(&git.RunOpts{Dir: repo.RepoPath()})
+			require.NoError(t, rsErr)
+			sha = strings.TrimSpace(sha)
+			// branches whose names read as a tag and as another branch
+			for _, name := range []string{"refs/tags/v99", "refs/heads/release/2"} {
+				_, _, rsErr := git.NewCommand(t.Context(), "update-ref").AddDynamicArguments("refs/heads/"+name, sha).RunStdString(&git.RunOpts{Dir: repo.RepoPath()})
+				require.NoError(t, rsErr)
+			}
+			before := unittest.GetCount(t, &actions_model.ActionRun{RepoID: repo.ID})
+			for _, ref := range []string{"refs/tags/v99", "v99", "tags/v99", "refs/heads/release/2", "heads/release/2"} {
+				MakeRequest(t, NewRequestWithJSON(t, http.MethodPost,
+					fmt.Sprintf("/api/v1/repos/%s/%s/actions/workflows/env-dispatch.yml/dispatches", user2.Name, repo.Name),
+					&api.DispatchWorkflowOption{Ref: ref, Inputs: map[string]string{"target": "tag-v"}},
+				).AddTokenAuth(token), http.StatusBadRequest)
+			}
+			assert.Equal(t, before, unittest.GetCount(t, &actions_model.ActionRun{RepoID: repo.ID}), "none of them started a run")
+			e, err := actions_model.GetRepoEnvironmentByName(t.Context(), repo.ID, "tag-v")
+			require.NoError(t, err)
+			count, err := db.GetEngine(t.Context()).Where("environment_id = ?", e.ID).Count(new(actions_model.ActionDeployment))
+			require.NoError(t, err)
+			assert.Zero(t, count, "the environment released nothing")
+			assert.Nil(t, runner.maybeFetchTask(t))
+
+			// the real name of such a branch is the one that works
+			MakeRequest(t, NewRequestWithJSON(t, http.MethodPost,
+				fmt.Sprintf("/api/v1/repos/%s/%s/actions/workflows/env-dispatch.yml/dispatches", user2.Name, repo.Name),
+				&api.DispatchWorkflowOption{Ref: "refs/heads/refs/tags/v99", Inputs: map[string]string{"target": "from-input"}},
+			).AddTokenAuth(token), http.StatusNoContent)
+			runner.execTask(t, runner.fetchTask(t), &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
+		})
+
 		t.Run("deleting an environment fails the jobs that no runner took", func(t *testing.T) {
 			waiting := newEnv("del-timer", func(e *actions_model.ActionEnvironment) { e.WaitTimerMinutes = 10 })
 			released := newEnv("del-released", nil)
@@ -472,7 +510,7 @@ jobs:
 			goneJobs := push("env-m", "environment: gone-env")
 			require.Equal(t, actions_model.StatusWaiting, reload(goneJobs[0]).Status)
 			// the environment goes without the service that fails its jobs, as if another server had missed them
-			require.NoError(t, actions_model.DeleteEnvironment(ctx, gone))
+			require.NoError(t, actions_service.DeleteEnvironment(ctx, gone))
 
 			other := createActionsTestRepo(t, token, "actions-environments-other", false)
 			token2, err := actions_model.NewRunnerToken(ctx, optional.Some(user2.ID), optional.None[int64]())
