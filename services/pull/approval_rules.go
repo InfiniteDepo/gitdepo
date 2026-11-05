@@ -341,11 +341,7 @@ func (g *pullGitInfo) matchOwners(budget *git_model.PathMatchBudget) bool {
 		return g.ownerLines != nil
 	}
 	g.ownersMatched = true
-	insts := 0
-	for _, line := range g.owners.Rules {
-		insts += git_model.RegexpInsts(line.Rule)
-	}
-	if !budget.Take(g.files, insts) {
+	if !budget.Take(g.files, issue_service.CodeOwnerPatterns(g.owners.Rules)) {
 		return false
 	}
 	g.ownerLines = make(map[string][]*issues_model.CodeOwnerRule, len(g.files))

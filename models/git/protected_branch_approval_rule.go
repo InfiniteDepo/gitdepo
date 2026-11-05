@@ -52,8 +52,7 @@ type ApprovalRule struct {
 
 // pathMatcher holds the compiled path patterns of a rule; invalid if a stored pattern is beyond the limits.
 type pathMatcher struct {
-	patterns []*regexp.Regexp
-	insts    int // of all patterns, see RegexpInsts
+	patterns []PathPattern
 	invalid  bool
 }
 
@@ -154,9 +153,10 @@ func (r *ApprovalRule) IsApprover(ctx context.Context, userID int64) (bool, erro
 const (
 	maxPathPatterns     = 100
 	maxPathPatternBytes = 8 << 10
-	// MaxPathMatchWork is path bytes times instructions of the compiled patterns (see MatchWork): about 1 s for
+	// MaxPathMatchWork is path bytes times instructions of the compiled patterns (see PathPattern): about 1 s for
 	// ordinary CODEOWNERS lines and glob patterns, about 3 s for the slowest ones per instruction (about 6 ns per byte
-	// and instruction). 1000 changed files of 80 bytes against a CODEOWNERS file of 500 ordinary lines fit.
+	// and instruction). A pattern with a literal prefix (`docs/…`) is charged only that prefix for a path that doesn't
+	// start with it, so 1000 changed files against a CODEOWNERS file of 1000 such lines fit many times over.
 	MaxPathMatchWork = 512 << 20
 )
 
@@ -172,34 +172,58 @@ func NewPathMatchBudget() *PathMatchBudget {
 	return &PathMatchBudget{left: MaxPathMatchWork}
 }
 
-// Take takes the work of matching the files against patterns of insts instructions (see RegexpInsts) from the
-// budget, false (and nothing taken) if less is left.
-func (b *PathMatchBudget) Take(files []string, insts int) bool {
-	work := 0
-	for _, f := range files {
-		// can't overflow: the files are bounded by the size of a diff, the instructions by the patterns' size
-		work += len(f) * insts
+// PathPattern is a compiled path pattern with what matching it costs (see PathMatchBudget).
+type PathPattern struct {
+	*regexp.Regexp
+	insts  int    // instructions of the compiled program
+	prefix string // the literal an anchored pattern starts with, "" if none
+}
+
+// NewPathPattern returns re with its cost. Go's regular expressions run in time linear in the input and the number of
+// instructions of the program, so path bytes times instructions bounds the time of a match. A pattern anchored at
+// the start with a literal (`^docs/.*$`) fails on the first bytes of a path without that literal: only those are
+// charged then. A pattern that can't be parsed again costs more than any budget.
+func NewPathPattern(re *regexp.Regexp) PathPattern {
+	p := PathPattern{Regexp: re, insts: MaxPathMatchWork + 1}
+	parsed, err := syntax.Parse(re.String(), syntax.Perl)
+	if err != nil {
+		return p
 	}
-	if work > b.left {
-		return false
+	parsed = parsed.Simplify()
+	prog, err := syntax.Compile(parsed)
+	if err != nil {
+		return p
+	}
+	p.insts = len(prog.Inst)
+	if parsed.Op == syntax.OpConcat && len(parsed.Sub) > 1 && parsed.Sub[0].Op == syntax.OpBeginText {
+		if lit := parsed.Sub[1]; lit.Op == syntax.OpLiteral && lit.Flags&syntax.FoldCase == 0 {
+			p.prefix = string(lit.Rune)
+		}
+	}
+	return p
+}
+
+// cost is the work of matching the path against the pattern.
+func (p PathPattern) cost(path string) int {
+	if p.prefix != "" && !strings.HasPrefix(path, p.prefix) {
+		return len(p.prefix) + 1
+	}
+	return len(path) * p.insts
+}
+
+// Take takes the work of matching the paths against the patterns from the budget, false (and nothing taken) if less
+// is left.
+func (b *PathMatchBudget) Take(paths []string, patterns []PathPattern) bool {
+	work := 0
+	for _, p := range patterns {
+		for _, path := range paths {
+			if work += p.cost(path); work > b.left {
+				return false
+			}
+		}
 	}
 	b.left -= work
 	return true
-}
-
-// RegexpInsts returns the number of instructions of the compiled program of re. Go's regular expressions run in
-// time linear in the input and the program, so path bytes times instructions bounds the time of a match. A pattern
-// that can't be parsed again counts as more than any budget.
-func RegexpInsts(re *regexp.Regexp) int {
-	parsed, err := syntax.Parse(re.String(), syntax.Perl)
-	if err != nil {
-		return MaxPathMatchWork + 1
-	}
-	prog, err := syntax.Compile(parsed.Simplify())
-	if err != nil {
-		return MaxPathMatchWork + 1
-	}
-	return len(prog.Inst)
 }
 
 // AppliesTo returns true if the rule has no path patterns or one of the changed files matches. If the paths can't be
@@ -228,13 +252,16 @@ func (r *ApprovalRule) FilesInScope(budget *PathMatchBudget, changedFiles []stri
 	if len(m.patterns) == 0 {
 		return nil, true
 	}
-	if !budget.Take(changedFiles, m.insts) {
+	paths := make([]string, len(changedFiles))
+	for i, f := range changedFiles {
+		paths[i] = strings.ToLower(strings.TrimSpace(f))
+	}
+	if !budget.Take(paths, m.patterns) {
 		return nil, false
 	}
-	inScope = make([]bool, len(changedFiles))
-	for i, f := range changedFiles {
-		f = strings.ToLower(strings.TrimSpace(f))
-		inScope[i] = slices.ContainsFunc(m.patterns, func(g *regexp.Regexp) bool { return g.MatchString(f) })
+	inScope = make([]bool, len(paths))
+	for i, f := range paths {
+		inScope[i] = slices.ContainsFunc(m.patterns, func(g PathPattern) bool { return g.MatchString(f) })
 	}
 	return inScope, true
 }
@@ -259,8 +286,7 @@ func (r *ApprovalRule) pathMatcher() *pathMatcher {
 			r.paths.invalid = true
 			return r.paths
 		}
-		r.paths.patterns = append(r.paths.patterns, g)
-		r.paths.insts += RegexpInsts(g)
+		r.paths.patterns = append(r.paths.patterns, NewPathPattern(g))
 	}
 	return r.paths
 }

@@ -272,20 +272,44 @@ func TestApprovalRulePathMatchingSharedBudget(t *testing.T) {
 	assert.True(t, matches && decided)
 }
 
-// The work of a match is path bytes times instructions: Take refuses what is beyond what is left, and RegexpInsts
-// grows with a counted repetition, which costs time per byte in proportion.
+// The work of a match is path bytes times instructions, and only the literal prefix for a path that an anchored
+// pattern can't match: Take refuses what is beyond what is left.
 func TestPathMatchBudgetTake(t *testing.T) {
-	small, big := regexp.MustCompile(`^.*\.go$`), regexp.MustCompile(`^.*(a|b|/){1,1000}x$`)
-	assert.Less(t, git_model.RegexpInsts(small), 20)
-	assert.Greater(t, git_model.RegexpInsts(big), 1000)
-
-	budget := git_model.NewPathMatchBudget()
+	heavy := git_model.NewPathPattern(regexp.MustCompile(`^.*(a|b|/){1,1000}x$`))
 	file := strings.Repeat("a", 1<<10)
-	files := make([]string, git_model.MaxPathMatchWork/(1<<10)/git_model.RegexpInsts(big))
-	for i := range files {
-		files[i] = file
+	budget := git_model.NewPathMatchBudget()
+	// the heavy pattern has thousands of instructions: a few hundred KiB of paths take the whole budget
+	files := []string{}
+	for budget.Take([]string{file}, []git_model.PathPattern{heavy}) {
+		files = append(files, file)
 	}
-	require.True(t, budget.Take(files, git_model.RegexpInsts(big)))
-	assert.False(t, budget.Take([]string{file}, git_model.RegexpInsts(big)), "nothing that big is left")
-	assert.True(t, budget.Take([]string{"a.go"}, 1), "a small match still fits")
+	assert.Greater(t, len(files), 10)
+	assert.Less(t, len(files), 1000)
+	assert.True(t, budget.Take([]string{"a.go"}, []git_model.PathPattern{git_model.NewPathPattern(regexp.MustCompile(`^.*\.go$`))}), "a small match still fits")
+
+	// a CODEOWNERS file of 1000 prefix lines and 1000 changed files outside them cost little: the paths start with
+	// none of the prefixes but one
+	lines := make([]git_model.PathPattern, 1000)
+	for i := range lines {
+		lines[i] = git_model.NewPathPattern(regexp.MustCompile(fmt.Sprintf(`^team%04d/.*$`, i)))
+	}
+	paths := make([]string, 1000)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("team0001/vendor/github.com/example/module%04d/file.go", i)
+	}
+	budget = git_model.NewPathMatchBudget()
+	require.True(t, budget.Take(paths, lines))
+	for range 20 {
+		require.True(t, budget.Take(paths, lines), "each about 10 MiB of the 512 MiB")
+	}
+
+	// a prefix that ignores case is no literal prefix: the whole path is charged
+	folded := git_model.NewPathPattern(regexp.MustCompile(`^(?i)team0001/.*$`))
+	budget = git_model.NewPathMatchBudget()
+	big := strings.Repeat("x", 64<<10)
+	n := 0
+	for budget.Take([]string{big}, []git_model.PathPattern{folded}) {
+		n++
+	}
+	assert.Less(t, n, 1000)
 }

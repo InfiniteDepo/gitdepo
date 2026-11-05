@@ -65,6 +65,17 @@ func workSetup(t *testing.T, name, codeowners string) (owner APITestContext, rep
 	}
 
 	// 20 files with paths of about 4 KiB: matching one rule takes a large part of the budget
+	var paths []string
+	for i := range 20 {
+		paths = append(paths, strings.Repeat("ab/", 1360)+fmt.Sprintf("f%d", i))
+	}
+	commitFiles(t, repo, name, name+"-head", paths)
+	return owner, repo, e, e.open(name, name+"-head", "long paths")
+}
+
+// commitFiles commits the files at paths (each holding "x") on top of base as branch head, without a work tree.
+func commitFiles(t *testing.T, repo *repo_model.Repository, base, head string, paths []string) {
+	t.Helper()
 	index := filepath.Join(t.TempDir(), "index")
 	git := func(stdin string, args ...string) string {
 		cmd := exec.Command("git", args...)
@@ -75,14 +86,14 @@ func workSetup(t *testing.T, name, codeowners string) (owner APITestContext, rep
 		require.NoError(t, err, string(out))
 		return strings.TrimSpace(string(out))
 	}
-	git("", "read-tree", name)
+	git("", "read-tree", base)
 	blob := git("x", "hash-object", "-w", "--stdin")
-	for i := range 20 {
-		git("", "update-index", "--add", "--cacheinfo", "100644,"+blob+","+strings.Repeat("ab/", 1360)+fmt.Sprintf("f%d", i))
+	var info strings.Builder
+	for _, p := range paths {
+		fmt.Fprintf(&info, "100644 %s\t%s\n", blob, p)
 	}
-	commit := git("", "commit-tree", git("", "write-tree"), "-p", name, "-m", "long paths")
-	git("", "update-ref", "refs/heads/"+name+"-head", commit)
-	return owner, repo, e, e.open(name, name+"-head", "long paths")
+	git(info.String(), "update-index", "--add", "--index-info")
+	git("", "update-ref", "refs/heads/"+head, git("", "commit-tree", git("", "write-tree"), "-p", base, "-m", "files"))
 }
 
 // timed runs f and fails if it takes 4 s or more: it was about 13 s per request (0.2 s per rule), twice that with
@@ -91,7 +102,7 @@ func timed(t *testing.T, what string, f func()) {
 	t.Helper()
 	start := time.Now()
 	f()
-	assert.Less(t, time.Since(start), 4*time.Second, what)
+	assert.Less(t, time.Since(start), 4*time.Second*slowdown, what)
 }
 
 // One evaluation of the approval rules of a pull request shares one work budget: every rule of the three levels,
@@ -141,5 +152,38 @@ func TestApprovalRulesWorkWithCodeOwners(t *testing.T) {
 		timed(t, "merge check", func() { e.merge(pull, http.StatusMethodNotAllowed) })
 		// the rules that apply are checked against CODEOWNERS only while the budget lasts
 		assert.Contains(t, body, "codeowners-unchecked")
+	})
+}
+
+// A legitimate large pull request stays mergeable: a CODEOWNERS file of 1000 prefix lines and 1000 changed files
+// (a mass vendoring) cost only the prefixes of the lines a path doesn't start with, so the code owner's approval
+// counts and the pull request merges.
+func TestApprovalRulesWorkLargePullRequest(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		name := "ar-work-mono"
+		var co strings.Builder
+		var paths []string
+		for i := range 1000 {
+			fmt.Fprintf(&co, "team%04d/.* @user1\n", i)
+			paths = append(paths, fmt.Sprintf("team%04d/vendor/github.com/example/lib/file.go", i))
+		}
+		bwRepo(t, name)
+		repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{OwnerName: "org3", Name: name})
+		e := newDREnv(t, repo.ID)
+		e.branch(name)
+		e.change(name, "", create("CODEOWNERS", co.String()))
+		e.do("POST", "/branch_protections", &api.CreateBranchProtectionOption{RuleName: name, ApprovalRules: []*api.ApprovalRule{
+			{Name: "Owners", RequiredCount: 1, RequireCodeOwners: true},
+		}}, http.StatusCreated)
+		commitFiles(t, repo, name, name+"-head", paths)
+		pull := e.open(name, name+"-head", "vendor")
+		token := getTokenForLoggedInUser(t, loginUser(t, "user1"), auth_model.AccessTokenScopeWriteRepository)
+		MakeRequest(t, NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/repos/org3/%s/pulls/%d/reviews", name, pull), &api.CreatePullReviewOptions{Event: api.ReviewStateApproved}).AddTokenAuth(token), http.StatusOK)
+
+		var rules []*api.PullApprovalRule
+		timed(t, "approvals", func() { rules = e.approvals(pull) })
+		require.Len(t, rules, 1)
+		assert.True(t, rules[0].Satisfied)
+		timed(t, "merge", func() { e.merge(pull, http.StatusOK) })
 	})
 }
