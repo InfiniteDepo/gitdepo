@@ -31,6 +31,7 @@ import (
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/cache"
 	"forgejo.org/modules/git"
 	"forgejo.org/modules/gitrepo"
 	"forgejo.org/modules/graceful"
@@ -363,7 +364,8 @@ func TryProcess(ctx context.Context, repoID int64, branch string) (bool, error) 
 		}
 	}()
 	for range maxRounds {
-		again, err := processOnce(ctx, repoID, branch)
+		// each pass reads the heads of its pull requests once (the checks and the merge share them)
+		again, err := processOnce(cache.WithCacheContext(ctx), repoID, branch)
 		if err != nil {
 			return true, err
 		}

@@ -77,6 +77,38 @@ for (const {name, base, team} of forms) {
       await deleteRule(page, rule);
     });
 
+    test('request reviews with a source branch: 0 approvals allowed, save and reload', async ({page}) => {
+      const rule = `ar-request-${dynamic_id()}`;
+      await page.goto(`${base}/edit`);
+      await page.locator('input[name="rule_name"]').fill(rule);
+      await add(page).click();
+      const card = cards(page).first();
+      await card.locator('input[name="approval_rule_name"]').fill('Ask');
+      await pickUser(page, 0, 'user2');
+      // the source branch shows only with the option
+      const source = card.locator('input[name="approval_rule_source_branch"]');
+      await expect(source).toBeHidden();
+      // 0 approvals needs the option
+      await card.locator('input[name="approval_rule_count"]').fill('0');
+      await save(page).click();
+      await expect(card.locator('.approval-rule-error[data-error="count"]')).toBeVisible();
+      await card.locator('select[name="approval_rule_request_reviews"]').selectOption('true');
+      await expect(source).toBeVisible();
+      await source.fill('feature/*');
+      await screenshot(page);
+      await save(page).click();
+      await page.waitForLoadState('domcontentloaded');
+
+      await page.goto(`${base}/edit?rule_name=${rule}`);
+      await expect(cards(page)).toHaveCount(1);
+      await expect(cards(page).first().locator('input[name="approval_rule_count"]')).toHaveValue('0');
+      await expect(cards(page).first().locator('select[name="approval_rule_request_reviews"]')).toHaveValue('true');
+      await expect(cards(page).first().locator('input[name="approval_rule_source_branch"]')).toHaveValue('feature/*');
+      await screenshot(page);
+
+      await deleteRule(page, rule);
+    });
+
     test('Add is disabled at the limit', async ({page}) => {
       await page.goto(`${base}/edit`);
       for (let i = 0; i < 20; i++) await add(page).click();

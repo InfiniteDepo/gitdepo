@@ -199,12 +199,14 @@ func toBranchProtection(ctx context.Context, bp *git_model.ProtectedBranch, read
 	}
 	for _, r := range rules {
 		approvalRules = append(approvalRules, &api.ApprovalRule{
-			Name:              r.Name,
-			RequiredCount:     r.RequiredCount,
-			Usernames:         getWhitelistEntities(readers, r.UserIDs),
-			Teams:             getWhitelistEntities(teamReaders, r.TeamIDs),
-			PathPatterns:      r.PathPatterns,
-			RequireCodeOwners: r.RequireCodeOwners,
+			Name:                r.Name,
+			RequiredCount:       r.RequiredCount,
+			Usernames:           getWhitelistEntities(readers, r.UserIDs),
+			Teams:               getWhitelistEntities(teamReaders, r.TeamIDs),
+			PathPatterns:        r.PathPatterns,
+			RequireCodeOwners:   r.RequireCodeOwners,
+			RequestReviews:      r.RequestReviews,
+			SourceBranchPattern: r.SourceBranchPattern,
 		})
 	}
 
