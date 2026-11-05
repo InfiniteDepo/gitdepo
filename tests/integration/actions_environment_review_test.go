@@ -598,6 +598,41 @@ jobs:
 			assert.Nil(t, runner.maybeFetchTask(t))
 		})
 
+		t.Run("a change of rules whose own pass failed takes effect at the next tick", func(t *testing.T) {
+			e := newEnv("lost-pass", []int64{user4.ID}, nil)
+			run, job := pushJob("", "rv-j", "    environment: lost-pass\n", "echo")
+			require.Equal(t, actions_model.DeploymentWaitingReview, deployment(job, 1).Status)
+			isDue := func() bool {
+				due, err := actions_model.FindDueDeploymentRunIDs(t.Context(), timeutil.TimeStampNow(), 1000)
+				require.NoError(t, err)
+				return slices.Contains(due, run.ID)
+			}
+			// the environment doesn't change, or a save changes nothing: the tick has nothing to do for the run
+			// times have second resolution: move both back, so the change below is in a later second than either
+			_, err := db.GetEngine(t.Context()).Exec("UPDATE action_environment SET updated = updated - 10 WHERE id = ?", e.ID)
+			require.NoError(t, err)
+			_, err = db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET updated = updated - 5 WHERE job_id = ?", job.ID)
+			require.NoError(t, err)
+			assert.False(t, isDue())
+			MakeRequest(t, NewRequestWithJSON(t, "PUT", fmt.Sprintf("/api/v1/repos/%s/%s/actions/environments/lost-pass", user2.Name, repo.Name),
+				api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: user4.ID}}}).AddTokenAuth(ownerToken), http.StatusOK)
+			assert.False(t, isDue())
+
+			// the reviewers are removed and the change is committed, but its own pass of the gate never runs (what
+			// SaveEnvironment leaves behind when emitEnvironmentRuns fails): the job still waits
+			stored, err := actions_model.GetRepoEnvironmentByID(ctx, repo.ID, e.ID)
+			require.NoError(t, err)
+			require.NoError(t, actions_model.UpdateEnvironment(ctx, stored, nil))
+			assert.Equal(t, actions_model.StatusBlocked, reload(job).Status)
+			assert.True(t, isDue())
+
+			// the next tick decides it by the rules as they are: released
+			require.NoError(t, actions_service.StartDueDeployments(t.Context()))
+			assert.Equal(t, actions_model.DeploymentReleased, deployment(job, 1).Status)
+			assert.False(t, isDue())
+			runner.execTask(t, runner.fetchTask(t), &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
+		})
+
 		t.Run("reviewers go with their user and their environment", func(t *testing.T) {
 			var cleanupEnvID int64
 			count := func() int64 {

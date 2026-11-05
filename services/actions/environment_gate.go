@@ -475,8 +475,10 @@ func getVariablesOfJob(ctx context.Context, job *actions_model.ActionRunJob) (ma
 	return vars, nil
 }
 
-// StartDueDeployments runs the emitter for the runs with a job whose wait timer ended, which releases the job. It
-// holds nothing between runs: the gate moves a deployment with a conditional update, so two servers can run it.
+// StartDueDeployments runs the emitter for the runs with a job whose wait timer ended, which releases the job, and for
+// the runs with a deployment that waits under rules changed since it last did, which the gate decides again: a change
+// of rules whose own pass failed (emitEnvironmentRuns) takes effect here, a tick later. It holds nothing between runs:
+// the gate moves a deployment with a conditional update, so two servers can run it.
 func StartDueDeployments(ctx context.Context) error {
 	runIDs, err := actions_model.FindDueDeploymentRunIDs(ctx, timeutil.TimeStampNow(), maxDueDeploymentRuns)
 	if err != nil {
@@ -484,11 +486,15 @@ func StartDueDeployments(ctx context.Context) error {
 	}
 	for _, runID := range runIDs {
 		if err := EmitJobsIfReady(runID); err != nil {
-			log.Error("EmitJobsIfReady for run %d after a wait timer: %v", runID, err)
+			log.Error("EmitJobsIfReady for run %d after a wait timer or a change of rules: %v", runID, err)
 			// to the back of the line, so that a run that always fails doesn't starve the others
 			if err := actions_model.TouchDueDeployments(ctx, runID, timeutil.TimeStampNow()); err != nil {
 				log.Error("TouchDueDeployments for run %d: %v", runID, err)
 			}
+			continue
+		}
+		if err := actions_model.TouchStaleDeployments(ctx, runID); err != nil {
+			log.Error("TouchStaleDeployments for run %d: %v", runID, err)
 		}
 	}
 	return nil

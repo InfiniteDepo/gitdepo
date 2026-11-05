@@ -159,9 +159,18 @@ func TouchDeployment(ctx context.Context, id int64, now timeutil.TimeStamp) erro
 	return err
 }
 
+// staleDeployment is true for a deployment that waits (for its timer or a review) whose environment changed after the
+// deployment last did: an edit of the rules whose own pass of the gate (emitEnvironmentRuns) failed, or didn't decide
+// it yet. Times have second resolution, so an edit in the same second as the deployment's last change isn't seen here;
+// that edit's own pass decides it.
+const staleDeployment = "(action_deployment.status IN (?, ?) AND EXISTS (SELECT 1 FROM action_environment " +
+	"WHERE action_environment.id = action_deployment.environment_id AND action_environment.repo_id = action_deployment.repo_id " +
+	"AND action_environment.updated > action_deployment.updated))"
+
 // FindDueDeploymentRunIDs returns the runs, at most limit, with a blocked job whose deployment waits for a wait timer
-// that ended, or was rejected or expired and whose job the gate has not failed yet, the ones looked at longest ago first (TouchDueDeployments moves a run whose pass failed to the back, so
-// runs that always fail can't starve the others).
+// that ended, was rejected or expired and whose job the gate has not failed yet, or waits under rules that changed
+// since (staleDeployment), the ones looked at longest ago first (TouchDueDeployments moves a run whose pass failed to
+// the back, TouchStaleDeployments one whose pass started, so runs that always fail can't starve the others).
 func FindDueDeploymentRunIDs(ctx context.Context, now timeutil.TimeStamp, limit int) ([]int64, error) {
 	var ids []int64
 	return ids, db.GetEngine(ctx).Table("action_deployment").
@@ -170,15 +179,27 @@ func FindDueDeploymentRunIDs(ctx context.Context, now timeutil.TimeStamp, limit 
 		And(builder.Or(
 			builder.And(builder.Eq{"action_deployment.status": DeploymentWaitingTimer}, builder.Lte{"action_deployment.release_after_unix": now}),
 			builder.In("action_deployment.status", DeploymentRejected, DeploymentExpired),
+			builder.Expr(staleDeployment, DeploymentWaitingTimer, DeploymentWaitingReview),
 		)).
 		Select("action_deployment.run_id").GroupBy("action_deployment.run_id").
 		OrderBy("MIN(action_deployment.updated), action_deployment.run_id").Limit(limit).Find(&ids)
 }
 
-// TouchDueDeployments sets the update time of the run's deployments that wait for a timer to now.
+// TouchDueDeployments sets the update time of the run's deployments that wait for a timer, were rejected or expired to
+// now, except a stale one (staleDeployment): it keeps its time, so that the change of rules is still seen.
 func TouchDueDeployments(ctx context.Context, runID int64, now timeutil.TimeStamp) error {
 	_, err := db.GetEngine(ctx).Table("action_deployment").Where("run_id = ?", runID).And(builder.In("status", DeploymentWaitingTimer, DeploymentRejected, DeploymentExpired)).
+		And(builder.Not{builder.Expr(staleDeployment, DeploymentWaitingTimer, DeploymentWaitingReview)}).
 		Update(map[string]any{"updated": now})
+	return err
+}
+
+// TouchStaleDeployments marks the run's stale deployments (staleDeployment) as seen once the gate was queued for the
+// run: their update time becomes their environment's, so they are no longer stale until the rules change again.
+func TouchStaleDeployments(ctx context.Context, runID int64) error {
+	_, err := db.GetEngine(ctx).Exec("UPDATE action_deployment SET updated = (SELECT action_environment.updated FROM action_environment "+
+		"WHERE action_environment.id = action_deployment.environment_id) WHERE action_deployment.run_id = ? AND "+staleDeployment,
+		runID, DeploymentWaitingTimer, DeploymentWaitingReview)
 	return err
 }
 

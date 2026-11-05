@@ -217,3 +217,57 @@ func TestEnvironmentRowLock(t *testing.T) {
 	unittest.AssertNotExistsBean(t, &secret_model.Secret{EnvironmentID: env.ID})
 	unittest.AssertNotExistsBean(t, &ActionVariable{EnvironmentID: env.ID})
 }
+
+// A deployment that waits under rules changed after it last did is due, so a change of rules whose own pass of the gate
+// failed is decided by the next tick; once that pass is queued, or while the environment doesn't change, it isn't.
+func TestStaleDeploymentsAreDue(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := auditCtx()
+	now := timeutil.TimeStampNow()
+	_, err := db.GetEngine(ctx).Exec("UPDATE action_run_job SET status = ? WHERE id IN (192, 193)", StatusBlocked)
+	require.NoError(t, err)
+	env := &ActionEnvironment{RepoID: 4, Name: "prod"}
+	require.NoError(t, CreateEnvironment(ctx, env, nil))
+	review := &ActionDeployment{RepoID: 4, EnvironmentID: env.ID, RunID: 791, JobID: 192, Attempt: 3, Status: DeploymentWaitingReview}
+	timer := &ActionDeployment{RepoID: 4, EnvironmentID: env.ID, RunID: 792, JobID: 193, Attempt: 1, Status: DeploymentWaitingTimer, ReleaseAfterUnix: now + 3600}
+	require.NoError(t, db.Insert(ctx, review))
+	require.NoError(t, db.Insert(ctx, timer))
+	setTimes := func(envUpdated, deploymentsUpdated timeutil.TimeStamp) {
+		_, err := db.GetEngine(ctx).Exec("UPDATE action_environment SET updated = ? WHERE id = ?", envUpdated, env.ID)
+		require.NoError(t, err)
+		_, err = db.GetEngine(ctx).Exec("UPDATE action_deployment SET updated = ? WHERE environment_id = ?", deploymentsUpdated, env.ID)
+		require.NoError(t, err)
+	}
+	due := func() []int64 {
+		runs, err := FindDueDeploymentRunIDs(ctx, now, 10)
+		require.NoError(t, err)
+		return runs
+	}
+
+	setTimes(now-100, now-50) // the environment didn't change since the deployments did
+	assert.Empty(t, due())
+	setTimes(now-50, now-50) // the same second: not after
+	assert.Empty(t, due())
+
+	setTimes(now-10, now-50) // the rules changed after the deployments
+	assert.ElementsMatch(t, []int64{791, 792}, due())
+	// a failed pass keeps the change visible (a timer's deployment is not touched), the other runs stay due
+	require.NoError(t, TouchDueDeployments(ctx, 792, now))
+	assert.ElementsMatch(t, []int64{791, 792}, due())
+	// a queued pass marks them seen
+	require.NoError(t, TouchStaleDeployments(ctx, 791))
+	assert.Equal(t, []int64{792}, due())
+	require.NoError(t, TouchStaleDeployments(ctx, 792))
+	assert.Empty(t, due())
+	got, err := GetDeployment(ctx, 192, 3)
+	require.NoError(t, err)
+	assert.Equal(t, now-10, got.Updated, "seen as of the environment's change")
+
+	// a deployment that no longer waits, or of another repository's environment, is never stale
+	setTimes(now-10, now-50)
+	_, err = db.GetEngine(ctx).Exec("UPDATE action_deployment SET status = ? WHERE id = ?", DeploymentReleased, review.ID)
+	require.NoError(t, err)
+	_, err = db.GetEngine(ctx).Exec("UPDATE action_deployment SET repo_id = 5 WHERE id = ?", timer.ID)
+	require.NoError(t, err)
+	assert.Empty(t, due())
+}

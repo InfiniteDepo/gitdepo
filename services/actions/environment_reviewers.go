@@ -77,8 +77,8 @@ func SaveEnvironment(ctx context.Context, doer *user_model.User, e *actions_mode
 // emitEnvironmentRuns queues the gate for the runs that have a job of the environment no runner took yet, after a
 // change of its rules has committed, so those jobs are decided by the rules as they are now (a removed review releases
 // them, a new one holds them) and don't wait for another event. It runs outside any transaction, after the change
-// committed, so a failure here is logged and doesn't fail the change: the jobs are then decided at the next event of
-// their run, or by the cron tasks (a wait timer that ends, a review that times out).
+// committed, so a failure here is logged and doesn't fail the change: the jobs are then decided by the next tick of
+// StartDueDeployments, which finds the deployments that wait under rules changed since.
 func emitEnvironmentRuns(ctx context.Context, e *actions_model.ActionEnvironment) {
 	jobs, err := actions_model.FindUnpickedEnvironmentJobs(ctx, e.RepoID, e.ID)
 	if err != nil {
