@@ -12,7 +12,7 @@ export function initRepoSettingsEnvironment() {
   if (confirm) {
     const button = document.querySelector('#environment-delete-button');
     confirm.addEventListener('input', () => {
-      button.disabled = confirm.value.trim() !== confirm.getAttribute('data-name');
+      button.disabled = confirm.value !== confirm.getAttribute('data-name');
     });
   }
 }

@@ -27,7 +27,7 @@
 						<div class="default text">{{ctx.Locale.Tr "actions.environments.reviewers.placeholder"}}</div>
 						<div class="menu">
 							{{range .ReviewerOptions}}
-								<div class="item{{if or .Reason .Unknown}} environment-reviewer-ineligible{{end}}" data-value="{{.Key}}">
+								<div class="item{{if or .Unknown (and .Reason (ne .Reason "outsider"))}} environment-reviewer-ineligible{{end}}" data-value="{{.Key}}">
 									{{if .Unknown}}{{svg "octicon-question"}} {{ctx.Locale.Tr "actions.environments.reviewer.unknown"}} <span class="help">{{ctx.Locale.Tr "actions.environments.reviewer.unknown.desc"}}</span>
 									{{- else if .User}}{{ctx.AvatarUtils.Avatar .User 20 "mini"}}@{{.User.Name}}{{if .User.FullName}} <span class="text grey">{{.User.FullName}}</span>{{end}}
 									{{- else}}{{svg "octicon-people"}} {{$.Repository.Owner.Name}}/{{.Team.Name}}{{end}}
@@ -36,6 +36,7 @@
 											{{if eq .Reason "not_usable"}}{{ctx.Locale.Tr "actions.environments.reviewer.not_usable"}}
 											{{- else if eq .Reason "two_factor"}}{{ctx.Locale.Tr "actions.environments.reviewer.two_factor"}}
 											{{- else if eq .Reason "none_in_team"}}{{ctx.Locale.Tr "actions.environments.reviewer.none_in_team"}}
+											{{- else if eq .Reason "outsider"}}{{ctx.Locale.Tr "actions.environments.reviewer.outsider"}}
 											{{- else}}{{ctx.Locale.Tr "actions.environments.reviewer.no_access"}}{{end}}
 										</span>
 									{{end}}

@@ -60,8 +60,8 @@ func CreateSecret(ctx context.Context, ownerID, groupID, repoID, environmentID i
 	return secret_model.InsertEncryptedSecret(ctx, ownerID, groupID, repoID, name, data)
 }
 
-// EditSecret renames the secret with that ID of a level, and sets its value unless data is empty (checked as
-// CreateSecret checks it: after the caller normalized its line breaks); a secret of another level is util.ErrNotExist.
+// EditSecret renames the secret with that ID of a level, and sets its value unless data is empty (its size measured
+// as stored, by secret_model.ValidateValue); a secret of another level is util.ErrNotExist.
 func EditSecret(ctx context.Context, ownerID, groupID, repoID, environmentID, id int64, name, data string) (*secret_model.Secret, error) {
 	var s *secret_model.Secret
 	var err error

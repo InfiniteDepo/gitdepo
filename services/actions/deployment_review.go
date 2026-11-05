@@ -144,7 +144,20 @@ const (
 	ReviewerTwoFactor  = "two_factor"   // the owner requires two-factor authentication, which the user lacks
 	ReviewerNoAccess   = "no_access"    // can't read the repository's Actions
 	ReviewerNoneInTeam = "none_in_team" // a team none of whose members can approve
+	// ReviewerOutsider is a user without a membership path to the repository (memberPath), whatever their account:
+	// such a user can't be added (ErrReviewerNotMember), and one listed before is not decided for the doer
+	ReviewerOutsider = "outsider"
 )
+
+// memberKinds are the paths that relate a user to a repository: its owner, an owner of its organization, a member of
+// one of its teams or a collaborator. Only for them do the settings pages tell why they can't approve (their account
+// state is the business of whoever manages the repository), and only they are offered as reviewers.
+var memberKinds = []accessreport.Kind{accessreport.KindOwnerUser, accessreport.KindOrgOwner, accessreport.KindAdminTeam, accessreport.KindTeam, accessreport.KindCollaborator}
+
+// memberPath tells if a row of accessreport.Compute relates its user to the repository (memberKinds).
+func memberPath(row *accessreport.Row) bool {
+	return slices.ContainsFunc(row.Paths, func(p *accessreport.Path) bool { return slices.Contains(memberKinds, p.Kind) })
+}
 
 // reviewerIneligibility is what holds for a reviewer on every deployment of the repository (whose owner is loaded): a
 // usable person with read access to its Actions. It returns "" if u may review, otherwise why not.
@@ -172,20 +185,24 @@ func usableReviewer(u *user_model.User) bool {
 // EnvironmentReviewerCheck says, for the listed reviewers of environments of one repository, who can approve a
 // deployment at this moment by the rules every deployment shares (those of one run, such as self-review, are left out).
 type EnvironmentReviewerCheck struct {
-	Ineligible map[string]string // reviewer key (ActionEnvironmentReviewer.Key) -> why it can't approve; absent = can
-	NoReviewer map[int64]bool    // environment ID -> it requires reviews and no listed reviewer can approve
+	// Ineligible maps a reviewer key (ActionEnvironmentReviewer.Key) to why it can't approve; absent = can. A listed
+	// user without a membership path gets ReviewerOutsider whatever their account (for NoReviewer they count as able
+	// to approve where any signed-in user can read the repository's Actions).
+	Ineligible map[string]string
+	NoReviewer map[int64]bool // environment ID -> it requires reviews and no listed reviewer can approve
 	// Users are the listed users that exist (members of listed teams not included)
 	Users map[int64]*user_model.User
-	// Readers are the users with a path to the repository (owner, collaborators, members of its teams) who can
-	// approve, in name order: the ones to offer as reviewers. Site admins whose only path is that role are left out.
+	// Readers are the users with a membership path to the repository (memberPath) who can approve, in name order:
+	// the ones to offer as reviewers.
 	Readers []*user_model.User
 }
 
-// CheckEnvironmentReviewers decides the reviewers of the environments of repo with the rule of ReviewChecker.May
-// (reviewerIneligibility), with a fixed number of queries: the members of the listed teams in one, and the access of
-// every user to the repository through accessreport.Compute, which replays GetUserRepoPermission. A team counts as soon
-// as one member can approve.
-func CheckEnvironmentReviewers(ctx context.Context, repo *repo_model.Repository, envs []*actions_model.ActionEnvironment, reviewers map[int64][]*actions_model.ActionEnvironmentReviewer) (*EnvironmentReviewerCheck, error) {
+// CheckEnvironmentReviewers decides the reviewers of the environments of repo for the doer's settings pages with the
+// rule of ReviewChecker.May (reviewerIneligibility), with a fixed number of queries: the members of the listed teams
+// in one, and the access of every user to the repository through accessreport.Compute, which replays
+// GetUserRepoPermission. A team counts as soon as one member can approve. Only users with a membership path are
+// decided in detail, unless the doer is a site administrator: the pages must not tell anyone else's account state.
+func CheckEnvironmentReviewers(ctx context.Context, repo *repo_model.Repository, doer *user_model.User, envs []*actions_model.ActionEnvironment, reviewers map[int64][]*actions_model.ActionEnvironmentReviewer) (*EnvironmentReviewerCheck, error) {
 	var userIDs, teamIDs, listedIDs []int64
 	for _, rs := range reviewers {
 		for _, r := range rs {
@@ -214,14 +231,27 @@ func CheckEnvironmentReviewers(ctx context.Context, repo *repo_model.Repository,
 		return nil, err
 	}
 	check := &EnvironmentReviewerCheck{Ineligible: map[string]string{}, NoReviewer: map[int64]bool{}, Users: map[int64]*user_model.User{}}
+	// whether an outsider may approve: the pseudo-row of signed-in users (not the one of the members of a private owner
+	// organization) reads the repository's Actions
+	outsiderMay := false
+	for _, row := range rows {
+		if row.User == nil && row.Team == nil && row.DeployKey == nil && row.OrgDeployKey == nil && row.AccessToken == nil &&
+			!row.Anonymous && len(row.Paths) > 0 && row.Paths[0].Kind != accessreport.KindOrgMember && row.Perm.CanRead(unit.TypeActions) {
+			outsiderMay = true
+		}
+	}
+	detailed := doer != nil && doer.IsAdmin
 	listed := container.SetOf(listedIDs...)
 	decided := map[int64]string{} // a user without a row is no individual or no longer exists
 	for _, row := range rows {
 		if row.User == nil {
 			continue
 		}
+		member := memberPath(row)
 		why := ""
 		switch {
+		case !member && !detailed:
+			why = ReviewerOutsider
 		case !usableReviewer(row.User):
 			why = ReviewerNotUsable
 		case row.TwoFactorBlocked:
@@ -233,7 +263,7 @@ func CheckEnvironmentReviewers(ctx context.Context, repo *repo_model.Repository,
 		if listed.Contains(row.User.ID) {
 			check.Users[row.User.ID] = row.User
 		}
-		if why == "" && slices.ContainsFunc(row.Paths, func(p *accessreport.Path) bool { return p.Kind != accessreport.KindSiteAdmin }) {
+		if why == "" && member {
 			check.Readers = append(check.Readers, row.User)
 		}
 	}
@@ -243,12 +273,13 @@ func CheckEnvironmentReviewers(ctx context.Context, repo *repo_model.Repository,
 		}
 		return ReviewerNotUsable
 	}
+	// a team can approve as soon as one member can; a member without a path counts where outsiders may approve
 	keyReason := func(r *actions_model.ActionEnvironmentReviewer) string {
 		if r.TeamID == 0 {
 			return reason(r.UserID)
 		}
 		for _, uid := range members[r.TeamID] {
-			if reason(uid) == "" {
+			if why := reason(uid); why == "" || (why == ReviewerOutsider && outsiderMay) {
 				return ""
 			}
 		}
@@ -257,9 +288,11 @@ func CheckEnvironmentReviewers(ctx context.Context, repo *repo_model.Repository,
 	for _, env := range envs {
 		eligible := false
 		for _, r := range reviewers[env.ID] {
-			if why := keyReason(r); why == "" {
+			why := keyReason(r)
+			if why == "" || (why == ReviewerOutsider && outsiderMay) {
 				eligible = true
-			} else {
+			}
+			if why != "" {
 				check.Ineligible[r.Key()] = why
 			}
 		}

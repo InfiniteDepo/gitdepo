@@ -15,14 +15,17 @@ import (
 	"forgejo.org/modules/container"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/util"
+	"forgejo.org/services/accessreport"
 )
 
 // Refusals of a list of reviewers. ErrUnknownReviewer is the one answer for a reviewer that is missing, hidden from
-// the doer or of the wrong type, so the list is no way to learn about accounts.
+// the doer or of the wrong type, and ErrReviewerNotMember for a user without a membership path to the repository
+// whatever their account, so the list is no way to learn about accounts.
 var (
-	ErrUnknownReviewer  = util.NewInvalidArgumentErrorf("unknown reviewer")
-	ErrTooManyReviewers = util.NewInvalidArgumentErrorf("too many reviewers")
-	ErrReviewerTwice    = util.NewInvalidArgumentErrorf("a reviewer is listed once")
+	ErrUnknownReviewer   = util.NewInvalidArgumentErrorf("unknown reviewer")
+	ErrReviewerNotMember = util.NewInvalidArgumentErrorf("a reviewer is the owner, a member of a team of the repository or a collaborator")
+	ErrTooManyReviewers  = util.NewInvalidArgumentErrorf("too many reviewers")
+	ErrReviewerTwice     = util.NewInvalidArgumentErrorf("a reviewer is listed once")
 )
 
 // SaveEnvironment saves the rules of e with the users and teams as its required reviewers (at most
@@ -69,8 +72,8 @@ func CreateEnvironment(ctx context.Context, doer *user_model.User, e *actions_mo
 }
 
 // environmentReviewers checks the list and turns the IDs into the reviewers of e (the model writers check that the
-// change is the doer's own act): a
-// user is an individual account the doer can see, a team belongs to the organization that owns the repository. Only
+// change is the doer's own act): a user is an individual account the doer can see with a membership path to the
+// repository (memberPath), a team belongs to the organization that owns the repository. Only
 // entries the environment doesn't list yet are checked: keeping a listed one reveals nothing new, and one whose user
 // or team was deleted or hidden meanwhile must not block every other change (it stays listed until removed, and can't
 // approve, so the gate stays closed).
@@ -136,7 +139,33 @@ func environmentReviewers(ctx context.Context, doer *user_model.User, e *actions
 		if found != len(container.SetOf(newUserIDs...)) {
 			return nil, ErrUnknownReviewer
 		}
+		// only who relates to the repository can be listed: anyone else is refused with one answer, so a list never
+		// tells about the account of a stranger (a site administrator sees every account's state anyway)
+		if doer.IsAdmin {
+			return checkReviewerTeams(ctx, repo, stored, teamIDs, reviewers)
+		}
+		rows, err := accessreport.Compute(ctx, accessreport.Options{RepoIDs: []int64{repo.ID}, Users: newUserIDs, RepoPermission: true})
+		if err != nil {
+			return nil, err
+		}
+		members := container.Set[int64]{}
+		for _, row := range rows {
+			if row.User != nil && memberPath(row) {
+				members.Add(row.User.ID)
+			}
+		}
+		for _, id := range newUserIDs {
+			if !members.Contains(id) {
+				return nil, ErrReviewerNotMember
+			}
+		}
 	}
+	return checkReviewerTeams(ctx, repo, stored, teamIDs, reviewers)
+}
+
+// checkReviewerTeams adds the teams to the reviewers: a team not listed yet must belong to the organization that owns
+// the repository.
+func checkReviewerTeams(ctx context.Context, repo *repo_model.Repository, stored map[string]bool, teamIDs []int64, reviewers []actions_model.ActionEnvironmentReviewer) ([]actions_model.ActionEnvironmentReviewer, error) {
 	for _, id := range teamIDs {
 		r := actions_model.ActionEnvironmentReviewer{TeamID: id}
 		if !stored[r.Key()] {

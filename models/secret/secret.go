@@ -402,10 +402,11 @@ var ErrEnvironmentFull = util.NewInvalidArgumentErrorf("an environment holds at 
 // ErrValueTooLarge is the refusal of a value larger than MaxValueSize.
 var ErrValueTooLarge = util.NewInvalidArgumentErrorf("the value is larger than 64 KiB")
 
-// ValidateValue refuses a value of a secret or variable larger than MaxValueSize. It is checked on the value as
-// stored, after its line breaks are normalized, so a value can be edited whenever it can be created.
+// ValidateValue refuses a value of a secret or variable larger than MaxValueSize. It measures the value as stored,
+// with its line breaks normalized (util.ReserveLineBreakForTextarea, as Secret.SetData and the variable writers do),
+// so every path that stores a value (web, API, create or edit) accepts the same values.
 func ValidateValue(data string) error {
-	if len(data) > MaxValueSize {
+	if len(data)-strings.Count(data, "\r\n") > MaxValueSize {
 		return ErrValueTooLarge
 	}
 	return nil

@@ -633,3 +633,116 @@ func TestActionsEnvironmentsWebQueries(t *testing.T) {
 	}
 	assert.Equal(t, count(1), count(20))
 }
+
+// The pages tell nothing about an account that has no membership path to the repository: site administrators and
+// auditors are never offered, a stranger can't be added and shows the one answer of a non-member whatever their
+// account (deactivated, login prohibited, with or without 2FA), and a list of any length is bounded before a lookup.
+func TestActionsEnvironmentsWebOutsiders(t *testing.T) {
+	if !setting.Database.Type.IsSQLite3() {
+		t.Skip()
+	}
+	defer tests.PrepareTestEnv(t)()
+	ctx := db.DefaultContext
+	ownerTok := getUserToken(t, "user2", auth_model.AccessTokenScopeWriteRepository, auth_model.AccessTokenScopeWriteUser, auth_model.AccessTokenScopeWriteOrganization)
+	owner := loginUser(t, "user2") // before the 2FA row below, which would ask for a second factor
+	priv := createActionsTestRepo(t, ownerTok, "env-outsiders", true)
+	createActionsTestRepo(t, ownerTok, "env-outsiders-pub", false)
+	base := "/user2/env-outsiders/settings/actions/environments"
+	form := func(kv ...string) map[string]string {
+		v := map[string]string{"ref_policy": "0", "wait_timer": "0"}
+		for i := 0; i+1 < len(kv); i += 2 {
+			v[kv[i]] = kv[i+1]
+		}
+		return v
+	}
+	reasonOf := func(body string, uid int) string {
+		m := regexp.MustCompile(`(?s)data-value="user:` + strconv.Itoa(uid) + `">.*?<span class="help">\s*(.*?)\s*</span>`).FindStringSubmatch(body)
+		if m == nil {
+			return ""
+		}
+		return m[1]
+	}
+
+	t.Run("site administrators and auditors are not offered", func(t *testing.T) {
+		_, err := db.Exec(ctx, "UPDATE `user` SET is_auditor = ? WHERE id = 11", true)
+		require.NoError(t, err)
+		defer func() {
+			_, err := db.Exec(ctx, "UPDATE `user` SET is_auditor = ? WHERE id = 11", false)
+			require.NoError(t, err)
+		}()
+		for _, p := range []string{"/user2/env-outsiders-pub/settings/actions/environments/new", base + "/new"} {
+			body := owner.MakeRequest(t, NewRequest(t, "GET", p), http.StatusOK).Body.String()
+			assert.NotContains(t, body, `data-value="user:1"`, "the site admin on %s", p)
+			assert.NotContains(t, body, `data-value="user:11"`, "an auditor on %s", p)
+			assert.NotContains(t, body, `data-value="user:31"`, "a private user who shares nothing on %s", p)
+			assert.Contains(t, body, `data-value="user:2"`, p)
+		}
+	})
+
+	t.Run("a stranger's account state is not told", func(t *testing.T) {
+		// user9 is deactivated, user37 can't sign in, user11 is a plain active user: none relates to the repository
+		resp := owner.MakeRequest(t, NewRequestWithValues(t, "POST", base+"/new", form("name", "probe", "reviewers", "user:9,user:37,user:11")), http.StatusOK)
+		body := resp.Body.String()
+		assert.Contains(t, body, "A reviewer must be the owner, a collaborator or a member of a team with access to this repository.")
+		unittest.AssertNotExistsBean(t, &actions_model.ActionEnvironment{RepoID: priv.ID, LowerName: "probe"})
+		for _, uid := range []int{9, 37, 11} {
+			assert.Equal(t, "not a member of this repository", reasonOf(body, uid), "user %d", uid)
+		}
+
+		// listed before (as a site administrator may): the edit page tells the same
+		require.Equal(t, http.StatusSeeOther, owner.MakeRequest(t, NewRequestWithValues(t, "POST", base+"/new", form("name", "probe")), NoExpectedStatus).Code)
+		probe, err := actions_model.GetRepoEnvironmentByName(ctx, priv.ID, "probe")
+		require.NoError(t, err)
+		for _, uid := range []int64{9, 37, 11} {
+			require.NoError(t, db.Insert(ctx, &actions_model.ActionEnvironmentReviewer{EnvironmentID: probe.ID, UserID: uid}))
+		}
+		body = owner.MakeRequest(t, NewRequest(t, "GET", fmt.Sprintf("%s/%d", base, probe.ID)), http.StatusOK).Body.String()
+		for _, uid := range []int{9, 37, 11} {
+			assert.Equal(t, "not a member of this repository", reasonOf(body, uid), "listed user %d", uid)
+		}
+	})
+
+	t.Run("2FA enrolment of a non-member is not told", func(t *testing.T) {
+		// user24 has 2FA, user11 hasn't; neither is a member of an organization that requires it
+		_, err := db.Exec(ctx, "INSERT INTO two_factor (uid, secret, scratch_salt, scratch_hash, created_unix, updated_unix) SELECT 2, secret, scratch_salt, scratch_hash, created_unix, updated_unix FROM two_factor WHERE uid = 24")
+		require.NoError(t, err)
+		defer func() {
+			_, err := db.Exec(ctx, "DELETE FROM two_factor WHERE uid = 2")
+			require.NoError(t, err)
+		}()
+		MakeRequest(t, NewRequestWithJSON(t, "POST", "/api/v1/orgs", &api.CreateOrgOption{UserName: "env-2fa"}).AddTokenAuth(ownerTok), http.StatusCreated)
+		MakeRequest(t, NewRequestWithJSON(t, "POST", "/api/v1/orgs/env-2fa/repos", &api.CreateRepoOption{Name: "pub", AutoInit: true}).AddTokenAuth(ownerTok), http.StatusCreated)
+		_, err = db.Exec(ctx, "UPDATE `user` SET require_two_factor = ? WHERE lower_name = ?", true, "env-2fa")
+		require.NoError(t, err)
+		body := owner.MakeRequest(t, NewRequestWithValues(t, "POST", "/env-2fa/pub/settings/actions/environments/new", form("name", "probe", "reviewers", "user:24,user:11")), http.StatusOK).Body.String()
+		assert.Equal(t, "not a member of this repository", reasonOf(body, 24))
+		assert.Equal(t, reasonOf(body, 24), reasonOf(body, 11))
+	})
+
+	t.Run("a list of any length is refused by its size", func(t *testing.T) {
+		keys := make([]string, 40000)
+		for i := range keys {
+			keys[i] = "user:" + strconv.Itoa(100000+i)
+		}
+		require.Equal(t, http.StatusSeeOther, owner.MakeRequest(t, NewRequestWithValues(t, "POST", base+"/new", form("name", "alpha")), NoExpectedStatus).Code)
+		alpha, err := actions_model.GetRepoEnvironmentByName(ctx, priv.ID, "alpha")
+		require.NoError(t, err)
+		for _, link := range []string{base + "/new", fmt.Sprintf("%s/%d", base, alpha.ID)} {
+			body := owner.MakeRequest(t, NewRequestWithValues(t, "POST", link, form("name", "huge", "reviewers", strings.Join(keys, ","))), http.StatusOK).Body.String()
+			assert.Contains(t, body, "At most 6 reviewers.", link)
+		}
+		unittest.AssertNotExistsBean(t, &actions_model.ActionEnvironment{RepoID: priv.ID, LowerName: "huge"})
+	})
+
+	t.Run("the delete confirmation is the exact name", func(t *testing.T) {
+		alpha, err := actions_model.GetRepoEnvironmentByName(ctx, priv.ID, "alpha")
+		require.NoError(t, err)
+		link := fmt.Sprintf("%s/%d/delete", base, alpha.ID)
+		for _, typed := range []string{"alpha\r", " alpha", "alpha\n", "ALPHA"} {
+			owner.MakeRequest(t, NewRequestWithValues(t, "POST", link, map[string]string{"confirm_name": typed}), http.StatusSeeOther)
+			unittest.AssertExistsAndLoadBean(t, &actions_model.ActionEnvironment{ID: alpha.ID})
+		}
+		owner.MakeRequest(t, NewRequestWithValues(t, "POST", link, map[string]string{"confirm_name": "alpha"}), http.StatusSeeOther)
+		unittest.AssertNotExistsBean(t, &actions_model.ActionEnvironment{ID: alpha.ID})
+	})
+}

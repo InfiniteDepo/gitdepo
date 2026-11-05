@@ -32,10 +32,9 @@ func SetSecretsContext(ctx *context.Context, ownerID, groupID, repoID, environme
 func CreateSecretPost(ctx *context.Context, ownerID, groupID, repoID, environmentID int64, redirectURL string) {
 	form := web.GetForm(ctx).(*forms.CreateSecretForm)
 
-	normalizedData := util.ReserveLineBreakForTextarea(form.Data)
-	secret, err := secrets_service.CreateSecret(ctx, ownerID, groupID, repoID, environmentID, form.Name, normalizedData)
+	secret, err := secrets_service.CreateSecret(ctx, ownerID, groupID, repoID, environmentID, form.Name, form.Data)
 	if err != nil {
-		failed(ctx, "CreateSecret", err, ctx.Tr("secrets.creation.failed"))
+		Failed(ctx, "CreateSecret", err, ctx.Tr("secrets.creation.failed"), ctx.Tr("actions.secrets.value_too_large", secret_model.MaxValueSize>>10))
 		return
 	}
 
@@ -46,9 +45,9 @@ func CreateSecretPost(ctx *context.Context, ownerID, groupID, repoID, environmen
 func EditSecretPost(ctx *context.Context, ownerID, groupID, repoID, environmentID, id int64, redirectURL string) {
 	form := web.GetForm(ctx).(*forms.EditSecretForm)
 
-	secret, err := secrets_service.EditSecret(ctx, ownerID, groupID, repoID, environmentID, id, form.Name, util.ReserveLineBreakForTextarea(form.Data))
+	secret, err := secrets_service.EditSecret(ctx, ownerID, groupID, repoID, environmentID, id, form.Name, form.Data)
 	if err != nil {
-		failed(ctx, "EditSecret", err, ctx.Tr("actions.secrets.mutation.failure_message", form.Name))
+		Failed(ctx, "EditSecret", err, ctx.Tr("actions.secrets.mutation.failure_message", form.Name), ctx.Tr("actions.secrets.value_too_large", secret_model.MaxValueSize>>10))
 		return
 	}
 
@@ -59,7 +58,7 @@ func EditSecretPost(ctx *context.Context, ownerID, groupID, repoID, environmentI
 func DeleteSecretPost(ctx *context.Context, ownerID, groupID, repoID, environmentID, id int64, redirectURL string) {
 	err := secrets_service.DeleteSecretByID(ctx, ownerID, groupID, repoID, environmentID, id)
 	if err != nil {
-		failed(ctx, "DeleteSecretByID", err, ctx.Tr("secrets.deletion.failed"))
+		Failed(ctx, "DeleteSecretByID", err, ctx.Tr("secrets.deletion.failed"), nil)
 		return
 	}
 
@@ -67,10 +66,10 @@ func DeleteSecretPost(ctx *context.Context, ownerID, groupID, repoID, environmen
 	ctx.JSONRedirect(redirectURL)
 }
 
-// failed answers a change of a secret that didn't happen: 404 for a secret that is not of the level (one answer for
-// edit and delete), 403 for a change that is not the doer's own act (a refusal, logged at Info), otherwise the
-// message, with the error logged.
-func failed(ctx *context.Context, what string, err error, msg any) {
+// Failed answers a change of a secret or variable that didn't happen: 404 for one that is not of the level (one answer
+// for edit and delete), 403 for a change that is not the doer's own act (a refusal, logged at Info), tooLarge for a
+// value over secret_model.MaxValueSize, otherwise msg, with the error logged.
+func Failed(ctx *context.Context, what string, err error, msg, tooLarge any) {
 	switch {
 	case errors.Is(err, util.ErrNotExist):
 		ctx.NotFound(what, err)
@@ -78,7 +77,7 @@ func failed(ctx *context.Context, what string, err error, msg any) {
 		log.Info("%s refused: %v", what, err)
 		ctx.Error(http.StatusForbidden)
 	case errors.Is(err, secret_model.ErrValueTooLarge):
-		ctx.JSONError(ctx.Tr("actions.secrets.value_too_large", secret_model.MaxValueSize>>10))
+		ctx.JSONError(tooLarge)
 	case errors.Is(err, secret_model.ErrEnvironmentFull):
 		ctx.JSONError(ctx.Tr("actions.environments.full", secret_model.MaxPerEnvironment, secret_model.MaxPerEnvironment))
 	default:

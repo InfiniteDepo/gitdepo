@@ -4,15 +4,13 @@
 package actions
 
 import (
-	"errors"
-	"net/http"
 
 	actions_model "forgejo.org/models/actions"
 	"forgejo.org/models/db"
 	secret_model "forgejo.org/models/secret"
-	"forgejo.org/modules/log"
 	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
+	shared_secrets "forgejo.org/routers/web/shared/secrets"
 	actions_service "forgejo.org/services/actions"
 	"forgejo.org/services/context"
 	"forgejo.org/services/forms"
@@ -38,7 +36,7 @@ func CreateVariable(ctx *context.Context, ownerID, groupID, repoID, environmentI
 
 	v, err := actions_service.CreateVariable(ctx, ownerID, groupID, repoID, environmentID, form.Name, form.Data)
 	if err != nil {
-		failed(ctx, "CreateVariable", err, true, ctx.Tr("actions.variables.creation.failed"))
+		shared_secrets.Failed(ctx, "CreateVariable", err, ctx.Tr("actions.variables.creation.failed"), tooLarge(ctx))
 		return
 	}
 
@@ -51,7 +49,7 @@ func UpdateVariable(ctx *context.Context, ownerID, groupID, repoID, environmentI
 	form := web.GetForm(ctx).(*forms.EditVariableForm)
 
 	if ok, err := actions_service.UpdateVariable(ctx, id, ownerID, groupID, repoID, environmentID, form.Name, form.Data); err != nil || !ok {
-		failed(ctx, "UpdateVariable", err, ok, ctx.Tr("actions.variables.update.failed"))
+		shared_secrets.Failed(ctx, "UpdateVariable", notFound(ok, err), ctx.Tr("actions.variables.update.failed"), tooLarge(ctx))
 		return
 	}
 	ctx.Flash.Success(ctx.Tr("actions.variables.update.success"))
@@ -62,29 +60,21 @@ func DeleteVariable(ctx *context.Context, ownerID, groupID, repoID, environmentI
 	id := ctx.ParamsInt64(":variable_id")
 
 	if ok, err := actions_service.DeleteVariableByID(ctx, id, ownerID, groupID, repoID, environmentID); err != nil || !ok {
-		failed(ctx, "DeleteVariableByID", err, ok, ctx.Tr("actions.variables.deletion.failed"))
+		shared_secrets.Failed(ctx, "DeleteVariableByID", notFound(ok, err), ctx.Tr("actions.variables.deletion.failed"), nil)
 		return
 	}
 	ctx.Flash.Success(ctx.Tr("actions.variables.deletion.success"))
 	ctx.JSONRedirect(redirectURL)
 }
 
-// failed answers a change of a variable that didn't happen (found false: no variable of that ID in the level): 404
-// for a variable that is not of the level (one answer for edit and delete), 403 for a change that is not the doer's
-// own act (a refusal, logged at Info), otherwise the message, with the error logged.
-func failed(ctx *context.Context, what string, err error, found bool, msg any) {
-	switch {
-	case errors.Is(err, util.ErrPermissionDenied):
-		log.Info("%s refused: %v", what, err)
-		ctx.Error(http.StatusForbidden)
-	case errors.Is(err, util.ErrNotExist), err == nil && !found:
-		ctx.NotFound(what, err)
-	case errors.Is(err, secret_model.ErrValueTooLarge):
-		ctx.JSONError(ctx.Tr("actions.variables.value_too_large", secret_model.MaxValueSize>>10))
-	case errors.Is(err, secret_model.ErrEnvironmentFull):
-		ctx.JSONError(ctx.Tr("actions.environments.full", secret_model.MaxPerEnvironment, secret_model.MaxPerEnvironment))
-	default:
-		log.Error("%s failed: %v", what, err)
-		ctx.JSONError(msg)
+// notFound is the error of a change that found no variable of that ID in the level (ok false without an error).
+func notFound(ok bool, err error) error {
+	if err == nil && !ok {
+		return util.ErrNotExist
 	}
+	return err
+}
+
+func tooLarge(ctx *context.Context) any {
+	return ctx.Tr("actions.variables.value_too_large", secret_model.MaxValueSize>>10)
 }

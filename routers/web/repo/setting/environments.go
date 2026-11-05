@@ -34,15 +34,9 @@ const (
 	tplEnvironment  base.TplName = "repo/settings/environment"
 )
 
-// environmentLevel is where the environments of a settings page live: the repository's own for now. The handlers and
-// templates read the level only from here, so that an organization's environments can reuse them.
-type environmentLevel struct {
-	Repo *repo_model.Repository
-	Link string // the list of environments
-}
-
-func environmentLevelOf(ctx *context.Context) *environmentLevel {
-	return &environmentLevel{Repo: ctx.Repo.Repository, Link: ctx.Repo.RepoLink + "/settings/actions/environments"}
+// environmentsLink is the list of the repository's environments.
+func environmentsLink(ctx *context.Context) string {
+	return ctx.Repo.RepoLink + "/settings/actions/environments"
 }
 
 // RequireEnvironmentManager lets only who may manage the environments through the API (reqOwner(unit.TypeActions))
@@ -57,10 +51,9 @@ func RequireEnvironmentManager(ctx *context.Context) {
 	ctx.Data["Title"] = ctx.Tr("actions.environments")
 }
 
-// EnvironmentAssignment finds the environment of the URL in the level; one of another repository is not found.
+// EnvironmentAssignment finds the environment of the URL in the repository; one of another repository is not found.
 func EnvironmentAssignment(ctx *context.Context) {
-	level := environmentLevelOf(ctx)
-	env, err := actions_model.GetRepoEnvironmentByID(ctx, level.Repo.ID, ctx.ParamsInt64(":environment_id"))
+	env, err := actions_model.GetRepoEnvironmentByID(ctx, ctx.Repo.Repository.ID, ctx.ParamsInt64(":environment_id"))
 	if errors.Is(err, actions_model.ErrEnvironmentNotFound) {
 		ctx.NotFound("GetRepoEnvironmentByID", err)
 		return
@@ -69,7 +62,7 @@ func EnvironmentAssignment(ctx *context.Context) {
 		return
 	}
 	ctx.Data["Environment"] = env
-	ctx.Data["EnvironmentLink"] = level.Link + "/" + strconv.FormatInt(env.ID, 10)
+	ctx.Data["EnvironmentLink"] = environmentsLink(ctx) + "/" + strconv.FormatInt(env.ID, 10)
 }
 
 func assignedEnvironment(ctx *context.Context) (*actions_model.ActionEnvironment, string) {
@@ -177,10 +170,10 @@ func environmentSummary(ctx *context.Context, e *actions_model.ActionEnvironment
 	return template.HTML(strings.Join(parts, " · ")) // every part is escaped above
 }
 
-// Environments lists the environments of the level.
+// Environments lists the environments of the repository.
 func Environments(ctx *context.Context) {
-	level := environmentLevelOf(ctx)
-	envs, _, err := actions_model.FindRepoEnvironments(ctx, level.Repo.ID, db.ListOptions{})
+	repo := ctx.Repo.Repository
+	envs, _, err := actions_model.FindRepoEnvironments(ctx, repo.ID, db.ListOptions{})
 	if err != nil {
 		ctx.ServerError("FindRepoEnvironments", err)
 		return
@@ -189,7 +182,7 @@ func Environments(ctx *context.Context) {
 	for i, e := range envs {
 		ids[i] = e.ID
 	}
-	secrets, variables, err := actions_model.CountEnvironmentSecretsAndVariables(ctx, level.Repo.ID, ids)
+	secrets, variables, err := actions_model.CountEnvironmentSecretsAndVariables(ctx, repo.ID, ids)
 	if err != nil {
 		ctx.ServerError("CountEnvironmentSecretsAndVariables", err)
 		return
@@ -199,12 +192,12 @@ func Environments(ctx *context.Context) {
 		ctx.ServerError("FindReviewersOfEnvironments", err)
 		return
 	}
-	check, err := actions_service.CheckEnvironmentReviewers(ctx, level.Repo, envs, reviewers)
+	check, err := actions_service.CheckEnvironmentReviewers(ctx, repo, ctx.Doer, envs, reviewers)
 	if err != nil {
 		ctx.ServerError("CheckEnvironmentReviewers", err)
 		return
 	}
-	last, err := lastDeployments(ctx, level.Repo, ids)
+	last, err := lastDeployments(ctx, repo, ids)
 	if err != nil {
 		ctx.ServerError("lastDeployments", err)
 		return
@@ -217,7 +210,7 @@ func Environments(ctx *context.Context) {
 		}
 	}
 	ctx.Data["Environments"] = rows
-	ctx.Data["EnvironmentsLink"] = level.Link
+	ctx.Data["EnvironmentsLink"] = environmentsLink(ctx)
 	ctx.Data["MaxEnvironments"] = actions_model.MaxEnvironmentsPerRepo
 	ctx.HTML(http.StatusOK, tplEnvironments)
 }
@@ -244,36 +237,52 @@ type reviewerOption struct {
 	Unknown bool
 }
 
-// parseReviewerKeys reads the listed reviewers of the form ("user:<id>" and "team:<id>", comma separated).
-func parseReviewerKeys(keys string) []*actions_model.ActionEnvironmentReviewer {
-	var listed []*actions_model.ActionEnvironmentReviewer
+// parseReviewers reads the listed reviewers of the form ("user:<id>" and "team:<id>", comma separated): at most
+// MaxEnvironmentReviewers of them, with ErrTooManyReviewers for more and errBadReviewer for an entry that is neither.
+func parseReviewers(keys string) (listed []*actions_model.ActionEnvironmentReviewer, err error) {
 	for key := range strings.SplitSeq(keys, ",") {
-		kind, id, _ := strings.Cut(strings.TrimSpace(key), ":")
-		n, _ := strconv.ParseInt(id, 10, 64)
-		if kind == "user" && n > 0 {
-			listed = append(listed, &actions_model.ActionEnvironmentReviewer{UserID: n})
-		} else if kind == "team" && n > 0 {
-			listed = append(listed, &actions_model.ActionEnvironmentReviewer{TeamID: n})
+		if key = strings.TrimSpace(key); key == "" {
+			continue
 		}
+		kind, id, _ := strings.Cut(key, ":")
+		n, parseErr := strconv.ParseInt(id, 10, 64)
+		r := &actions_model.ActionEnvironmentReviewer{}
+		switch {
+		case parseErr != nil || n <= 0:
+			err = errBadReviewer
+			continue
+		case kind == "user":
+			r.UserID = n
+		case kind == "team":
+			r.TeamID = n
+		default:
+			err = errBadReviewer
+			continue
+		}
+		if len(listed) == actions_model.MaxEnvironmentReviewers {
+			return listed, actions_service.ErrTooManyReviewers
+		}
+		listed = append(listed, r)
 	}
-	return listed
+	return listed, err
 }
 
-// prepareEnvironmentForm fills the data of the new/edit page; env is nil on the new page.
-func prepareEnvironmentForm(ctx *context.Context, level *environmentLevel, env *actions_model.ActionEnvironment, view *environmentFormView) {
+// prepareEnvironmentForm fills the data of the new/edit page; env is nil on the new page, stored are its reviewers.
+func prepareEnvironmentForm(ctx *context.Context, env *actions_model.ActionEnvironment, stored []*actions_model.ActionEnvironmentReviewer, view *environmentFormView) {
 	ctx.Data["Form"] = view
-	ctx.Data["EnvironmentsLink"] = level.Link
+	ctx.Data["EnvironmentsLink"] = environmentsLink(ctx)
 	ctx.Data["MaxReviewers"] = actions_model.MaxEnvironmentReviewers
 	ctx.Data["MaxWaitTimer"] = actions_model.MaxWaitTimerMinutes
 	ctx.Data["MaxWaitTimerDays"] = actions_model.MaxWaitTimerMinutes / (24 * 60)
 	ctx.Data["EmptyPattern"] = actions_model.EnvironmentRefPattern{}
-	repo := level.Repo
+	repo := ctx.Repo.Repository
 	ctx.Data["ReviewerTeams"] = repo.Owner.IsOrganization()
 
 	// The picker offers the users who can approve through their access to the repository and the teams of its
 	// owner, and keeps the listed entries (one it can't name is an unknown reviewer, to be removed); nobody the doer
 	// can't see. One bulk check decides them all, and the stored reviewers for the warning.
-	listed := parseReviewerKeys(view.Reviewers)
+	listed, _ := parseReviewers(view.Reviewers) // the error is the page's already
+
 	var teams []*org_model.Team
 	if repo.Owner.IsOrganization() {
 		var err error
@@ -290,15 +299,10 @@ func prepareEnvironmentForm(ctx *context.Context, level *environmentLevel, env *
 	reviewers := map[int64][]*actions_model.ActionEnvironmentReviewer{0: offered}
 	if env != nil {
 		// the warning and the delete confirmation read the stored environment, not the form
-		stored, err := actions_model.FindEnvironmentReviewers(ctx, env.ID)
-		if err != nil {
-			ctx.ServerError("FindEnvironmentReviewers", err)
-			return
-		}
 		envs = append(envs, env)
 		reviewers[env.ID] = stored
 	}
-	check, err := actions_service.CheckEnvironmentReviewers(ctx, repo, envs, reviewers)
+	check, err := actions_service.CheckEnvironmentReviewers(ctx, repo, ctx.Doer, envs, reviewers)
 	if err != nil {
 		ctx.ServerError("CheckEnvironmentReviewers", err)
 		return
@@ -380,7 +384,7 @@ func prepareEnvironmentForm(ctx *context.Context, level *environmentLevel, env *
 
 // EnvironmentNew shows the form of a new environment.
 func EnvironmentNew(ctx *context.Context) {
-	prepareEnvironmentForm(ctx, environmentLevelOf(ctx), nil, &environmentFormView{})
+	prepareEnvironmentForm(ctx, nil, nil, &environmentFormView{})
 	if !ctx.Written() {
 		ctx.HTML(http.StatusOK, tplEnvironment)
 	}
@@ -398,7 +402,7 @@ func EnvironmentEdit(ctx *context.Context) {
 	for i, r := range reviewers {
 		keys[i] = r.Key()
 	}
-	prepareEnvironmentForm(ctx, environmentLevelOf(ctx), env, &environmentFormView{
+	prepareEnvironmentForm(ctx, env, reviewers, &environmentFormView{
 		Name: env.Name, Reviewers: strings.Join(keys, ","), PreventSelfReview: env.PreventSelfReview,
 		WaitTimer: env.WaitTimerMinutes, RefPolicy: env.RefPolicy, Patterns: env.RefPatterns,
 		RunnerLabels: strings.Join(env.RunnerLabels, "\n"), AllowedWorkflows: strings.Join(env.AllowedWorkflows, "\n"),
@@ -418,10 +422,10 @@ func lines(s string) []string {
 	return out
 }
 
-// environmentFromForm reads the posted form into the rules of an environment of the level and the IDs of its
-// reviewers. A wait timer or ref policy that is no number, or a reviewer entry that is neither a user nor a team, is
-// the error of that rule.
-func environmentFromForm(form *forms.EnvironmentForm, level *environmentLevel) (env *actions_model.ActionEnvironment, view *environmentFormView, userIDs, teamIDs []int64, err error) {
+// environmentFromForm reads the posted form into the rules of an environment of the repository and the IDs of its
+// reviewers. A wait timer or ref policy that is no number, or a reviewer list parseReviewers refuses, is the error of
+// that rule.
+func environmentFromForm(form *forms.EnvironmentForm, repo *repo_model.Repository) (env *actions_model.ActionEnvironment, view *environmentFormView, userIDs, teamIDs []int64, err error) {
 	view = &environmentFormView{
 		Name: form.Name, Reviewers: form.Reviewers, PreventSelfReview: form.PreventSelfReview,
 		RunnerLabels: form.RunnerLabels, AllowedWorkflows: form.AllowedWorkflows,
@@ -441,27 +445,21 @@ func environmentFromForm(form *forms.EnvironmentForm, level *environmentLevel) (
 		}
 	}
 	env = &actions_model.ActionEnvironment{
-		RepoID: level.Repo.ID, Name: form.Name, PreventSelfReview: form.PreventSelfReview, WaitTimerMinutes: view.WaitTimer,
+		RepoID: repo.ID, Name: form.Name, PreventSelfReview: form.PreventSelfReview, WaitTimerMinutes: view.WaitTimer,
 		RefPolicy: view.RefPolicy, RunnerLabels: lines(form.RunnerLabels), AllowedWorkflows: lines(form.AllowedWorkflows),
 	}
 	if env.RefPolicy == actions_model.EnvironmentRefPatterns {
 		env.RefPatterns = view.Patterns // the rows of another choice are left in the page, not saved
 	}
-	for key := range strings.SplitSeq(form.Reviewers, ",") {
-		if key = strings.TrimSpace(key); key == "" {
-			continue
-		}
-		kind, id, _ := strings.Cut(key, ":")
-		n, parseErr := strconv.ParseInt(id, 10, 64)
-		switch {
-		case parseErr != nil:
-			err = errBadReviewer
-		case kind == "user":
-			userIDs = append(userIDs, n)
-		case kind == "team":
-			teamIDs = append(teamIDs, n)
-		default:
-			err = errBadReviewer
+	listed, parseErr := parseReviewers(form.Reviewers)
+	if parseErr != nil {
+		err = parseErr
+	}
+	for _, r := range listed {
+		if r.TeamID > 0 {
+			teamIDs = append(teamIDs, r.TeamID)
+		} else {
+			userIDs = append(userIDs, r.UserID)
 		}
 	}
 	return env, view, userIDs, teamIDs, err
@@ -503,6 +501,8 @@ func environmentError(ctx *context.Context, err error) template.HTML {
 		return ctx.Tr("actions.environments.error.limit", actions_model.MaxEnvironmentsPerRepo)
 	case errors.Is(err, actions_service.ErrTooManyReviewers):
 		return ctx.Tr("actions.environments.error.too_many_reviewers", actions_model.MaxEnvironmentReviewers)
+	case errors.Is(err, actions_service.ErrReviewerNotMember):
+		return ctx.Tr("actions.environments.error.reviewer_not_member")
 	case errors.Is(err, actions_service.ErrReviewerTwice):
 		return ctx.Tr("actions.environments.error.reviewer_twice")
 	case errors.Is(err, actions_service.ErrUnknownReviewer), errors.Is(err, errBadReviewer):
@@ -514,9 +514,8 @@ func environmentError(ctx *context.Context, err error) template.HTML {
 
 // saveEnvironment saves the posted form: a new environment when env is nil, otherwise its rules.
 func saveEnvironment(ctx *context.Context, env *actions_model.ActionEnvironment) {
-	level := environmentLevelOf(ctx)
 	form := web.GetForm(ctx).(*forms.EnvironmentForm)
-	e, view, userIDs, teamIDs, err := environmentFromForm(form, level)
+	e, view, userIDs, teamIDs, err := environmentFromForm(form, ctx.Repo.Repository)
 	if env != nil {
 		e.ID, e.Name, view.Name = env.ID, env.Name, env.Name // the name is not edited
 	}
@@ -528,7 +527,7 @@ func saveEnvironment(ctx *context.Context, env *actions_model.ActionEnvironment)
 	switch {
 	case err == nil:
 		ctx.Flash.Success(ctx.Tr("actions.environments.saved", e.Name))
-		ctx.Redirect(level.Link + "/" + strconv.FormatInt(e.ID, 10))
+		ctx.Redirect(environmentsLink(ctx) + "/" + strconv.FormatInt(e.ID, 10))
 		return
 	case errors.Is(err, util.ErrPermissionDenied):
 		ctx.Error(http.StatusForbidden)
@@ -540,7 +539,15 @@ func saveEnvironment(ctx *context.Context, env *actions_model.ActionEnvironment)
 		ctx.ServerError("SaveEnvironment", err)
 		return
 	}
-	prepareEnvironmentForm(ctx, level, env, view)
+	var stored []*actions_model.ActionEnvironmentReviewer
+	if env != nil {
+		var loadErr error
+		if stored, loadErr = actions_model.FindEnvironmentReviewers(ctx, env.ID); loadErr != nil {
+			ctx.ServerError("FindEnvironmentReviewers", loadErr)
+			return
+		}
+	}
+	prepareEnvironmentForm(ctx, env, stored, view)
 	if ctx.Written() {
 		return
 	}
@@ -561,7 +568,7 @@ func EnvironmentEditPost(ctx *context.Context) {
 // EnvironmentDeletePost deletes an environment once its name is typed.
 func EnvironmentDeletePost(ctx *context.Context) {
 	env, link := assignedEnvironment(ctx)
-	if strings.TrimSpace(ctx.Req.FormValue("confirm_name")) != env.Name {
+	if ctx.Req.FormValue("confirm_name") != env.Name { // the exact name, as the button's check
 		ctx.Flash.Error(ctx.Tr("actions.environments.delete.mismatch"))
 		ctx.Redirect(link)
 		return
@@ -579,7 +586,7 @@ func EnvironmentDeletePost(ctx *context.Context) {
 		return
 	}
 	ctx.Flash.Success(ctx.Tr("actions.environments.deleted", env.Name))
-	ctx.Redirect(environmentLevelOf(ctx).Link)
+	ctx.Redirect(environmentsLink(ctx))
 }
 
 // EnvironmentSecretCreate adds a secret to the environment.
