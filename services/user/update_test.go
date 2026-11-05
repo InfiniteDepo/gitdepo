@@ -280,7 +280,10 @@ func TestUpdateUserOwnAct(t *testing.T) {
 	require.ErrorIs(t, UpdateUser(grant, u, &UpdateOptions{IsAdmin: optional.Some(true)}), audit_model.ErrNotOwnAct)
 	assert.False(t, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 28}).IsAdmin)
 	require.ErrorIs(t, UpdateAuth(grant, u, &UpdateAuthOptions{Password: optional.Some("%$DRZUVB576tfzgu")}), audit_model.ErrNotOwnAct)
-	require.ErrorIs(t, CheckEditIsOwnAct(grant, u, &UpdateAuthOptions{}, &UpdateOptions{IsAdmin: optional.Some(true)}), audit_model.ErrNotOwnAct)
+	require.ErrorIs(t, CheckEditIsOwnAct(grant, u, &UpdateAuthOptions{}, &UpdateOptions{IsAdmin: optional.Some(true)}, ""), audit_model.ErrNotOwnAct)
+	require.ErrorIs(t, CheckEditIsOwnAct(grant, u, &UpdateAuthOptions{}, &UpdateOptions{}, "new-28@example.com"), audit_model.ErrNotOwnAct)
+	require.ErrorIs(t, AdminAddOrSetPrimaryEmailAddress(grant, u, "new-28@example.com"), audit_model.ErrNotOwnAct)
+	require.NoError(t, CheckEditIsOwnAct(grant, u, &UpdateAuthOptions{}, &UpdateOptions{}, u.Email), "an unchanged email")
 	require.NoError(t, UpdateUser(grant, u, &UpdateOptions{FullName: optional.Some("other fields")}))
 
 	self := audit_model.WithActor(db.DefaultContext, &audit_model.Actor{Type: audit_model.ActorUser, ID: 28, Name: u.Name, Credential: audit_model.Credential{Type: audit_model.CredentialSession}})

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/optional"
@@ -397,6 +398,10 @@ func ActivateUserEmail(ctx context.Context, userID int64, email string, activate
 		return nil
 	}
 	if activate {
+		// an activated address is where a mailed password reset goes (services/user checkEmailIsOwnAct)
+		if err := audit_model.CheckOwnActFor(ctx, userID); err != nil {
+			return err
+		}
 		if used, err := IsEmailActive(ctx, email, addr.ID); err != nil {
 			return fmt.Errorf("unable to check isEmailActive() for %s: %w", email, err)
 		} else if used {

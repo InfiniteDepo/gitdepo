@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	"forgejo.org/models/organization"
 	repo_model "forgejo.org/models/repo"
@@ -72,7 +73,7 @@ func TestRestore(t *testing.T) {
 // organization removes its projects and every name claim.
 func TestRepoGroupRestoreAndOrgPurge(t *testing.T) {
 	unittest.PrepareTestEnv(t)
-	ctx := t.Context()
+	ctx := audit_model.WithSystem(t.Context(), "test")
 	doer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
 	org3 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3})
 	pay, err := repo_model.CreateRepoGroup(ctx, org3, "pay", "")
@@ -166,7 +167,7 @@ func TestTeamGroupTrashRestore(t *testing.T) {
 func TestRestoreToNewOwnerAppliesDependencyGraph(t *testing.T) {
 	unittest.PrepareTestEnv(t)
 	t.Cleanup(test.MockVariableValue(&setting.DependencyGraph.Enabled, true))
-	ctx := t.Context()
+	ctx := audit_model.WithSystem(t.Context(), "test")
 	doer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
 	user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
 	require.NoError(t, user_model.SetUserSetting(ctx, 3, repo_model.DependencyGraphOrgKey, "false")) // org3 is off

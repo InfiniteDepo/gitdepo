@@ -409,7 +409,7 @@ func TestTrashOrgRace(t *testing.T) {
 func TestTrashRestoreNewOwnerAndName(t *testing.T) {
 	defer prepareTrash(t)()
 	admin := trashAdminUser(t)
-	ctx := t.Context()
+	ctx := audit_model.WithSystem(t.Context(), "test")
 	user4 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 4})
 	require.NoError(t, repo_service.DeleteRepository(ctx, admin, trashRepoByID(t, 5), false))
 	deleteOrg3(t)
@@ -665,7 +665,7 @@ func TestTrashUserTombstoneCleanup(t *testing.T) {
 	defer prepareTrash(t)()
 	missingRepoDirs(t)
 	admin := trashAdminUser(t)
-	ctx := t.Context()
+	ctx := audit_model.WithSystem(t.Context(), "test")
 	deleteUser27(t)
 
 	require.NoError(t, trash_service.Purge(ctx, admin, 45))
@@ -692,7 +692,7 @@ func TestTrashUserTombstoneRestoreAndSweep(t *testing.T) {
 	defer prepareTrash(t)()
 	missingRepoDirs(t)
 	admin := trashAdminUser(t)
-	ctx := t.Context()
+	ctx := audit_model.WithSystem(t.Context(), "test")
 	deleteUser27(t)
 
 	for _, id := range []int64{44, 49} {
@@ -848,7 +848,7 @@ func TestTrashRestoreNoStaleAccess(t *testing.T) {
 func TestTrashRestoreMoveConflict(t *testing.T) {
 	defer prepareTrash(t)()
 	admin := trashAdminUser(t)
-	ctx := t.Context()
+	ctx := audit_model.WithSystem(t.Context(), "test")
 	require.NoError(t, repo_service.DeleteRepository(ctx, admin, trashRepoByID(t, 5), false))
 
 	t.Run("purge claimed first", func(t *testing.T) {

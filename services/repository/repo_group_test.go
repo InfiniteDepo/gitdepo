@@ -201,7 +201,7 @@ func TestRepoGroupTransfer(t *testing.T) {
 
 func TestRepoGroupTrashAndDelete(t *testing.T) {
 	unittest.PrepareTestEnv(t)
-	ctx := t.Context()
+	ctx := audit_model.WithSystem(t.Context(), "test")
 	doer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
 	org3 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3})
 	user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})

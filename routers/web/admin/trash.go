@@ -13,6 +13,7 @@ import (
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/base"
 	"forgejo.org/modules/setting"
+	"forgejo.org/modules/util"
 	"forgejo.org/services/context"
 	trash_service "forgejo.org/services/trash"
 )
@@ -80,6 +81,8 @@ func trashDone(ctx *context.Context, err error, success template.HTML) {
 		ctx.Flash.Error(ctx.Tr("admin.trash.with_org"))
 	case errors.Is(err, trash_service.ErrOrgHasLiveRepos):
 		ctx.Flash.Error(ctx.Tr("admin.trash.org_live_repos"))
+	case errors.Is(err, util.ErrPermissionDenied):
+		ctx.Flash.Error(ctx.Tr("settings.credential_not_own_act"))
 	case trash_service.IsBadTarget(err):
 		ctx.Flash.Error(ctx.Tr("admin.trash.bad_target", err.Error()))
 	case err != nil:

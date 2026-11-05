@@ -53,8 +53,11 @@ type UpdateOptions struct {
 
 // CheckEditIsOwnAct refuses, before anything is written, what UpdateAuth and UpdateUser would refuse because it is
 // not a person's own act, so a handler that calls both changes nothing on a refusal.
-func CheckEditIsOwnAct(ctx context.Context, u *user_model.User, authOpts *UpdateAuthOptions, opts *UpdateOptions) error {
+func CheckEditIsOwnAct(ctx context.Context, u *user_model.User, authOpts *UpdateAuthOptions, opts *UpdateOptions, email string) error {
 	if err := checkPasswordIsOwnAct(ctx, u, authOpts.Password); err != nil {
+		return err
+	}
+	if err := checkEmailIsOwnAct(ctx, u, email); err != nil {
 		return err
 	}
 	return checkAdminFlagIsOwnAct(ctx, u, opts.IsAdmin)

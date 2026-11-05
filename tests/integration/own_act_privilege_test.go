@@ -15,7 +15,9 @@ import (
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/optional"
+	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
+	"forgejo.org/modules/test"
 	repo_service "forgejo.org/services/repository"
 	user_service "forgejo.org/services/user"
 	"forgejo.org/tests"
@@ -24,9 +26,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Acts that grant a privilege need the person's own act: a token or password for someone else, a rename, a
-// repository transfer (started or accepted), the site admin and auditor roles, and an organization owned by someone
-// else. An OAuth2 grant, an authorized integration and sudo get a 403 and nothing changes; the person's own token
+// Acts that grant a privilege need the person's own act: a token, password or email for someone else, a rename, a
+// repository transfer (started, accepted or a trash restore to a new owner), the site admin and auditor roles, and an
+// organization owned by someone else. An OAuth2 grant, an authorized integration and sudo get a 403 and nothing changes; the person's own token
 // is allowed, and login source syncs and system paths keep working.
 func TestPrivilegeGrantsAreOwnActs(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
@@ -169,5 +171,36 @@ func TestPrivilegeGrantsAreOwnActs(t *testing.T) {
 		require.NoError(t, repo_service.TransferOwnership(audit_model.WithSystem(t.Context(), "test"), unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1}),
 			unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2}), repo, nil))
 		unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1, OwnerID: 2})
+	})
+
+	t.Run("another user's primary email", func(t *testing.T) {
+		edit := func() *RequestWrapper {
+			return NewRequestWithJSON(t, "PATCH", "/api/v1/admin/users/user5", &api.EditUserOption{Email: new("taken-over@example.com"), FullName: new("changed")})
+		}
+		before := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5})
+		refused(t, edit)
+		after := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5})
+		assert.Equal(t, before.Email, after.Email)
+		assert.Equal(t, before.FullName, after.FullName, "nothing is written")
+		unittest.AssertNotExistsBean(t, &user_model.EmailAddress{LowerEmail: "taken-over@example.com"})
+		MakeRequest(t, own(edit()), http.StatusOK)
+		unittest.AssertExistsAndLoadBean(t, &user_model.EmailAddress{UID: 5, LowerEmail: "taken-over@example.com", IsPrimary: true, IsActivated: true})
+	})
+
+	t.Run("a trash restore to a new owner", func(t *testing.T) {
+		defer test.MockVariableValue(&setting.Trash.RetentionDays, 365)()
+		repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 16, OwnerID: 2})
+		require.NoError(t, repo_service.DeleteRepository(ownActCtx(t), unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1}), repo, false))
+		restore := func() *RequestWrapper {
+			return NewRequestWithJSON(t, "POST", "/api/v1/admin/trash/repo/16/restore", &api.RestoreTrashOption{NewOwner: "user5"})
+		}
+		refused(t, restore)
+		repo = trashRepoByID(t, 16)
+		assert.True(t, repo.IsTrashed())
+		assert.EqualValues(t, 2, repo.OwnerID)
+		MakeRequest(t, own(restore()), http.StatusNoContent)
+		repo = trashRepoByID(t, 16)
+		assert.False(t, repo.IsTrashed())
+		assert.EqualValues(t, 5, repo.OwnerID)
 	})
 }

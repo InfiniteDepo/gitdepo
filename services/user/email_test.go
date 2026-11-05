@@ -32,7 +32,7 @@ func TestAdminAddOrSetPrimaryEmailAddress(t *testing.T) {
 	assert.NotEqual(t, "new-primary@example.com", primary.Email)
 	assert.Equal(t, user.Email, primary.Email)
 
-	require.NoError(t, AdminAddOrSetPrimaryEmailAddress(db.DefaultContext, user, "new-primary@example.com"))
+	require.NoError(t, AdminAddOrSetPrimaryEmailAddress(ownCtx(), user, "new-primary@example.com"))
 
 	primary, err = user_model.GetPrimaryEmailAddressOfUser(db.DefaultContext, user.ID)
 	require.NoError(t, err)
@@ -48,14 +48,14 @@ func TestAdminAddOrSetPrimaryEmailAddress(t *testing.T) {
 		setting.Service.EmailDomainAllowList = []glob.Glob{}
 	}()
 
-	require.NoError(t, AdminAddOrSetPrimaryEmailAddress(db.DefaultContext, user, "new-primary2@example2.com"))
+	require.NoError(t, AdminAddOrSetPrimaryEmailAddress(ownCtx(), user, "new-primary2@example2.com"))
 
 	primary, err = user_model.GetPrimaryEmailAddressOfUser(db.DefaultContext, user.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "new-primary2@example2.com", primary.Email)
 	assert.Equal(t, user.Email, primary.Email)
 
-	require.NoError(t, AdminAddOrSetPrimaryEmailAddress(db.DefaultContext, user, "user27@example.com"))
+	require.NoError(t, AdminAddOrSetPrimaryEmailAddress(ownCtx(), user, "user27@example.com"))
 
 	primary, err = user_model.GetPrimaryEmailAddressOfUser(db.DefaultContext, user.ID)
 	require.NoError(t, err)

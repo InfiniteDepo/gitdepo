@@ -308,7 +308,7 @@ func TestRepoGroupRedirectReuse(t *testing.T) {
 // the repository, its claims and its directories where they were.
 func TestRedirectReuseRefused(t *testing.T) {
 	unittest.PrepareTestEnv(t)
-	ctx := t.Context()
+	ctx := audit_model.WithSystem(t.Context(), "test")
 	admin := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
 	user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
 	org3 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3})

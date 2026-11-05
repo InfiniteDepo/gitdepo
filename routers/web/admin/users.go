@@ -430,7 +430,7 @@ func EditUserPost(ctx *context.Context) {
 	}
 	// refused before anything below is written
 	if err := user_service.CheckEditIsOwnAct(ctx, u, &user_service.UpdateAuthOptions{Password: optional.FromNonDefault(form.Password)},
-		&user_service.UpdateOptions{IsAdmin: optional.Some(form.Admin)}); err != nil {
+		&user_service.UpdateOptions{IsAdmin: optional.Some(form.Admin)}, form.Email); err != nil {
 		ctx.RenderWithErr(ctx.Tr("settings.credential_not_own_act"), tplUserEdit, &form)
 		return
 	}
@@ -513,6 +513,8 @@ func EditUserPost(ctx *context.Context) {
 			case user_model.IsErrEmailAlreadyUsed(err):
 				ctx.Data["Err_Email"] = true
 				ctx.RenderWithErr(ctx.Tr("form.email_been_used"), tplUserEdit, &form)
+			case errors.Is(err, util.ErrPermissionDenied):
+				ctx.RenderWithErr(ctx.Tr("settings.credential_not_own_act"), tplUserEdit, &form)
 			default:
 				ctx.ServerError("AddOrSetPrimaryEmailAddress", err)
 			}

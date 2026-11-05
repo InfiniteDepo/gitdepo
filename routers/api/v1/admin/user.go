@@ -220,7 +220,7 @@ func EditUser(ctx *context.APIContext) {
 		ProhibitLogin:      optional.FromPtr(form.ProhibitLogin),
 	}
 	// refused before anything is written
-	if err := user_service.CheckEditIsOwnAct(ctx, ctx.User(), authOpts, &user_service.UpdateOptions{IsAdmin: optional.FromPtr(form.Admin)}); err != nil {
+	if err := user_service.CheckEditIsOwnAct(ctx, ctx.User(), authOpts, &user_service.UpdateOptions{IsAdmin: optional.FromPtr(form.Admin)}, optional.FromPtr(form.Email).ValueOrDefault("")); err != nil {
 		ctx.Error(http.StatusForbidden, "", err)
 		return
 	}
@@ -247,6 +247,8 @@ func EditUser(ctx *context.APIContext) {
 				ctx.Error(http.StatusBadRequest, "EmailInvalid", err)
 			case user_model.IsErrEmailAlreadyUsed(err):
 				ctx.Error(http.StatusBadRequest, "EmailUsed", err)
+			case errors.Is(err, util.ErrPermissionDenied):
+				ctx.Error(http.StatusForbidden, "", err)
 			default:
 				ctx.Error(http.StatusInternalServerError, "AddOrSetPrimaryEmailAddress", err)
 			}

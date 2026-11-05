@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
@@ -609,7 +610,7 @@ func TestPersonalRepoSizeLockTargets(t *testing.T) {
 	require.NoError(t, repo_model.UpdateRepoSize(db.DefaultContext, 4, 1000, 0, 0)) // user5's repo4: an override of 0 would mean the site limit
 	lock(5)
 	user5 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5})
-	require.ErrorAs(t, repo_service.MoveTrashedRepository(db.DefaultContext, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1}), user5, repo, ""), &quota_model.ErrPersonalRepoLimit{})
+	require.ErrorAs(t, repo_service.MoveTrashedRepository(audit_model.WithSystem(db.DefaultContext, "test"), unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1}), user5, repo, ""), &quota_model.ErrPersonalRepoLimit{})
 }
 
 // M5: re-saving the admin edit form keeps an override set in bytes that isn't whole MiB.

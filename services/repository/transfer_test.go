@@ -144,6 +144,7 @@ func TestTransferOwnAct(t *testing.T) {
 		ctx := audit_model.WithActor(db.DefaultContext, actor)
 		require.ErrorIs(t, StartRepositoryTransfer(ctx, admin, recipient, repo, nil), audit_model.ErrNotOwnAct, name)
 		require.ErrorIs(t, TransferOwnership(ctx, admin, recipient, repo, nil), audit_model.ErrNotOwnAct, name)
+		require.ErrorIs(t, MoveTrashedRepository(ctx, admin, recipient, repo, ""), audit_model.ErrNotOwnAct, name) // checked first
 	}
 	assert.Equal(t, int64(2), unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1}).OwnerID)
 	own := audit_model.WithActor(db.DefaultContext, &audit_model.Actor{Type: audit_model.ActorUser, ID: 1, Credential: audit_model.Credential{Type: audit_model.CredentialSession}})
