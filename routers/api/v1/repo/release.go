@@ -266,6 +266,8 @@ func CreateRelease(ctx *context.APIContext) {
 				ctx.Error(http.StatusConflict, "ReleaseAlreadyExist", err)
 			} else if models.IsErrProtectedTagName(err) {
 				ctx.Error(http.StatusUnprocessableEntity, "ProtectedTagName", err)
+			} else if models.IsErrInvalidTagName(err) {
+				ctx.Error(http.StatusUnprocessableEntity, "InvalidTagName", err)
 			} else if git.IsErrNotExist(err) {
 				ctx.Error(http.StatusNotFound, "ErrNotExist", fmt.Errorf("target \"%v\" not found: %w", rel.Target, err))
 			} else {

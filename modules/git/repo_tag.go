@@ -243,7 +243,7 @@ func (repo *Repository) IsTagExist(name string) bool {
 		return false
 	}
 
-	return repo.IsReferenceExist(TagPrefix + name)
+	return repo.IsExactRefExist(TagPrefix + name)
 }
 
 // GetTags returns all tags of the repository.

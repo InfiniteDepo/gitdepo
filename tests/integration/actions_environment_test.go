@@ -83,7 +83,7 @@ jobs:
     runs-on: %s
     %s
     steps:
-      - run: echo deploy
+      - run: echo deploy ${{ secrets.SHARED }} ${{ secrets.ONLY_ENV }} ${{ secrets.CALLED_SECRET }} ${{ secrets.WHO }} ${{ secrets.REC }}
 `, files, path, label, environment)))
 		}
 		// hasStatus reads the job without require or t.Context(), so that it can run in an Eventually condition
@@ -250,7 +250,7 @@ jobs:
 
 			run, err := actions_model.GetRunByID(t.Context(), jobs[0].RunID)
 			require.NoError(t, err)
-			_, err = actions_service.RerunAllJobs(t.Context(), run)
+			_, err = actions_service.RerunAllJobs(t.Context(), nil, run)
 			require.NoError(t, err)
 			job := reload(jobs[0])
 			require.Equal(t, int64(2), job.Attempt)
@@ -276,7 +276,7 @@ jobs:
     runs-on: env-i
     environment: ${{ inputs.target }}
     steps:
-      - run: echo deploy
+      - run: echo deploy ${{ secrets.SHARED }} ${{ secrets.ONLY_ENV }} ${{ secrets.CALLED_SECRET }} ${{ secrets.WHO }} ${{ secrets.REC }}
 `
 			createWorkflowFile(t, token, user2.Name, repo.Name, path, getWorkflowCreateFileOptions(user2, repo.DefaultBranch, "add dispatch", content))
 			MakeRequest(t, NewRequestWithJSON(t, http.MethodPost,
@@ -306,7 +306,7 @@ jobs:
     runs-on: env-j
     environment: ${{ inputs.target }}
     steps:
-      - run: echo deploy
+      - run: echo deploy ${{ secrets.SHARED }} ${{ secrets.ONLY_ENV }} ${{ secrets.CALLED_SECRET }} ${{ secrets.WHO }} ${{ secrets.REC }}
 `))
 			jobs := runJobs(pushWorkflow(".gitea/workflows/env-caller.yml", `name: env-caller
 on:
@@ -389,7 +389,7 @@ jobs:
     needs: [prepare]
     environment: ${{ needs.prepare.outputs.target }}
     steps:
-      - run: echo deploy
+      - run: echo deploy ${{ secrets.SHARED }} ${{ secrets.ONLY_ENV }} ${{ secrets.CALLED_SECRET }} ${{ secrets.WHO }} ${{ secrets.REC }}
 `, path)))
 			require.Len(t, jobs, 2)
 			task := runner.fetchTask(t) // prepare; deploy waits for it
@@ -666,7 +666,7 @@ jobs:
 			require.NoError(t, actions_model.UpdateEnvironment(ctx, e))
 			run, err := actions_model.GetRunByID(t.Context(), jobs[0].RunID)
 			require.NoError(t, err)
-			_, err = actions_service.RerunAllJobs(t.Context(), run)
+			_, err = actions_service.RerunAllJobs(t.Context(), nil, run)
 			require.NoError(t, err)
 			require.Eventually(t, func() bool {
 				j := new(actions_model.ActionRunJob)

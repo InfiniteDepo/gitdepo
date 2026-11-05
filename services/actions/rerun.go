@@ -12,6 +12,7 @@ import (
 	actions_model "forgejo.org/models/actions"
 	"forgejo.org/models/db"
 	"forgejo.org/models/unit"
+	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/container"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/timeutil"
@@ -50,9 +51,17 @@ func GetAllRerunJobs(job *actions_model.ActionRunJob, allJobs []*actions_model.A
 	return rerunJobs
 }
 
-// RerunAllJobs reruns all jobs of the given run and returns them. For it to succeed, the workflow must be valid, and the
+// rerunner is the ID that records who started a new attempt: the user who reran, 0 when no user did (an internal call).
+func rerunner(doer *user_model.User) int64 {
+	if doer == nil {
+		return 0
+	}
+	return doer.ID
+}
+
+// RerunAllJobs reruns all jobs of the given run for doer, who counts as the one who triggered the new attempt, and returns them. For it to succeed, the workflow must be valid, and the
 // previous run must have completed.
-func RerunAllJobs(ctx context.Context, run *actions_model.ActionRun) ([]*actions_model.ActionRunJob, error) {
+func RerunAllJobs(ctx context.Context, doer *user_model.User, run *actions_model.ActionRun) ([]*actions_model.ActionRunJob, error) {
 	if !run.IsValid() {
 		return nil, ErrRerunWorkflowInvalid
 	}
@@ -106,7 +115,7 @@ func RerunAllJobs(ctx context.Context, run *actions_model.ActionRun) ([]*actions
 			}
 			needsEmit = needsEmit || hasEnvironment
 
-			if err := InitiateNextJobAttempt(ctx, job, initialStatus); err != nil {
+			if err := InitiateNextJobAttempt(ctx, job, initialStatus, rerunner(doer)); err != nil {
 				return fmt.Errorf("could not rerun job %d of run %d: %w", job.ID, run.ID, err)
 			}
 
@@ -128,7 +137,7 @@ func RerunAllJobs(ctx context.Context, run *actions_model.ActionRun) ([]*actions
 // RerunJob reruns the given job and all its dependent jobs. It returns all jobs that were rerun. For it to succeed, the
 // workflow that defines this job must be valid, and the previous run must have completed. Dependent jobs that have not
 // completed yet are ignored.
-func RerunJob(ctx context.Context, job *actions_model.ActionRunJob) ([]*actions_model.ActionRunJob, error) {
+func RerunJob(ctx context.Context, doer *user_model.User, job *actions_model.ActionRunJob) ([]*actions_model.ActionRunJob, error) {
 	if err := job.LoadAttributes(ctx); err != nil {
 		return nil, fmt.Errorf("cannot load attributes of job %d: %w", job.ID, err)
 	}
@@ -208,7 +217,7 @@ func RerunJob(ctx context.Context, job *actions_model.ActionRunJob) ([]*actions_
 			}
 			needsEmit = needsEmit || hasEnvironment
 
-			if err := InitiateNextJobAttempt(ctx, jobToRerun, initialStatus); err != nil {
+			if err := InitiateNextJobAttempt(ctx, jobToRerun, initialStatus, rerunner(doer)); err != nil {
 				return fmt.Errorf("cannot rerun job %d: %w", jobToRerun.ID, err)
 			}
 			rerunJobs = append(rerunJobs, jobToRerun)

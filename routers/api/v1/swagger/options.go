@@ -280,6 +280,9 @@ type swaggerParameterBodies struct {
 	DispatchWorkflowOption api.DispatchWorkflowOption
 
 	// in:body
+	ReviewDeploymentsOption api.ReviewDeploymentsOption
+
+	// in:body
 	CreateQuotaGroupOptions api.CreateQuotaGroupOptions
 
 	// in:body

@@ -128,6 +128,11 @@ func deleteUser(ctx context.Context, u *user_model.User, purge, keepRow bool) (e
 		}
 	}
 
+	// an environment that loses its last reviewer this way keeps requiring reviews (its change of rules is recorded)
+	if err = actions_model.RemoveReviewers(ctx, actions_model.UserReviewerCond(u.ID)); err != nil {
+		return fmt.Errorf("remove environment reviewer: %w", err)
+	}
+
 	if err = db.DeleteBeans(ctx,
 		&auth_model.AccessToken{UID: u.ID},
 		&repo_model.Collaboration{UserID: u.ID},
@@ -319,6 +324,9 @@ func deleteUser(ctx context.Context, u *user_model.User, purge, keepRow bool) (e
 // identifies the person or lets anyone log in as them is cleared; the email becomes a unique placeholder on the
 // no-reply domain.
 func tombstoneUser(ctx context.Context, u *user_model.User) error {
+	if err := actions_model.RemoveReviewers(ctx, actions_model.UserReviewerCond(u.ID)); err != nil {
+		return fmt.Errorf("remove environment reviewer: %w", err)
+	}
 	// the second factors and per-person rows that the hard delete leaves to the row going away
 	if err := db.DeleteBeans(ctx,
 		&auth_model.TwoFactor{UID: u.ID},

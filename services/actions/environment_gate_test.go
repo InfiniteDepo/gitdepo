@@ -5,6 +5,7 @@ package actions
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,7 +31,7 @@ import (
 const gateJobID = 600 // a job of repository 63 in the fixtures of TestGetSecretsOfJob
 
 func envWorkflow(environment string) string {
-	return "on: push\njobs:\n  produce-artifacts:\n    runs-on: docker\n" + environment + "    steps:\n      - run: echo\n"
+	return "on: push\njobs:\n  produce-artifacts:\n    runs-on: docker\n" + environment + "    steps:\n      - run: echo ${{ secrets.LEVEL }} ${{ secrets.PROD_ONLY }} ${{ secrets.STAGING_ONLY }} ${{ secrets.ORG_ONLY }} ${{ secrets.REPO_ONLY }}\n"
 }
 
 // gateJob makes the fixture job a blocked job of that workflow, in a run of that ref, at its first attempt.
@@ -849,6 +850,180 @@ jobs:
 	assert.Equal(t, &actions_module.JobEnvironment{Name: "Production", URL: "https://example.com"}, env)
 }
 
+func TestGateAllowedWorkflows(t *testing.T) {
+	defer unittest.OverrideFixtures("services/actions/TestGetSecretsOfJob")()
+	setWorkflow := func(t *testing.T, id string) {
+		t.Helper()
+		_, err := db.GetEngine(t.Context()).Exec("UPDATE action_run SET workflow_id = ? WHERE id = 900", id)
+		require.NoError(t, err)
+	}
+	for _, tc := range []struct {
+		name     string
+		allowed  []string
+		workflow string
+		ok       bool
+	}{
+		{"no list allows every workflow", nil, "anything.yml", true},
+		{"the file name", []string{"deploy.yml"}, "deploy.yml", true},
+		{"another file", []string{"deploy.yml"}, "ci.yml", false},
+		{"a pattern", []string{"deploy-*.yml"}, "deploy-prod.yml", true},
+		{"a pattern, another file", []string{"deploy-*.yml"}, "build-prod.yml", false},
+		{"the star stops at a slash", []string{"deploy-*.yml"}, "deploy-x/y.yml", false},
+		{"one of several", []string{"a.yml", "b.yml"}, "b.yml", true},
+		{"a longer name is no match", []string{"deploy.yml"}, "deploy.yml.bak", false},
+		{"case matters", []string{"deploy.yml"}, "Deploy.yml", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, unittest.PrepareTestDatabase())
+			env := newEnvironment(t, &actions_model.ActionEnvironment{Name: "prod", AllowedWorkflows: tc.allowed})
+			_, err := secret_model.InsertEncryptedEnvironmentSecret(t.Context(), 63, env.ID, "ENV_SECRET", "x")
+			require.NoError(t, err)
+			job := gateJob(t, envWorkflow("    environment: prod\n"), "refs/heads/main")
+			setWorkflow(t, tc.workflow)
+			since := auditSince(t)
+			b, err := gateEnvironment(t.Context(), job)
+			require.NoError(t, err)
+			d := deploymentOf(t, job)
+			if tc.ok {
+				assert.Equal(t, behaviourExecuteJob, b)
+				assert.Equal(t, actions_model.DeploymentReleased, d.Status)
+				return
+			}
+			assert.Equal(t, behaviourFailJob, b)
+			assert.Equal(t, actions_model.DeploymentRefused, d.Status)
+			assert.Equal(t, actions_model.DeploymentReasonWorkflowNotAllowed, d.Reason)
+			assert.Len(t, auditRefused(t, since), 1)
+			secrets, err := getEnvironmentSecrets(t.Context(), job)
+			require.ErrorIs(t, err, errEnvironmentNotReleased, "a refused job gets no secret of the environment")
+			assert.Nil(t, secrets)
+		})
+	}
+
+	t.Run("the rule applies to a job that waits, as it is when looked at again", func(t *testing.T) {
+		require.NoError(t, unittest.PrepareTestDatabase())
+		env := newEnvironment(t, &actions_model.ActionEnvironment{Name: "prod", WaitTimerMinutes: 5})
+		job := gateJob(t, envWorkflow("    environment: prod\n"), "refs/heads/main")
+		b, err := gateEnvironment(t.Context(), job)
+		require.NoError(t, err)
+		require.Equal(t, behaviourHoldJob, b)
+		env.AllowedWorkflows = []string{"deploy.yml"}
+		require.NoError(t, actions_model.UpdateEnvironment(audit_model.WithSystem(t.Context(), "test"), env))
+		b, err = gateEnvironment(t.Context(), job)
+		require.NoError(t, err)
+		assert.Equal(t, behaviourFailJob, b)
+		assert.Equal(t, actions_model.DeploymentReasonWorkflowNotAllowed, deploymentOf(t, job).Reason)
+	})
+
+	t.Run("a job of a reusable workflow is decided by the file of the run, not by the called file", func(t *testing.T) {
+		caller := "on: push\njobs:\n  call:\n    uses: ./deploy.yml\n"
+		called := "on:\n  workflow_call:\njobs:\n  deploy:\n    runs-on: docker\n    environment: prod\n    steps: [{run: echo}]\n"
+		fetch := func(job *jobparser.Job, path string) ([]byte, error) { return []byte(called), nil }
+		for _, tc := range []struct {
+			run string
+			ok  bool
+		}{{"ci.yml", false}, {"release.yml", true}} {
+			require.NoError(t, unittest.PrepareTestDatabase())
+			// the called file is named deploy.yml, the pattern allows only release.yml: the run's file decides
+			newEnvironment(t, &actions_model.ActionEnvironment{Name: "prod", AllowedWorkflows: []string{"release.yml"}})
+			r := actions_module.ReusableWorkflows{}
+			sws, err := r.JobParser([]byte(caller), r.ExpandLocal(fetch), jobparser.EnableNamespaces())
+			require.NoError(t, err)
+			var job *actions_model.ActionRunJob
+			for _, sw := range sws {
+				if id, _ := sw.Job(); id == "deploy" {
+					job = gateSingle(t, sw, "refs/heads/main")
+				}
+			}
+			require.NotNil(t, job)
+			setWorkflow(t, tc.run)
+			b, err := gateEnvironment(t.Context(), job)
+			require.NoError(t, err)
+			if tc.ok {
+				assert.Equal(t, behaviourExecuteJob, b, tc.run)
+			} else {
+				assert.Equal(t, behaviourFailJob, b, tc.run)
+				assert.Equal(t, actions_model.DeploymentReasonWorkflowNotAllowed, deploymentOf(t, job).Reason)
+			}
+		}
+	})
+}
+
+func TestEnvironmentSecretsReferencedByName(t *testing.T) {
+	defer unittest.OverrideFixtures("services/actions/TestGetSecretsOfJob")()
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := audit_model.WithSystem(t.Context(), "test")
+	prod := newEnvironment(t, &actions_model.ActionEnvironment{Name: "prod"})
+	for name, value := range map[string]string{"DEPLOY_KEY": "env-key", "OTHER": "env-other", "SHARED": "env-shared"} {
+		_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 63, prod.ID, name, value)
+		require.NoError(t, err)
+	}
+	_, err := secret_model.InsertEncryptedSecret(ctx, 0, 0, 63, "SHARED", "repo-shared")
+	require.NoError(t, err)
+	_, err = secret_model.InsertEncryptedSecret(ctx, 0, 0, 63, "REPO_ONLY", "repo-only")
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name string
+		step string
+		want map[string]string
+	}{
+		{"a literal reference", "echo ${{ secrets.DEPLOY_KEY }}", map[string]string{"DEPLOY_KEY": "env-key", "SHARED": "repo-shared", "REPO_ONLY": "repo-only"}},
+		{"an index with a string", "echo ${{ secrets['DEPLOY_KEY'] }}", map[string]string{"DEPLOY_KEY": "env-key", "SHARED": "repo-shared", "REPO_ONLY": "repo-only"}},
+		{"the environment secret wins over the repository's of the same name", "echo ${{ secrets.SHARED }}", map[string]string{"SHARED": "env-shared", "REPO_ONLY": "repo-only"}},
+		{"no reference", "echo hi", map[string]string{"SHARED": "repo-shared", "REPO_ONLY": "repo-only"}},
+		{"toJSON(secrets)", "echo '${{ toJSON(secrets) }}' ${{ secrets.DEPLOY_KEY }}", map[string]string{"SHARED": "repo-shared", "REPO_ONLY": "repo-only"}},
+		{"a computed index", "echo ${{ secrets[format('{0}_KEY', 'DEPLOY')] }}", map[string]string{"SHARED": "repo-shared", "REPO_ONLY": "repo-only"}},
+		{"a name from the matrix", "echo ${{ secrets[matrix.key] }}", map[string]string{"SHARED": "repo-shared", "REPO_ONLY": "repo-only"}},
+		{"the whole context", "echo ${{ secrets.* }}", map[string]string{"SHARED": "repo-shared", "REPO_ONLY": "repo-only"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wf := "on: push\njobs:\n  produce-artifacts:\n    runs-on: docker\n    environment: prod\n    steps:\n      - run: \"" + strings.ReplaceAll(tc.step, `"`, `\"`) + "\"\n"
+			job := gateJob(t, wf, "refs/heads/main")
+			_, err := db.GetEngine(ctx).Exec("DELETE FROM action_deployment")
+			require.NoError(t, err)
+			require.NoError(t, db.Insert(ctx, &actions_model.ActionDeployment{RepoID: 63, EnvironmentID: prod.ID, RunID: job.RunID, JobID: job.ID, Attempt: job.Attempt, Status: actions_model.DeploymentReleased}))
+			got, err := getSecretsOfJob(ctx, job)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+
+	t.Run("secrets: inherit gets none", func(t *testing.T) {
+		wf := "on: push\njobs:\n  produce-artifacts:\n    runs-on: docker\n    environment: prod\n    secrets: inherit\n    steps:\n      - run: echo ${{ secrets.DEPLOY_KEY }}\n"
+		job := gateJob(t, wf, "refs/heads/main")
+		_, err := db.GetEngine(ctx).Exec("DELETE FROM action_deployment")
+		require.NoError(t, err)
+		require.NoError(t, db.Insert(ctx, &actions_model.ActionDeployment{RepoID: 63, EnvironmentID: prod.ID, RunID: job.RunID, JobID: job.ID, Attempt: job.Attempt, Status: actions_model.DeploymentReleased}))
+		got, err := getSecretsOfJob(ctx, job)
+		require.NoError(t, err)
+		assert.NotContains(t, got, "DEPLOY_KEY")
+		assert.NotContains(t, got, "OTHER")
+	})
+}
+
+func TestOIDCSubjectOfAnEnvironment(t *testing.T) {
+	gitCtx := map[string]any{
+		"repository": "org/project/repo", "repository_owner": "org", "repository_owner_id": "3", "repository_id": "63",
+		"event_name": "push", "ref": "refs/heads/main",
+	}
+	assert.Equal(t, "repo:org-3/repo-63:ref:refs/heads/main", generateOIDCSub(gitCtx))
+	assert.Equal(t, "repo:org/project/repo:ref:refs/heads/main", legacyGenerateOIDCSub(gitCtx))
+
+	gitCtx["environment"] = "production"
+	assert.Equal(t, "repo:org-3/repo-63:environment:production", generateOIDCSub(gitCtx), "the environment replaces the ref")
+	assert.Equal(t, "repo:org/project/repo:environment:production", legacyGenerateOIDCSub(gitCtx))
+	gitCtx["event_name"] = "pull_request"
+	assert.Equal(t, "repo:org-3/repo-63:environment:production", generateOIDCSub(gitCtx), "and the pull request")
+
+	extra, err := generateOIDCExtra(gitCtx)
+	require.NoError(t, err)
+	assert.Contains(t, extra, `"environment":"production"`)
+	delete(gitCtx, "environment")
+	extra, err = generateOIDCExtra(gitCtx)
+	require.NoError(t, err)
+	assert.NotContains(t, extra, "environment")
+}
+
 // A job marked unsupported (an inner job of a reusable workflow whose file wasn't read) is stored with an empty name:
 // the emitter, which parses the stored job again, must fail that job alone, not the run.
 func TestEmitterUnsupportedEnvironmentJobFailsAlone(t *testing.T) {
@@ -896,4 +1071,24 @@ func TestEmitterUnsupportedEnvironmentJobFailsAlone(t *testing.T) {
 	assert.Equal(t, actions_model.StatusWaiting, ok.Status, "the sibling without an environment is released")
 	run := unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRun{ID: 900})
 	assert.Zero(t, run.PreExecutionErrorCode, "the run has no workflow error")
+}
+
+// Only a text that can't be evaluated is an invalid name; an error of the stored payload (or the database) is not, so
+// the pass of the emitter is repeated instead of refusing the job for good.
+func TestEvaluateEnvironmentTextErrors(t *testing.T) {
+	defer unittest.OverrideFixtures("services/actions/TestGetSecretsOfJob")()
+	require.NoError(t, unittest.PrepareTestDatabase())
+	job := gateJob(t, envWorkflow("    environment: prod\n"), "refs/heads/main")
+	require.NoError(t, job.LoadRun(t.Context()))
+	require.NoError(t, job.Run.LoadRepo(t.Context()))
+
+	name, err := evaluateEnvironmentText(t.Context(), job, nil, "plain")
+	require.NoError(t, err)
+	assert.Equal(t, "plain", name)
+
+	broken := *job
+	broken.WorkflowPayload = []byte("{{{ not yaml")
+	_, err = evaluateEnvironmentText(t.Context(), &broken, nil, "${{ vars.X }}")
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, errInvalidEnvironmentText)
 }

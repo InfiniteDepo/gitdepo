@@ -552,6 +552,7 @@ func (repo *Repository) GetRefCommitID(name string) (string, error) {
 		if IsErrNotExist(err) {
 			return "", ErrNotExist{name, ""}
 		}
+		return "", err // a dead git process is an error, not an empty ID
 	}
 	return string(shaBs), nil
 }

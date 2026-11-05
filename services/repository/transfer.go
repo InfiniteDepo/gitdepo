@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"forgejo.org/models"
+	actions_model "forgejo.org/models/actions"
 	asymkey_model "forgejo.org/models/asymkey"
 	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
@@ -216,6 +217,12 @@ func transferOwnership(ctx context.Context, doer *user_model.User, newOwnerName 
 	}
 	if err := git_model.DropDeployKeyIDsNotWriting(ctx, repo, oldKeyIDs); err != nil {
 		return fmt.Errorf("DropDeployKeyIDsNotWriting: %w", err)
+	}
+
+	// the teams of the old organization are no reviewers of the new owner's repository (its change of rules is recorded;
+	// the environment keeps requiring reviews)
+	if err := actions_model.RemoveReviewers(ctx, actions_model.ForeignTeamReviewerCond(repo.ID, newOwner.ID)); err != nil {
+		return fmt.Errorf("RemoveReviewers: %w", err)
 	}
 
 	// Remove redundant collaborators.
