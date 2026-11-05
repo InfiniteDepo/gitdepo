@@ -134,13 +134,17 @@ func (r *ApprovalRule) IsApprover(ctx context.Context, userID int64) (bool, erro
 
 // AppliesTo returns true if the rule has no path patterns or one of the changed files matches.
 func (r *ApprovalRule) AppliesTo(changedFiles []string) bool {
-	// a stored pattern beyond the limits is never matched: the rule applies (fails closed)
-	for expr := range strings.SplitSeq(r.PathPatterns, ";") {
-		if ValidateGlobPattern(strings.TrimSpace(expr), '.', '/') != nil {
-			return true
+	var patterns []glob.Glob
+	for expr := range strings.SplitSeq(strings.ToLower(r.PathPatterns), ";") {
+		if expr = strings.TrimSpace(expr); expr == "" {
+			continue
 		}
+		g, err := compileGlobPattern(expr, '.', '/')
+		if err != nil {
+			return true // a stored pattern beyond the limits is never matched: the rule applies (fails closed)
+		}
+		patterns = append(patterns, g)
 	}
-	patterns := getFilePatterns(r.PathPatterns)
 	// patterns that don't compile to any glob must not switch the rule off
 	if len(patterns) == 0 {
 		return true
@@ -180,30 +184,39 @@ const (
 // complexity: its length, its wildcards and its `{...}` alternations. It refuses control and bidirectional
 // control characters.
 func ValidateGlobPattern(expr string, separators ...rune) error {
+	_, err := compileGlobPattern(expr, separators...)
+	return err
+}
+
+// compileGlobPattern checks the limits of ValidateGlobPattern once and compiles the pattern.
+func compileGlobPattern(expr string, separators ...rune) (glob.Glob, error) {
 	if len(expr) > maxGlobLength {
-		return util.NewInvalidArgumentErrorf("pattern is longer than %d bytes", maxGlobLength)
+		return nil, util.NewInvalidArgumentErrorf("pattern is longer than %d bytes", maxGlobLength)
 	}
 	wildcards, braces, depth := 0, 0, 0
 	for _, c := range expr {
 		switch {
 		case unicode.IsControl(c) || strings.ContainsRune("\u061C\u200E\u200F\u202A\u202B\u202C\u202D\u202E\u2066\u2067\u2068\u2069", c):
-			return util.NewInvalidArgumentErrorf("pattern holds a control character")
+			return nil, util.NewInvalidArgumentErrorf("pattern holds a control character")
 		case c == '*' || c == '?':
 			wildcards++
 		case c == '{':
 			braces++
 			if depth++; depth > 1 {
-				return util.NewInvalidArgumentErrorf("alternations can't be nested")
+				return nil, util.NewInvalidArgumentErrorf("alternations can't be nested")
 			}
 		case c == '}':
-			depth--
+			if depth--; depth < 0 {
+				return nil, util.NewInvalidArgumentErrorf("unmatched }")
+			}
 		}
 	}
 	if wildcards > maxGlobWildcards || braces > maxGlobBraces {
-		return util.NewInvalidArgumentErrorf("pattern has more than %d wildcards or %d alternations", maxGlobWildcards, maxGlobBraces)
+		return nil, util.NewInvalidArgumentErrorf("pattern has more than %d wildcards or %d alternations", maxGlobWildcards, maxGlobBraces)
 	}
-	if _, err := glob.Compile(expr, separators...); err != nil {
-		return util.NewInvalidArgumentErrorf("%v", err)
+	g, err := glob.Compile(expr, separators...)
+	if err != nil {
+		return nil, util.NewInvalidArgumentErrorf("%v", err)
 	}
-	return nil
+	return g, nil
 }

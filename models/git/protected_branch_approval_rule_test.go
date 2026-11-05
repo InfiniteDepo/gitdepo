@@ -133,6 +133,8 @@ func TestValidateGlobPattern(t *testing.T) {
 		"wildcards":   strings.Repeat("*a", 7) + "*b",
 		"alternation": "{a,b}/{c,d}/{e,f}/{g,h}",
 		"nested":      "{a,{b,c}}",
+		"unmatched":   "}{a,{b,c}}",
+		"unmatched 2": "a}",
 		"nul":         "a\x00b",
 		"newline":     "a\nb",
 		"c1":          "a\u0085b",

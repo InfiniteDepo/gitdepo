@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
 	issues_model "forgejo.org/models/issues"
 	org_model "forgejo.org/models/organization"
@@ -45,7 +46,7 @@ func DefaultReviewerRequests(ctx context.Context, issue *issues_model.Issue, pr 
 		}
 		for _, r := range approvalRules {
 			// the source branch is chosen by the author: it only limits requests, never what a rule requires
-			if r.RequestReviews && r.MatchesSourceBranch(pr.HeadBranch) && (oldHead == "" || r.PathPatterns != "") {
+			if r.RequestReviews && r.MatchesSourceBranch(pr.HeadBranch) {
 				rules = append(rules, r)
 			}
 		}
@@ -61,7 +62,11 @@ func DefaultReviewerRequests(ctx context.Context, issue *issues_model.Issue, pr 
 	// the value says whether a rule with a count asks: only then the request is official and can block
 	userIDs, teamIDs := map[int64]bool{}, map[int64]bool{}
 	for _, r := range rules {
-		if !r.AppliesTo(files) || (oldHead != "" && r.AppliesTo(oldFiles)) {
+		// after a push only a rule that newly applies asks: a rule without paths when the old head changed nothing
+		if !r.AppliesTo(files) || (oldHead != "" && (len(oldFiles) > 0 || r.PathPatterns != "") && r.AppliesTo(oldFiles)) {
+			continue
+		}
+		if oldHead != "" && r.PathPatterns == "" && len(files) == 0 {
 			continue
 		}
 		for _, id := range r.UserIDs {
@@ -102,10 +107,9 @@ func DefaultReviewerRequests(ctx context.Context, issue *issues_model.Issue, pr 
 		} else if !ok {
 			continue
 		}
-		comment, err := issues_model.AddReviewRequest(ctx, issue, u, issue.Poster)
-		if err == nil && comment != nil && !userIDs[u.ID] {
-			err = issues_model.ClearReviewOfficial(ctx, comment.ReviewID)
-		}
+		comment, err := requestUnofficially(ctx, userIDs[u.ID], func(ctx context.Context) (*issues_model.Comment, error) {
+			return issues_model.AddReviewRequest(ctx, issue, u, issue.Poster)
+		})
 		if err != nil {
 			log.Error("%-v AddReviewRequest of %d: %v", pr, u.ID, err)
 		} else if comment != nil {
@@ -123,10 +127,9 @@ func DefaultReviewerRequests(ctx context.Context, issue *issues_model.Issue, pr 
 			team.UnitAccessMode(ctx, unit.TypePullRequests) < perm.AccessModeRead {
 			continue
 		}
-		comment, err := issues_model.AddTeamReviewRequest(ctx, issue, team, issue.Poster)
-		if err == nil && comment != nil && !official {
-			err = issues_model.ClearReviewOfficial(ctx, comment.ReviewID)
-		}
+		comment, err := requestUnofficially(ctx, official, func(ctx context.Context) (*issues_model.Comment, error) {
+			return issues_model.AddTeamReviewRequest(ctx, issue, team, issue.Poster)
+		})
 		if err != nil {
 			log.Error("%-v AddTeamReviewRequest of %d: %v", pr, id, err)
 		} else if comment != nil {
@@ -134,6 +137,21 @@ func DefaultReviewerRequests(ctx context.Context, issue *issues_model.Issue, pr 
 		}
 	}
 	return notifiers, nil
+}
+
+// requestUnofficially adds a review request with add and, unless official, clears its official flag, in one
+// transaction. The comment is nil if nothing was requested or the transaction failed.
+func requestUnofficially(ctx context.Context, official bool, add func(context.Context) (*issues_model.Comment, error)) (comment *issues_model.Comment, err error) {
+	err = db.WithTx(ctx, func(ctx context.Context) (err error) {
+		if comment, err = add(ctx); err != nil || comment == nil || official {
+			return err
+		}
+		return issues_model.ClearReviewOfficial(ctx, comment.ReviewID)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return comment, nil
 }
 
 // mayRequestReview returns true if u can be asked for a review of the pull request.

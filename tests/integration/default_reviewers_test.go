@@ -242,6 +242,21 @@ func TestDefaultReviewersPathsOnPush(t *testing.T) {
 	})
 }
 
+// A pull request that opens without commits asks its reviewers (also those of a rule without paths) with its first push.
+func TestDefaultReviewersEmptyAtOpen(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		e := newDREnv(t, 1)
+		e.collaborator("user4", "write")
+		e.branch("dr-empty")
+		e.protect("dr-empty", requestRule("Ask", 0, "", "user4"))
+		e.branch("head-empty")
+		index := e.open("dr-empty", "head-empty", "empty")
+		assert.Empty(t, e.requested(index))
+		e.change("head-empty", "", create("e.txt", "e"))
+		require.Eventually(t, func() bool { return len(e.requested(index)) == 1 }, 15*time.Second, 100*time.Millisecond)
+	})
+}
+
 // Retargeting to a branch with a rule asks its reviewers, except those who already reviewed.
 func TestDefaultReviewersRetarget(t *testing.T) {
 	onApplicationRun(t, func(t *testing.T, u *url.URL) {
