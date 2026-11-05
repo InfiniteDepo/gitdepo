@@ -5,6 +5,7 @@ package secrets
 
 import (
 	"errors"
+	"net/http"
 
 	"forgejo.org/models/db"
 	secret_model "forgejo.org/models/secret"
@@ -34,8 +35,7 @@ func CreateSecretPost(ctx *context.Context, ownerID, groupID, repoID, environmen
 	normalizedData := util.ReserveLineBreakForTextarea(form.Data)
 	secret, err := secrets_service.CreateSecret(ctx, ownerID, groupID, repoID, environmentID, form.Name, normalizedData)
 	if err != nil {
-		log.Error("InsertEncryptedSecret failed: %v", err)
-		ctx.JSONError(ctx.Tr("secrets.creation.failed"))
+		failed(ctx, "CreateSecret", err, ctx.Tr("secrets.creation.failed"))
 		return
 	}
 
@@ -47,13 +47,8 @@ func EditSecretPost(ctx *context.Context, ownerID, groupID, repoID, environmentI
 	form := web.GetForm(ctx).(*forms.EditSecretForm)
 
 	secret, err := secrets_service.EditSecret(ctx, ownerID, groupID, repoID, environmentID, id, form.Name, util.ReserveLineBreakForTextarea(form.Data))
-	if errors.Is(err, util.ErrNotExist) {
-		ctx.NotFound("GetSecretByID", err)
-		return
-	}
 	if err != nil {
-		log.Error("UpdateSecret failed: %v", err)
-		ctx.JSONError(ctx.Tr("actions.secrets.mutation.failure_message", form.Name))
+		failed(ctx, "EditSecret", err, ctx.Tr("actions.secrets.mutation.failure_message", form.Name))
 		return
 	}
 
@@ -64,11 +59,26 @@ func EditSecretPost(ctx *context.Context, ownerID, groupID, repoID, environmentI
 func DeleteSecretPost(ctx *context.Context, ownerID, groupID, repoID, environmentID, id int64, redirectURL string) {
 	err := secrets_service.DeleteSecretByID(ctx, ownerID, groupID, repoID, environmentID, id)
 	if err != nil {
-		log.Error("DeleteSecretByID(%d) failed: %v", id, err)
-		ctx.JSONError(ctx.Tr("secrets.deletion.failed"))
+		failed(ctx, "DeleteSecretByID", err, ctx.Tr("secrets.deletion.failed"))
 		return
 	}
 
 	ctx.Flash.Success(ctx.Tr("secrets.deletion.success"))
 	ctx.JSONRedirect(redirectURL)
+}
+
+// failed answers a change of a secret that didn't happen: 404 for a secret that is not of the level (one answer for
+// edit and delete), 403 for a change that is not the doer's own act (a refusal, logged at Info), otherwise the
+// message, with the error logged.
+func failed(ctx *context.Context, what string, err error, msg any) {
+	switch {
+	case errors.Is(err, util.ErrNotExist):
+		ctx.NotFound(what, err)
+	case errors.Is(err, util.ErrPermissionDenied):
+		log.Info("%s refused: %v", what, err)
+		ctx.Error(http.StatusForbidden)
+	default:
+		log.Error("%s failed: %v", what, err)
+		ctx.JSONError(msg)
+	}
 }

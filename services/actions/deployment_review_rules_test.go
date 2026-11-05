@@ -5,6 +5,7 @@ package actions
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -528,4 +529,40 @@ func TestCheckEnvironmentReviewers(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, check.NoReviewer[1])
 	assert.Equal(t, ReviewerNotUsable, check.Ineligible["user:2"])
+}
+
+// The bulk check decides every user as reviewerIneligibility does, on public and private repositories of users and
+// organizations, with and without a 2FA requirement.
+func TestCheckEnvironmentReviewersMatchesIneligibility(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := t.Context()
+	_, err := db.GetEngine(ctx).ID(17).Cols("require_two_factor").Update(&user_model.User{RequireTwoFactor: true})
+	require.NoError(t, err)
+	users := make([]*user_model.User, 0, 50)
+	require.NoError(t, db.GetEngine(ctx).OrderBy("id").Find(&users))
+	listed := []*actions_model.ActionEnvironmentReviewer{}
+	for _, u := range users {
+		listed = append(listed, &actions_model.ActionEnvironmentReviewer{UserID: u.ID})
+	}
+	for _, repoID := range []int64{1, 2, 3, 5, 24, 32} { // public/private, of a user and of orgs (org17 requires 2FA)
+		if repoID != 1 {
+			require.NoError(t, db.Insert(ctx, &repo_model.RepoUnit{RepoID: repoID, Type: unit.TypeActions}))
+		}
+		repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: repoID})
+		require.NoError(t, repo.LoadOwner(ctx))
+		check, err := CheckEnvironmentReviewers(ctx, repo, []*actions_model.ActionEnvironment{{ID: 1}}, map[int64][]*actions_model.ActionEnvironmentReviewer{1: listed})
+		require.NoError(t, err)
+		for _, u := range users {
+			expected, err := reviewerIneligibility(ctx, repo, u)
+			require.NoError(t, err)
+			assert.Equal(t, expected, check.Ineligible[fmt.Sprintf("user:%d", u.ID)], "user %d on repo %d", u.ID, repoID)
+		}
+		if repoID != 24 { // org17 requires 2FA, which none of its members has
+			assert.NotEmpty(t, check.Readers, "repo %d", repoID)
+		}
+		assert.Less(t, len(check.Ineligible), len(users), "someone can approve on repo %d", repoID)
+		for _, r := range check.Readers {
+			assert.Empty(t, check.Ineligible[fmt.Sprintf("user:%d", r.ID)], "reader %d of repo %d can approve", r.ID, repoID)
+		}
+	}
 }

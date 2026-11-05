@@ -1,5 +1,9 @@
 {{template "repo/settings/layout_head" (dict "ctxData" . "pageClass" "repository settings actions environments")}}
 	<div class="repo-setting-content">
+		{{$archived := .Repository.IsArchived}}
+		{{if $archived}}
+			<div class="ui warning message" id="environment-archived">{{ctx.Locale.Tr "actions.environments.archived"}}</div>
+		{{end}}
 		{{if .NoReviewer}}
 			<div class="ui warning message" id="environment-no-reviewer">{{svg "octicon-alert"}} {{ctx.Locale.Tr "actions.environments.no_eligible_reviewer"}}</div>
 		{{end}}
@@ -8,22 +12,25 @@
 		</h4>
 		<div class="ui attached segment">
 			<form class="ui form" id="environment-form" method="post" action="{{if .Environment}}{{.EnvironmentLink}}{{else}}{{.EnvironmentsLink}}/new{{end}}">
+				<fieldset class="tw-contents" {{if $archived}}disabled{{end}}>
 				<div class="field">
 					<label for="environment-name">{{ctx.Locale.Tr "name"}}</label>
 					<input id="environment-name" name="name" value="{{.Form.Name}}" maxlength="255" {{if .Environment}}readonly{{else}}required autofocus{{end}}>
-					<p class="help">{{ctx.Locale.Tr "actions.environments.name.desc"}}</p>
+					<p class="help">{{ctx.Locale.Tr "actions.environments.name.desc" (HTMLFormat "<code>%s</code>" (print "environment: " (or .Form.Name "production")))}}</p>
 				</div>
 
 				<div class="field">
 					<label for="environment-reviewers-input">{{ctx.Locale.Tr "actions.environments.reviewers"}}</label>
-					<p class="help">{{ctx.Locale.Tr "actions.environments.reviewers.desc" .MaxReviewers}}</p>
-					<div class="ui multiple search selection dropdown custom" id="environment-reviewers" data-max="{{.MaxReviewers}}">
+					<p class="help">{{if .ReviewerTeams}}{{ctx.Locale.Tr "actions.environments.reviewers.desc" .MaxReviewers}}{{else}}{{ctx.Locale.Tr "actions.environments.reviewers.desc_user" .MaxReviewers}}{{end}}</p>
+					<div class="ui multiple search selection dropdown custom{{if $archived}} disabled{{end}}" id="environment-reviewers" data-max="{{.MaxReviewers}}">
 						<input type="hidden" id="environment-reviewers-input" name="reviewers" value="{{.Form.Reviewers}}">
 						<div class="default text">{{ctx.Locale.Tr "actions.environments.reviewers.placeholder"}}</div>
 						<div class="menu">
 							{{range .ReviewerOptions}}
-								<div class="item{{if .Reason}} environment-reviewer-ineligible{{end}}" data-value="{{.Key}}">
-									{{if .User}}{{ctx.AvatarUtils.Avatar .User 20 "mini"}}{{.User.GetDisplayName}}{{else}}{{svg "octicon-people"}} {{.Team.Name}}{{end}}
+								<div class="item{{if or .Reason .Unknown}} environment-reviewer-ineligible{{end}}" data-value="{{.Key}}">
+									{{if .Unknown}}{{svg "octicon-question"}} {{ctx.Locale.Tr "actions.environments.reviewer.unknown"}} <span class="help">{{ctx.Locale.Tr "actions.environments.reviewer.unknown.desc"}}</span>
+									{{- else if .User}}{{ctx.AvatarUtils.Avatar .User 20 "mini"}}@{{.User.Name}}{{if .User.FullName}} <span class="text grey">{{.User.FullName}}</span>{{end}}
+									{{- else}}{{svg "octicon-people"}} {{$.Repository.Owner.Name}}/{{.Team.Name}}{{end}}
 									{{if .Reason}}
 										<span class="help">
 											{{if eq .Reason "not_usable"}}{{ctx.Locale.Tr "actions.environments.reviewer.not_usable"}}
@@ -52,7 +59,7 @@
 						<input id="environment-wait-timer" name="wait_timer" type="number" min="0" max="{{.MaxWaitTimer}}" value="{{.Form.WaitTimer}}" class="tw-max-w-[12rem]">
 						<span>{{ctx.Locale.Tr "actions.environments.wait_timer.minutes"}}</span>
 					</div>
-					<p class="help">{{ctx.Locale.Tr "actions.environments.wait_timer.desc"}}</p>
+					<p class="help">{{ctx.Locale.Tr "actions.environments.wait_timer.desc" .MaxWaitTimer .MaxWaitTimerDays}}</p>
 				</div>
 
 				<div class="grouped fields" id="environment-ref-policy">
@@ -85,7 +92,7 @@
 							{{range .Form.Patterns}}{{template "repo/settings/environment_pattern" .}}{{end}}
 						</div>
 						<button type="button" class="ui small button" id="environment-pattern-add">{{svg "octicon-plus"}} {{ctx.Locale.Tr "actions.environments.refs.add"}}</button>
-						<p class="help">{{ctx.Locale.Tr "actions.environments.refs.hint"}}</p>
+						<p class="help">{{ctx.Locale.Tr "actions.environments.refs.hint" (HTMLFormat "<code>*</code>") (HTMLFormat "<code>release/*</code>") (HTMLFormat "<code>release/2.4</code>") (HTMLFormat "<code>release/2.4/hotfix</code>") (HTMLFormat "<code>**</code>") (HTMLFormat "<code>/</code>") (HTMLFormat "<code>refs/heads/</code>")}}</p>
 					</div>
 				</div>
 
@@ -96,21 +103,25 @@
 				</div>
 				<div class="field">
 					<label for="environment-allowed-workflows">{{ctx.Locale.Tr "actions.environments.allowed_workflows"}}</label>
-					<p class="help">{{ctx.Locale.Tr "actions.environments.allowed_workflows.desc"}}</p>
+					<p class="help">{{ctx.Locale.Tr "actions.environments.allowed_workflows.desc" (HTMLFormat "<code>deploy-*.yml</code>")}}</p>
 					<textarea id="environment-allowed-workflows" name="allowed_workflows" rows="2">{{.Form.AllowedWorkflows}}</textarea>
 				</div>
 
+				</fieldset>
+				{{if not $archived}}
 				<div class="divider"></div>
 				<div class="field">
 					<button class="ui primary button" id="environment-save">{{if .Environment}}{{ctx.Locale.Tr "actions.environments.save"}}{{else}}{{ctx.Locale.Tr "actions.environments.create"}}{{end}}</button>
 					<a class="ui button" href="{{.EnvironmentsLink}}">{{ctx.Locale.Tr "cancel"}}</a>
 				</div>
+				{{end}}
 			</form>
 		</div>
 
 		{{if .Environment}}
 			<div class="tw-mt-4" id="environment-secrets">{{template "shared/actions/secrets_list" .}}</div>
 			<div class="tw-mt-4" id="environment-variables">{{template "shared/actions/variables_list" .}}</div>
+			{{if not $archived}}
 
 			<h4 class="ui top attached error header tw-mt-4">{{ctx.Locale.Tr "repo.settings.danger_zone"}}</h4>
 			<div class="ui attached error danger segment">
@@ -121,7 +132,7 @@
 							<div class="flex-item-body">{{ctx.Locale.Tr "actions.environments.delete.desc"}}</div>
 						</div>
 						<div class="flex-item-trailing">
-							<button class="danger button show-modal" data-modal="#delete-environment-modal">{{ctx.Locale.Tr "actions.environments.delete"}}</button>
+							<button class="danger button show-modal tw-whitespace-nowrap" data-modal="#delete-environment-modal">{{ctx.Locale.Tr "actions.environments.delete"}}</button>
 						</div>
 					</div>
 				</div>
@@ -149,6 +160,7 @@
 					</form>
 				</article>
 			</dialog>
+			{{end}}
 		{{end}}
 	</div>
 {{template "repo/settings/layout_footer" .}}

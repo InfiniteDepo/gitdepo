@@ -1,8 +1,9 @@
-{{/* .VariablesLink, .VariablesTitle and .VariablesDescription, if set, replace .Link and the default title: a page with both lists, such as an environment, sets them */}}
+{{/* .ActionsReadOnly hides the buttons that change anything. .VariablesLink, .VariablesTitle and .VariablesDescription, if set, replace .Link and the default title: a page with both lists, such as an environment, sets them */}}
 {{$link := or .VariablesLink .Link}}
 <h4 class="ui top attached header">
 	{{or .VariablesTitle (ctx.Locale.Tr "actions.variables.management")}}
 	<div class="ui right">
+		{{if not .ActionsReadOnly}}
 		<button class="ui primary tiny button show-modal"
 			data-modal="#edit-variable-modal"
 			data-modal-form.action="{{$link}}/new"
@@ -12,6 +13,7 @@
 		>
 			{{ctx.Locale.Tr "actions.variables.creation"}}
 		</button>
+		{{end}}
 	</div>
 </h4>
 <div class="ui attached segment">
@@ -35,6 +37,7 @@
 				<span class="color-text-light-2">
 					{{ctx.Locale.Tr "settings.added_on" (DateUtils.AbsoluteShort .CreatedUnix)}}
 				</span>
+				{{if not $.ActionsReadOnly}}
 				<button class="btn interact-bg tw-p-2 show-modal"
 					data-tooltip-content="{{ctx.Locale.Tr "actions.variables.edit"}}"
 					data-modal="#edit-variable-modal"
@@ -52,6 +55,7 @@
 				>
 					{{svg "octicon-trash"}}
 				</button>
+				{{end}}
 			</div>
 		</div>
 		{{end}}
@@ -75,18 +79,20 @@
 					<input autofocus required
 						name="name"
 						id="dialog-variable-name"
+						aria-describedby="variable-name-description"
 						value="{{.name}}"
 						pattern="^(?!CI$)(?!FORGEJO_|GITEA_|GITHUB_)[a-zA-Z_][a-zA-Z0-9_]*$"
 					>
-					<p id="name-description" class="help">{{ctx.Locale.Tr "actions.variables.mutation.name_description"}}</p>
+					<p id="variable-name-description" class="help">{{ctx.Locale.Tr "actions.variables.mutation.name_description"}}</p>
 				</div>
 				<div class="field">
 					<label for="dialog-variable-data">{{ctx.Locale.Tr "value"}}</label>
 					<textarea required
 						name="data"
 						id="dialog-variable-data"
+						aria-describedby="variable-data-description"
 					></textarea>
-					<p id="data-description" class="help">{{ctx.Locale.Tr "actions.variables.mutation.value_description"}}</p>
+					<p id="variable-data-description" class="help">{{ctx.Locale.Tr "actions.variables.mutation.value_description"}}</p>
 				</div>
 			</fieldset>
 			{{template "base/modal_actions_confirm" (dict "ModalButtonTypes" "confirm")}}

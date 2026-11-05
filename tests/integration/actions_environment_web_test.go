@@ -15,16 +15,22 @@ import (
 	"testing"
 	"time"
 
+	"forgejo.org/models"
 	actions_model "forgejo.org/models/actions"
 	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
+	"forgejo.org/models/organization"
+	"forgejo.org/models/perm"
 	repo_model "forgejo.org/models/repo"
 	secret_model "forgejo.org/models/secret"
+	"forgejo.org/models/unit"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
+	org_service "forgejo.org/services/org"
+	repo_service "forgejo.org/services/repository"
 	"forgejo.org/tests"
 
 	runnerv1 "code.forgejo.org/forgejo/actions-proto/runner/v1"
@@ -203,6 +209,49 @@ func TestActionsEnvironmentsWeb(t *testing.T) {
 			assert.Regexp(t, `can(&#39;|')t sign in`, body)
 		})
 
+		t.Run("a deleted or hidden listed reviewer can be removed", func(t *testing.T) {
+			post(owner, base+"/new", form(map[string][]string{"name": {"stale"}, "reviewers": {"user:4"}}), http.StatusSeeOther)
+			stale := envByName(repo.ID, "stale")
+			// listed earlier: a user who no longer exists, and user31 (private, shares no organization with user2)
+			require.NoError(t, db.Insert(ctx, &actions_model.ActionEnvironmentReviewer{EnvironmentID: stale.ID, UserID: 99999}))
+			require.NoError(t, db.Insert(ctx, &actions_model.ActionEnvironmentReviewer{EnvironmentID: stale.ID, UserID: 31}))
+			body := owner.MakeRequest(t, NewRequest(t, "GET", envLink(stale)), http.StatusOK).Body.String()
+			assert.Contains(t, body, `data-value="user:99999"`)
+			assert.Contains(t, body, `data-value="user:31"`)
+			assert.Equal(t, 2, strings.Count(body, "Unknown reviewer"), "one entry each, removable")
+			assert.NotContains(t, body, "user31", "the hidden user's name is not shown")
+
+			// keeping the hidden one while removing the missing one and adding a reader saves: only the added one is
+			// checked for visibility (a missing user is never saved)
+			post(owner, envLink(stale), form(map[string][]string{"reviewers": {"user:4,user:31,user:5"}}), http.StatusSeeOther)
+			unittest.AssertCount(t, &actions_model.ActionEnvironmentReviewer{EnvironmentID: stale.ID}, 3)
+			// clearing them saves, with one entry
+			since := auditNow()
+			post(owner, envLink(stale), form(nil), http.StatusSeeOther)
+			unittest.AssertCount(t, &actions_model.ActionEnvironmentReviewer{EnvironmentID: stale.ID}, 0)
+			assert.Equal(t, []string{"repo.actions_env.updated"}, auditActions(since, "repo.actions_env"))
+			// once removed, the hidden user is refused like any new one
+			body = post(owner, envLink(stale), form(map[string][]string{"reviewers": {"user:31"}}), http.StatusOK).Body.String()
+			assert.Contains(t, body, "Choose up to 6 reviewers from the list.")
+		})
+
+		t.Run("a name with markup is escaped everywhere", func(t *testing.T) {
+			resp := post(owner, base+"/new", form(map[string][]string{"name": {"<b>x"}}), http.StatusSeeOther)
+			marked := envByName(repo.ID, "<b>x")
+			assert.Equal(t, envLink(marked), resp.Header().Get("Location"))
+			for _, body := range []string{
+				owner.MakeRequest(t, NewRequest(t, "GET", envLink(marked)), http.StatusOK).Body.String(), // flash, title, delete modal
+				owner.MakeRequest(t, NewRequest(t, "GET", base), http.StatusOK).Body.String(),
+			} {
+				assert.NotContains(t, body, "<b>x")
+				assert.Contains(t, body, "&lt;b&gt;x")
+			}
+			post(owner, envLink(marked)+"/delete", url.Values{"confirm_name": {"<b>x"}}, http.StatusSeeOther)
+			body := owner.MakeRequest(t, NewRequest(t, "GET", base), http.StatusOK).Body.String() // the deleted flash
+			assert.NotContains(t, body, "<b>x")
+			assert.Contains(t, body, "&lt;b&gt;x")
+		})
+
 		t.Run("secrets and variables of an environment", func(t *testing.T) {
 			_, err := secret_model.InsertEncryptedSecret(ctx, 0, 0, repo.ID, "DEPLOY_TOKEN", "repo-level")
 			require.NoError(t, err)
@@ -245,8 +294,9 @@ func TestActionsEnvironmentsWeb(t *testing.T) {
 			post(owner, base+"/new", form(map[string][]string{"name": {"sibling"}}), http.StatusSeeOther)
 			sibling := envLink(envByName(repo.ID, "sibling"))
 			post(owner, sibling+"/secrets/"+sid+"/edit", url.Values{"name": {"STOLEN"}, "data": {"x"}}, http.StatusNotFound)
-			post(owner, sibling+"/secrets/"+sid+"/delete", nil, http.StatusBadRequest)
-			post(owner, sibling+"/variables/"+vid+"/delete", nil, http.StatusBadRequest)
+			post(owner, sibling+"/secrets/"+sid+"/delete", nil, http.StatusNotFound)
+			post(owner, sibling+"/variables/"+vid+"/edit", url.Values{"name": {"STOLEN"}, "data": {"x"}}, http.StatusNotFound)
+			post(owner, sibling+"/variables/"+vid+"/delete", nil, http.StatusNotFound)
 			unittest.AssertExistsAndLoadBean(t, &secret_model.Secret{ID: secrets[0].ID, Name: "DEPLOY_TOKEN"})
 			unittest.AssertExistsAndLoadBean(t, &actions_model.ActionVariable{ID: variables[0].ID})
 
@@ -308,7 +358,13 @@ func TestActionsEnvironmentsWeb(t *testing.T) {
 				require.NoError(t, err)
 			}()
 			link := envLink(production)
-			owner.MakeRequest(t, NewRequest(t, "GET", link), http.StatusOK)
+			body := owner.MakeRequest(t, NewRequest(t, "GET", link), http.StatusOK).Body.String()
+			assert.Contains(t, body, `id="environment-archived"`)
+			assert.Contains(t, body, "<fieldset class=\"tw-contents\" disabled>")
+			assert.NotContains(t, body, `id="environment-save"`)
+			assert.NotContains(t, body, `data-modal="#add-secret-modal"`)
+			assert.NotContains(t, body, `id="delete-environment-modal"`)
+			assert.NotContains(t, owner.MakeRequest(t, NewRequest(t, "GET", base), http.StatusOK).Body.String(), base+"/new")
 			post(owner, base+"/new", form(map[string][]string{"name": {"frozen"}}), http.StatusNotFound)
 			post(owner, link, form(nil), http.StatusNotFound)
 			post(owner, link+"/delete", url.Values{"confirm_name": {"Production"}}, http.StatusNotFound)
@@ -371,11 +427,14 @@ func TestActionsEnvironmentsWeb(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, actions_model.DeploymentReleased, d.Status)
 			assert.Equal(t, []string{"repo.actions_env.updated"}, auditActions(since, "repo.actions_env"))
-			runner.execTask(t, runner.fetchTask(t), &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
+			// released, no runner took it yet
+			assert.Contains(t, owner.MakeRequest(t, NewRequest(t, "GET", base), http.StatusOK).Body.String(), "Released, not started yet")
+			runner.execTask(t, runner.fetchTask(t), &mockTaskOutcome{result: runnerv1.Result_RESULT_FAILURE})
 
-			// the list shows the last deployment with its ref and run
+			// the list shows the last deployment with its outcome, ref and run
 			body := owner.MakeRequest(t, NewRequest(t, "GET", base), http.StatusOK).Body.String()
-			assert.Contains(t, body, "Released")
+			assert.NotContains(t, body, "Released, not started yet")
+			assert.Regexp(t, `(?s)environment-deployment.*Failure`, body)
 			assert.Regexp(t, `href="/user2/web-envs/actions/runs/\d+">main</a>`, body)
 		})
 
@@ -385,7 +444,7 @@ func TestActionsEnvironmentsWeb(t *testing.T) {
 			body := owner.MakeRequest(t, NewRequest(t, "GET", link), http.StatusOK).Body.String()
 			assert.Contains(t, body, "The next deployment to gated will run without approval")
 			assert.Contains(t, body, `id="delete-environment-modal"`)
-			assert.Regexp(t, `(?s)Last deployment:.*Released`, body)
+			assert.Regexp(t, `(?s)Last deployment:.*Failure`, body)
 
 			since := auditNow()
 			resp := post(owner, link+"/delete", url.Values{"confirm_name": {"GATED"}}, http.StatusSeeOther)
@@ -434,4 +493,110 @@ func TestActionsEnvironmentsWebPicker(t *testing.T) {
 	assert.Equal(t, want, got, "exactly the teams of the owning organization")
 	assert.NotContains(t, body, `data-value="user:31"`)
 	assert.Contains(t, body, `data-value="user:2"`)
+}
+
+// The picker of a public repository offers its read-only collaborators and the read-only members of its teams (the
+// access table holds no read rows on a public repository), and only an owner of the organization manages the
+// environments of its repositories.
+func TestActionsEnvironmentsWebOrgRepo(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+	ctx := db.DefaultContext
+	token := getUserToken(t, "user2", auth_model.AccessTokenScopeWriteRepository, auth_model.AccessTokenScopeWriteOrganization)
+	MakeRequest(t, NewRequestWithJSON(t, "POST", "/api/v1/orgs/org3/repos", &api.CreateRepoOption{Name: "web-env-public", AutoInit: true}).AddTokenAuth(token), http.StatusCreated)
+	repo, err := repo_model.GetRepositoryByOwnerAndName(ctx, "org3", "web-env-public")
+	require.NoError(t, err)
+	require.False(t, repo.IsPrivate)
+	link := "/org3/web-env-public/settings/actions/environments"
+	owner := loginUser(t, "user2")
+
+	readers := &organization.Team{OrgID: 3, Name: "env-readers", AccessMode: perm.AccessModeRead, Units: []*organization.TeamUnit{
+		{OrgID: 3, Type: unit.TypeCode, AccessMode: perm.AccessModeRead}, {OrgID: 3, Type: unit.TypeActions, AccessMode: perm.AccessModeRead},
+	}}
+	require.NoError(t, models.NewTeam(ctx, readers))
+	require.NoError(t, models.AddTeamMemberByCooptation(ctx, readers, 5, 2))
+	require.NoError(t, org_service.TeamAddRepository(ctx, readers, repo))
+	MakeRequest(t, NewRequestWithJSON(t, "PUT", "/api/v1/repos/org3/web-env-public/collaborators/user10",
+		&api.AddCollaboratorOption{Permission: new("read")}).AddTokenAuth(token), http.StatusNoContent)
+
+	t.Run("picker offers read-only users", func(t *testing.T) {
+		body := owner.MakeRequest(t, NewRequest(t, "GET", link+"/new"), http.StatusOK).Body.String()
+		assert.Contains(t, body, `data-value="user:5"`, "a read-only team member")
+		assert.Contains(t, body, `data-value="user:10"`, "a read-only collaborator")
+		assert.Contains(t, body, "@user5", "users show their login")
+		assert.Contains(t, body, "org3/env-readers", "teams show their organization")
+		assert.Contains(t, body, "users or teams of the organization")
+	})
+
+	t.Run("only an acting owner of the organization", func(t *testing.T) {
+		// team12 has administrator access (Admin, not Owner)
+		admins := unittest.AssertExistsAndLoadBean(t, &organization.Team{ID: 12})
+		require.NoError(t, org_service.TeamAddRepository(ctx, admins, repo))
+		for _, c := range []struct {
+			user   string
+			status int
+		}{{"user2", http.StatusOK}, {"user1", http.StatusOK}, {"user28", http.StatusNotFound}, {"user5", http.StatusNotFound}, {"user10", http.StatusNotFound}} {
+			s := loginUser(t, c.user)
+			s.MakeRequest(t, NewRequest(t, "GET", link), c.status)
+			s.MakeRequest(t, NewRequest(t, "GET", link+"/new"), c.status)
+		}
+		post := NewRequestWithValues(t, "POST", link+"/new", map[string]string{"name": "intruder", "ref_policy": "0"})
+		loginUser(t, "user28").MakeRequest(t, post, http.StatusNotFound)
+		unittest.AssertNotExistsBean(t, &actions_model.ActionEnvironment{RepoID: repo.ID, LowerName: "intruder"})
+
+		// an owner without 2FA in an organization that requires it is no owner there
+		_, err := db.Exec(ctx, "UPDATE `user` SET require_two_factor = ? WHERE id = 3", true)
+		require.NoError(t, err)
+		defer func() {
+			_, err := db.Exec(ctx, "UPDATE `user` SET require_two_factor = ? WHERE id = 3", false)
+			require.NoError(t, err)
+		}()
+		resp := owner.MakeRequest(t, NewRequest(t, "GET", link), NoExpectedStatus)
+		assert.Contains(t, []int{http.StatusForbidden, http.StatusNotFound}, resp.Code)
+		owner.MakeRequest(t, NewRequestWithValues(t, "POST", link+"/new", map[string]string{"name": "blocked", "ref_policy": "0"}), NoExpectedStatus)
+		unittest.AssertNotExistsBean(t, &actions_model.ActionEnvironment{RepoID: repo.ID, LowerName: "blocked"})
+	})
+}
+
+// The list and the form decide every reviewer with a fixed number of queries, whatever the number of environments,
+// readers and team members.
+func TestActionsEnvironmentsWebQueries(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+	ctx := db.DefaultContext
+	owner := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	session := loginUser(t, "user2")
+	token := getUserToken(t, "user2", auth_model.AccessTokenScopeWriteRepository)
+
+	count := func(n int) []int64 {
+		org := &organization.Organization{Name: fmt.Sprintf("env-q-%d", n)}
+		require.NoError(t, organization.CreateOrganization(ctx, org, owner))
+		repo, err := repo_service.CreateRepositoryDirectly(ctx, owner, org.AsUser(), repo_service.CreateRepoOptions{Name: "deploy"})
+		require.NoError(t, err)
+		team := &organization.Team{OrgID: org.ID, Name: "deployers", AccessMode: perm.AccessModeRead, Units: []*organization.TeamUnit{
+			{OrgID: org.ID, Type: unit.TypeActions, AccessMode: perm.AccessModeRead},
+		}}
+		require.NoError(t, models.NewTeam(ctx, team))
+		require.NoError(t, org_service.TeamAddRepository(ctx, team, repo))
+		for i := range n {
+			u := &user_model.User{Name: fmt.Sprintf("env-q-%d-%d", n, i), Email: fmt.Sprintf("env-q-%d-%d@example.com", n, i), IsActive: true}
+			require.NoError(t, user_model.CreateUser(ctx, u))
+			require.NoError(t, models.AddTeamMemberByCooptation(ctx, team, u.ID, owner.ID))
+			MakeRequest(t, NewRequestWithJSON(t, "PUT", fmt.Sprintf("/api/v1/repos/%s/deploy/collaborators/%s", org.Name, u.Name),
+				&api.AddCollaboratorOption{Permission: new("read")}).AddTokenAuth(token), http.StatusNoContent)
+		}
+		base := fmt.Sprintf("/%s/deploy/settings/actions/environments", org.Name)
+		for i := range n {
+			session.MakeRequest(t, NewRequestWithValues(t, "POST", base+"/new", map[string]string{
+				"name": fmt.Sprintf("env-%d", i), "reviewers": fmt.Sprintf("team:%d", team.ID), "ref_policy": "0",
+			}), http.StatusSeeOther)
+		}
+		env, err := actions_model.GetRepoEnvironmentByName(ctx, repo.ID, "env-0")
+		require.NoError(t, err)
+		var counts []int64
+		for _, l := range []string{base, base + "/new", fmt.Sprintf("%s/%d", base, env.ID)} {
+			session.MakeRequest(t, NewRequest(t, "GET", l), http.StatusOK) // generated avatars are saved once
+			counts = append(counts, stableQueryCount(t, func() { session.MakeRequest(t, NewRequest(t, "GET", l), http.StatusOK) }))
+		}
+		return counts
+	}
+	assert.Equal(t, count(1), count(20))
 }

@@ -258,6 +258,37 @@ func FindLastDeployments(ctx context.Context, repoID int64, environmentIDs []int
 	return out, nil
 }
 
+// FindDeploymentTasks returns, by deployment ID, the task of the job attempt of each released deployment: its outcome,
+// which is not stored on the deployment. One query, bound to the repository; a released job no runner took yet has none.
+func FindDeploymentTasks(ctx context.Context, repoID int64, ds []*ActionDeployment) (map[int64]*ActionTask, error) {
+	jobIDs := make([]int64, 0, len(ds))
+	for _, d := range ds {
+		if d.Status == DeploymentReleased {
+			jobIDs = append(jobIDs, d.JobID)
+		}
+	}
+	out := make(map[int64]*ActionTask, len(jobIDs))
+	if len(jobIDs) == 0 {
+		return out, nil
+	}
+	var tasks []*ActionTask
+	if err := db.GetEngine(ctx).Where("repo_id = ?", repoID).In("job_id", jobIDs).
+		Cols("id", "job_id", "attempt", "status", "started", "stopped", "updated").OrderBy("id").Find(&tasks); err != nil {
+		return nil, err
+	}
+	type attempt struct{ job, n int64 }
+	byAttempt := make(map[attempt]*ActionTask, len(tasks))
+	for _, t := range tasks {
+		byAttempt[attempt{t.JobID, t.Attempt}] = t // the newest task of the attempt wins
+	}
+	for _, d := range ds {
+		if t := byAttempt[attempt{d.JobID, d.Attempt}]; t != nil && d.Status == DeploymentReleased {
+			out[d.ID] = t
+		}
+	}
+	return out, nil
+}
+
 // FindRepoDeployments returns a page of the deployments of the repository, newest first, of one environment
 // (environmentID 0: of every environment), and how many there are.
 func FindRepoDeployments(ctx context.Context, repoID, environmentID int64, opts db.ListOptions) ([]*ActionDeployment, int64, error) {

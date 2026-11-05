@@ -20,10 +20,12 @@ import (
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/container"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/timeutil"
 	"forgejo.org/modules/util"
+	"forgejo.org/services/accessreport"
 )
 
 var (
@@ -147,7 +149,7 @@ const (
 // reviewerIneligibility is what holds for a reviewer on every deployment of the repository (whose owner is loaded): a
 // usable person with read access to its Actions. It returns "" if u may review, otherwise why not.
 func reviewerIneligibility(ctx context.Context, repo *repo_model.Repository, u *user_model.User) (string, error) {
-	if u.ID <= 0 || u.IsActions() || u.IsAccessTokenBot() || !u.IsIndividual() || !u.IsActive || u.ProhibitLogin {
+	if !usableReviewer(u) {
 		return ReviewerNotUsable, nil
 	}
 	if blocked, err := u.TwoFactorBlocked(ctx, repo.Owner); err != nil || blocked {
@@ -162,24 +164,36 @@ func reviewerIneligibility(ctx context.Context, repo *repo_model.Repository, u *
 	return "", nil
 }
 
+// usableReviewer tells if u is a person who can sign in.
+func usableReviewer(u *user_model.User) bool {
+	return u.ID > 0 && !u.IsActions() && !u.IsAccessTokenBot() && u.IsIndividual() && u.IsActive && !u.ProhibitLogin
+}
+
 // EnvironmentReviewerCheck says, for the listed reviewers of environments of one repository, who can approve a
 // deployment at this moment by the rules every deployment shares (those of one run, such as self-review, are left out).
 type EnvironmentReviewerCheck struct {
 	Ineligible map[string]string // reviewer key (ActionEnvironmentReviewer.Key) -> why it can't approve; absent = can
 	NoReviewer map[int64]bool    // environment ID -> it requires reviews and no listed reviewer can approve
+	// Users are the listed users that exist (members of listed teams not included)
+	Users map[int64]*user_model.User
+	// Readers are the users with a path to the repository (owner, collaborators, members of its teams) who can
+	// approve, in name order: the ones to offer as reviewers. Site admins whose only path is that role are left out.
+	Readers []*user_model.User
 }
 
-// CheckEnvironmentReviewers decides the reviewers of the environments of repo (whose owner is loaded), with the rule of
-// ReviewChecker.May. It reads the users and the members of the teams in one query each and decides each user once,
-// whatever the number of environments that list them; a team counts as soon as one member can approve.
+// CheckEnvironmentReviewers decides the reviewers of the environments of repo with the rule of ReviewChecker.May
+// (reviewerIneligibility), with a fixed number of queries: the members of the listed teams in one, and the access of
+// every user to the repository through accessreport.Compute, which replays GetUserRepoPermission. A team counts as soon
+// as one member can approve.
 func CheckEnvironmentReviewers(ctx context.Context, repo *repo_model.Repository, envs []*actions_model.ActionEnvironment, reviewers map[int64][]*actions_model.ActionEnvironmentReviewer) (*EnvironmentReviewerCheck, error) {
-	var userIDs, teamIDs []int64
+	var userIDs, teamIDs, listedIDs []int64
 	for _, rs := range reviewers {
 		for _, r := range rs {
 			if r.TeamID > 0 {
 				teamIDs = append(teamIDs, r.TeamID)
 			} else {
 				userIDs = append(userIDs, r.UserID)
+				listedIDs = append(listedIDs, r.UserID)
 			}
 		}
 	}
@@ -195,52 +209,55 @@ func CheckEnvironmentReviewers(ctx context.Context, repo *repo_model.Repository,
 			userIDs = append(userIDs, r.UID)
 		}
 	}
-	users, err := user_model.GetUsersByIDs(ctx, userIDs)
+	rows, err := accessreport.Compute(ctx, accessreport.Options{RepoIDs: []int64{repo.ID}, Users: userIDs, RepoPermission: true})
 	if err != nil {
 		return nil, err
 	}
-	byID := make(map[int64]*user_model.User, len(users))
-	for _, u := range users {
-		byID[u.ID] = u
+	check := &EnvironmentReviewerCheck{Ineligible: map[string]string{}, NoReviewer: map[int64]bool{}, Users: map[int64]*user_model.User{}}
+	listed := container.SetOf(listedIDs...)
+	decided := map[int64]string{} // a user without a row is no individual or no longer exists
+	for _, row := range rows {
+		if row.User == nil {
+			continue
+		}
+		why := ""
+		switch {
+		case !usableReviewer(row.User):
+			why = ReviewerNotUsable
+		case row.TwoFactorBlocked:
+			why = ReviewerTwoFactor
+		case !row.Perm.CanRead(unit.TypeActions):
+			why = ReviewerNoAccess
+		}
+		decided[row.User.ID] = why
+		if listed.Contains(row.User.ID) {
+			check.Users[row.User.ID] = row.User
+		}
+		if why == "" && slices.ContainsFunc(row.Paths, func(p *accessreport.Path) bool { return p.Kind != accessreport.KindSiteAdmin }) {
+			check.Readers = append(check.Readers, row.User)
+		}
 	}
-	decided := map[int64]string{}
-	reason := func(id int64) (string, error) {
-		if r, ok := decided[id]; ok {
-			return r, nil
+	reason := func(id int64) string {
+		if why, ok := decided[id]; ok {
+			return why
 		}
-		r := ReviewerNotUsable // deleted meanwhile
-		if u := byID[id]; u != nil {
-			var err error
-			if r, err = reviewerIneligibility(ctx, repo, u); err != nil {
-				return "", err
-			}
-		}
-		decided[id] = r
-		return r, nil
+		return ReviewerNotUsable
 	}
-	check := &EnvironmentReviewerCheck{Ineligible: map[string]string{}, NoReviewer: map[int64]bool{}}
-	keyReason := func(r *actions_model.ActionEnvironmentReviewer) (string, error) {
-		if why, ok := check.Ineligible[r.Key()]; ok {
-			return why, nil
-		}
+	keyReason := func(r *actions_model.ActionEnvironmentReviewer) string {
 		if r.TeamID == 0 {
 			return reason(r.UserID)
 		}
 		for _, uid := range members[r.TeamID] {
-			if why, err := reason(uid); err != nil || why == "" {
-				return why, err
+			if reason(uid) == "" {
+				return ""
 			}
 		}
-		return ReviewerNoneInTeam, nil
+		return ReviewerNoneInTeam
 	}
 	for _, env := range envs {
 		eligible := false
 		for _, r := range reviewers[env.ID] {
-			why, err := keyReason(r)
-			if err != nil {
-				return nil, err
-			}
-			if why == "" {
+			if why := keyReason(r); why == "" {
 				eligible = true
 			} else {
 				check.Ineligible[r.Key()] = why

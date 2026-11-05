@@ -8,17 +8,18 @@ import (
 	"html"
 	"html/template"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
 	actions_model "forgejo.org/models/actions"
 	"forgejo.org/models/db"
 	org_model "forgejo.org/models/organization"
-	access_model "forgejo.org/models/perm/access"
 	repo_model "forgejo.org/models/repo"
 	secret_model "forgejo.org/models/secret"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/base"
+	"forgejo.org/modules/timeutil"
 	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
 	shared_actions "forgejo.org/routers/web/shared/actions"
@@ -80,9 +81,12 @@ type environmentDeployment struct {
 	*actions_model.ActionDeployment
 	RefName string
 	RunLink string
+	Task    *actions_model.ActionTask // the outcome of a released deployment, nil until a runner takes the job
+	When    timeutil.TimeStamp        // the last change: of the task, else of the deployment
 }
 
-// lastDeployments returns the newest deployment of each environment with the link of its run.
+// lastDeployments returns the newest deployment of each environment with the link of its run and, once released,
+// its job attempt's task.
 func lastDeployments(ctx *context.Context, repo *repo_model.Repository, ids []int64) (map[int64]*environmentDeployment, error) {
 	last, err := actions_model.FindLastDeployments(ctx, repo.ID, ids)
 	if err != nil {
@@ -98,6 +102,14 @@ func lastDeployments(ctx *context.Context, repo *repo_model.Repository, ids []in
 			return nil, err
 		}
 	}
+	ds := make([]*actions_model.ActionDeployment, 0, len(last))
+	for _, d := range last {
+		ds = append(ds, d)
+	}
+	tasks, err := actions_model.FindDeploymentTasks(ctx, repo.ID, ds)
+	if err != nil {
+		return nil, err
+	}
 	links := make(map[int64]string, len(runs))
 	for _, r := range runs {
 		links[r.ID] = repo.Link() + "/actions/runs/" + strconv.FormatInt(r.Index, 10)
@@ -108,7 +120,11 @@ func lastDeployments(ctx *context.Context, repo *repo_model.Repository, ids []in
 		if name == "" {
 			name = d.Ref
 		}
-		out[id] = &environmentDeployment{ActionDeployment: d, RefName: name, RunLink: links[d.RunID]}
+		row := &environmentDeployment{ActionDeployment: d, RefName: name, RunLink: links[d.RunID], Task: tasks[d.ID], When: d.Updated}
+		if row.Task != nil {
+			row.When = row.Task.Updated
+		}
+		out[id] = row
 	}
 	return out, nil
 }
@@ -224,6 +240,23 @@ type reviewerOption struct {
 	User   *user_model.User
 	Team   *org_model.Team
 	Reason string // why it can't approve now, "" if it can
+	// Unknown is a listed reviewer that no longer exists or the doer can't see: shown only to be removed
+	Unknown bool
+}
+
+// parseReviewerKeys reads the listed reviewers of the form ("user:<id>" and "team:<id>", comma separated).
+func parseReviewerKeys(keys string) []*actions_model.ActionEnvironmentReviewer {
+	var listed []*actions_model.ActionEnvironmentReviewer
+	for key := range strings.SplitSeq(keys, ",") {
+		kind, id, _ := strings.Cut(strings.TrimSpace(key), ":")
+		n, _ := strconv.ParseInt(id, 10, 64)
+		if kind == "user" && n > 0 {
+			listed = append(listed, &actions_model.ActionEnvironmentReviewer{UserID: n})
+		} else if kind == "team" && n > 0 {
+			listed = append(listed, &actions_model.ActionEnvironmentReviewer{TeamID: n})
+		}
+	}
+	return listed
 }
 
 // prepareEnvironmentForm fills the data of the new/edit page; env is nil on the new page.
@@ -232,94 +265,77 @@ func prepareEnvironmentForm(ctx *context.Context, level *environmentLevel, env *
 	ctx.Data["EnvironmentsLink"] = level.Link
 	ctx.Data["MaxReviewers"] = actions_model.MaxEnvironmentReviewers
 	ctx.Data["MaxWaitTimer"] = actions_model.MaxWaitTimerMinutes
+	ctx.Data["MaxWaitTimerDays"] = actions_model.MaxWaitTimerMinutes / (24 * 60)
 	ctx.Data["EmptyPattern"] = actions_model.EnvironmentRefPattern{}
 	repo := level.Repo
+	ctx.Data["ReviewerTeams"] = repo.Owner.IsOrganization()
 
-	// the picker offers the users with access to the repository and the teams of its owner, and keeps the listed
-	// ones; nobody the doer can't see
-	var listed []*actions_model.ActionEnvironmentReviewer
-	for key := range strings.SplitSeq(view.Reviewers, ",") {
-		kind, id, _ := strings.Cut(key, ":")
-		n, _ := strconv.ParseInt(id, 10, 64)
-		if kind == "user" && n > 0 {
-			listed = append(listed, &actions_model.ActionEnvironmentReviewer{UserID: n})
-		} else if kind == "team" && n > 0 {
-			listed = append(listed, &actions_model.ActionEnvironmentReviewer{TeamID: n})
-		}
-	}
-	readers, err := access_model.GetRepoReaders(ctx, repo)
-	if err != nil {
-		ctx.ServerError("GetRepoReaders", err)
-		return
-	}
-	candidateIDs := make([]int64, 0, len(readers)+len(listed))
-	for _, u := range readers {
-		candidateIDs = append(candidateIDs, u.ID)
-	}
-	for _, r := range listed {
-		if r.UserID > 0 {
-			candidateIDs = append(candidateIDs, r.UserID)
-		}
-	}
-	users, err := user_model.GetUsersByIDs(ctx, candidateIDs)
-	if err != nil {
-		ctx.ServerError("GetUsersByIDs", err)
-		return
-	}
+	// The picker offers the users who can approve through their access to the repository and the teams of its
+	// owner, and keeps the listed entries (one it can't name is an unknown reviewer, to be removed); nobody the doer
+	// can't see. One bulk check decides them all, and the stored reviewers for the warning.
+	listed := parseReviewerKeys(view.Reviewers)
 	var teams []*org_model.Team
 	if repo.Owner.IsOrganization() {
+		var err error
 		if teams, err = org_model.FindOrgTeams(ctx, repo.OwnerID); err != nil {
 			ctx.ServerError("FindOrgTeams", err)
 			return
 		}
 	}
-	all := make([]*actions_model.ActionEnvironmentReviewer, 0, len(users)+len(teams))
-	options := make([]*reviewerOption, 0, len(users)+len(teams))
-	for _, u := range users {
-		if !u.IsIndividual() || !user_model.IsUserVisibleToViewer(ctx, u, ctx.Doer) {
-			continue
+	offered := slices.Clone(listed)
+	for _, t := range teams {
+		offered = append(offered, &actions_model.ActionEnvironmentReviewer{TeamID: t.ID})
+	}
+	envs := []*actions_model.ActionEnvironment{{}} // the form's reviewers, under ID 0
+	reviewers := map[int64][]*actions_model.ActionEnvironmentReviewer{0: offered}
+	if env != nil {
+		// the warning and the delete confirmation read the stored environment, not the form
+		stored, err := actions_model.FindEnvironmentReviewers(ctx, env.ID)
+		if err != nil {
+			ctx.ServerError("FindEnvironmentReviewers", err)
+			return
 		}
-		r := &actions_model.ActionEnvironmentReviewer{UserID: u.ID}
-		all = append(all, r)
-		options = append(options, &reviewerOption{Key: r.Key(), User: u})
+		envs = append(envs, env)
+		reviewers[env.ID] = stored
+	}
+	check, err := actions_service.CheckEnvironmentReviewers(ctx, repo, envs, reviewers)
+	if err != nil {
+		ctx.ServerError("CheckEnvironmentReviewers", err)
+		return
+	}
+	users := slices.Clone(check.Readers)
+	for _, r := range listed {
+		if u := check.Users[r.UserID]; u != nil && !slices.ContainsFunc(users, func(x *user_model.User) bool { return x.ID == u.ID }) {
+			users = append(users, u)
+		}
+	}
+	visible, err := user_model.VisibleToViewer(ctx, users, ctx.Doer)
+	if err != nil {
+		ctx.ServerError("VisibleToViewer", err)
+		return
+	}
+	options := make([]*reviewerOption, 0, len(users)+len(teams))
+	known := map[string]bool{}
+	for _, u := range users {
+		if u.IsIndividual() && visible.Contains(u.ID) {
+			key := (&actions_model.ActionEnvironmentReviewer{UserID: u.ID}).Key()
+			options = append(options, &reviewerOption{Key: key, User: u, Reason: check.Ineligible[key]})
+			known[key] = true
+		}
 	}
 	for _, t := range teams {
-		r := &actions_model.ActionEnvironmentReviewer{TeamID: t.ID}
-		all = append(all, r)
-		options = append(options, &reviewerOption{Key: r.Key(), Team: t})
+		key := (&actions_model.ActionEnvironmentReviewer{TeamID: t.ID}).Key()
+		options = append(options, &reviewerOption{Key: key, Team: t, Reason: check.Ineligible[key]})
+		known[key] = true
 	}
-	pseudo := &actions_model.ActionEnvironment{}
-	check, err := actions_service.CheckEnvironmentReviewers(ctx, repo, []*actions_model.ActionEnvironment{pseudo}, map[int64][]*actions_model.ActionEnvironmentReviewer{0: all})
-	if err != nil {
-		ctx.ServerError("CheckEnvironmentReviewers", err)
-		return
-	}
-	isListed := map[string]bool{}
 	for _, r := range listed {
-		isListed[r.Key()] = true
-	}
-	offered := options[:0]
-	for _, o := range options {
-		o.Reason = check.Ineligible[o.Key]
-		// a user who can't approve is offered only while listed, so the list shows why
-		if o.User == nil || o.Reason == "" || isListed[o.Key] {
-			offered = append(offered, o)
+		if key := r.Key(); !known[key] {
+			options = append(options, &reviewerOption{Key: key, Unknown: true})
+			known[key] = true
 		}
 	}
-	ctx.Data["ReviewerOptions"] = offered
+	ctx.Data["ReviewerOptions"] = options
 	if env == nil {
-		return
-	}
-
-	// the warning and the delete confirmation read the stored environment, not the form
-	stored, err := actions_model.FindEnvironmentReviewers(ctx, env.ID)
-	if err != nil {
-		ctx.ServerError("FindEnvironmentReviewers", err)
-		return
-	}
-	check, err = actions_service.CheckEnvironmentReviewers(ctx, repo, []*actions_model.ActionEnvironment{env}, map[int64][]*actions_model.ActionEnvironmentReviewer{env.ID: stored})
-	if err != nil {
-		ctx.ServerError("CheckEnvironmentReviewers", err)
 		return
 	}
 	ctx.Data["NoReviewer"] = check.NoReviewer[env.ID]
@@ -332,9 +348,10 @@ func prepareEnvironmentForm(ctx *context.Context, level *environmentLevel, env *
 
 	link := ctx.Data["EnvironmentLink"].(string)
 	ctx.Data["SecretsLink"], ctx.Data["VariablesLink"] = link+"/secrets", link+"/variables"
+	ctx.Data["ActionsReadOnly"] = repo.IsArchived
 	ctx.Data["SecretsTitle"], ctx.Data["VariablesTitle"] = ctx.Tr("actions.environments.secrets"), ctx.Tr("actions.environments.variables")
 	ctx.Data["SecretsDescription"] = ctx.Tr("actions.environments.secrets.desc", env.Name)
-	ctx.Data["VariablesDescription"] = ctx.Tr("actions.environments.variables.desc", env.Name)
+	ctx.Data["VariablesDescription"] = ctx.Tr("actions.environments.variables.desc", template.HTML("<code>vars.NAME</code>"), env.Name)
 	shared_secrets.SetSecretsContext(ctx, 0, 0, repo.ID, env.ID)
 	shared_actions.SetVariablesContext(ctx, 0, 0, repo.ID, env.ID)
 	if ctx.Written() {

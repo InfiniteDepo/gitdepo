@@ -28,7 +28,17 @@ function initReviewers() {
     count.textContent = text.replace('%d', String(n)).replace('%d', String(max));
     dropdown.querySelector('input.search')?.toggleAttribute('disabled', n >= max);
   };
-  $(dropdown).dropdown({maxSelections: max, fullTextSearch: true, onChange: update});
+  const ineligible = new Set(Array.from(dropdown.querySelectorAll('.item.environment-reviewer-ineligible'), (el) => el.getAttribute('data-value')));
+  $(dropdown).dropdown({
+    maxSelections: max,
+    fullTextSearch: true,
+    onChange: update,
+    // a chosen reviewer who can't approve now stays greyed, with its reason
+    onLabelCreate(value) {
+      if (ineligible.has(value)) this.addClass('environment-reviewer-ineligible');
+      return this;
+    },
+  });
   update();
 }
 

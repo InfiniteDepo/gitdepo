@@ -81,6 +81,8 @@ type Row struct {
 	Repo         *repo_model.Repository
 	Perm         access_model.Permission
 	Paths        []*Path
+	// TwoFactorBlocked tells that the user is a stranger to the repository because its owner org requires 2FA
+	TwoFactorBlocked bool
 }
 
 // Options selects what Compute reports.
@@ -93,6 +95,11 @@ type Options struct {
 	// Outsider computes for a viewer outside the owner org: users as if they were in no team and in no org, and
 	// one row per team instead of its members.
 	Outsider bool
+	// Users are reported too, with a row even when they have no path: their access is then the one the pseudo-rows
+	// stand for, decided for them (none if they can't see the owner, are restricted or the repository is private).
+	Users []int64
+	// RepoPermission reports access_model.GetUserRepoPermission itself: an auditor's access is not raised to read.
+	RepoPermission bool
 }
 
 type key struct{ a, b int64 }
@@ -135,6 +142,7 @@ func Compute(ctx context.Context, opts Options) ([]*Row, error) {
 		return nil, err
 	}
 
+	listed := container.SetOf(opts.Users...)
 	var rows []*Row
 	for _, repo := range repos {
 		owner := d.owners[repo.OwnerID]
@@ -157,8 +165,16 @@ func Compute(ctx context.Context, opts Options) ([]*Row, error) {
 			if u == nil {
 				continue
 			}
-			row := &Row{User: u, Repo: repo, Perm: d.permission(repo, u), Paths: d.paths(repo, u), OrgMember: d.orgMember[key{repo.OwnerID, u.ID}]}
-			if len(row.Paths) == 0 {
+			row := &Row{
+				User: u, Repo: repo, Paths: d.paths(repo, u), OrgMember: d.orgMember[key{repo.OwnerID, u.ID}],
+				TwoFactorBlocked: d.twoFactorBlocked(owner, u),
+			}
+			if opts.RepoPermission {
+				row.Perm = d.userPermission(repo, u)
+			} else {
+				row.Perm = d.permission(repo, u)
+			}
+			if len(row.Paths) == 0 && !listed.Contains(uid) {
 				continue
 			}
 			setApplied(row)
@@ -409,6 +425,7 @@ func load(ctx context.Context, repos repo_model.RepositoryList, opts Options) (*
 		for _, tu := range teamUsers {
 			uids = append(uids, tu.UID)
 		}
+		uids = append(uids, opts.Users...)
 		roles := builder.NewCond()
 		if !opts.Plain {
 			roles = builder.Or(builder.Eq{"is_admin": true}, builder.Eq{"is_auditor": true})
@@ -454,6 +471,7 @@ func (d *data) candidates(repo *repo_model.Repository, opts Options) []int64 {
 	set := container.Set[int64]{}
 	set.Add(repo.OwnerID)
 	set.AddMultiple(d.roleUsers...)
+	set.AddMultiple(opts.Users...)
 	for k := range d.collab {
 		if k.b == repo.ID {
 			set.Add(k.a)

@@ -12,6 +12,7 @@ import (
 	org_model "forgejo.org/models/organization"
 	repo_model "forgejo.org/models/repo"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/container"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/util"
 )
@@ -64,7 +65,10 @@ func CreateEnvironment(ctx context.Context, doer *user_model.User, e *actions_mo
 }
 
 // environmentReviewers checks that the doer's own act changes the rules of e and turns the IDs into its reviewers: a
-// user is an individual account the doer can see, a team belongs to the organization that owns the repository.
+// user is an individual account the doer can see, a team belongs to the organization that owns the repository. Only
+// entries the environment doesn't list yet are checked: keeping a listed one reveals nothing new, and one whose user
+// or team was deleted or hidden meanwhile must not block every other change (it stays listed until removed, and can't
+// approve, so the gate stays closed).
 func environmentReviewers(ctx context.Context, doer *user_model.User, e *actions_model.ActionEnvironment, userIDs, teamIDs []int64) ([]actions_model.ActionEnvironmentReviewer, error) {
 	if err := audit_model.CheckOwnAct(ctx); err != nil {
 		return nil, err
@@ -73,24 +77,66 @@ func environmentReviewers(ctx context.Context, doer *user_model.User, e *actions
 	if err != nil {
 		return nil, err
 	}
-	reviewers := make([]actions_model.ActionEnvironmentReviewer, 0, len(userIDs)+len(teamIDs))
-	for _, id := range userIDs {
-		u, err := user_model.GetUserByID(ctx, id)
-		if user_model.IsErrUserNotExist(err) || (err == nil && (id <= 0 || !u.IsIndividual() || !user_model.IsUserVisibleToViewer(ctx, u, doer))) {
-			return nil, errUnknownReviewer
-		} else if err != nil {
+	stored := map[string]bool{}
+	id := e.ID
+	if id == 0 { // saved by name: the environment of that name, if there is one
+		if s, err := actions_model.GetRepoEnvironmentByName(ctx, e.RepoID, e.Name); err == nil {
+			id = s.ID
+		} else if !errors.Is(err, actions_model.ErrEnvironmentNotFound) {
 			return nil, err
 		}
-		reviewers = append(reviewers, actions_model.ActionEnvironmentReviewer{UserID: id})
+	}
+	if id != 0 {
+		rs, err := actions_model.FindEnvironmentReviewers(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rs {
+			stored[r.Key()] = true
+		}
+	}
+	reviewers := make([]actions_model.ActionEnvironmentReviewer, 0, len(userIDs)+len(teamIDs))
+	var newUserIDs []int64
+	for _, id := range userIDs {
+		r := actions_model.ActionEnvironmentReviewer{UserID: id}
+		if !stored[r.Key()] {
+			if id <= 0 {
+				return nil, errUnknownReviewer
+			}
+			newUserIDs = append(newUserIDs, id)
+		}
+		reviewers = append(reviewers, r)
+	}
+	if len(newUserIDs) > 0 {
+		users, err := user_model.GetUsersByIDs(ctx, newUserIDs)
+		if err != nil {
+			return nil, err
+		}
+		visible, err := user_model.VisibleToViewer(ctx, users, doer)
+		if err != nil {
+			return nil, err
+		}
+		found := 0
+		for _, u := range users {
+			if u.IsIndividual() && !u.IsTrashed() && visible.Contains(u.ID) { // as GetUserByID, which hides a tombstone
+				found++
+			}
+		}
+		if found != len(container.SetOf(newUserIDs...)) {
+			return nil, errUnknownReviewer
+		}
 	}
 	for _, id := range teamIDs {
-		team, err := org_model.GetTeamByID(ctx, id)
-		if org_model.IsErrTeamNotExist(err) || (err == nil && team.OrgID != repo.OwnerID) {
-			return nil, errUnknownReviewer
-		} else if err != nil {
-			return nil, err
+		r := actions_model.ActionEnvironmentReviewer{TeamID: id}
+		if !stored[r.Key()] {
+			team, err := org_model.GetTeamByID(ctx, id)
+			if org_model.IsErrTeamNotExist(err) || (err == nil && team.OrgID != repo.OwnerID) {
+				return nil, errUnknownReviewer
+			} else if err != nil {
+				return nil, err
+			}
 		}
-		reviewers = append(reviewers, actions_model.ActionEnvironmentReviewer{TeamID: id})
+		reviewers = append(reviewers, r)
 	}
 	return reviewers, nil
 }

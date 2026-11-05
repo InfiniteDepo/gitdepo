@@ -199,6 +199,39 @@ func assertComputeMatches(t *testing.T, auditorID int64) {
 			}
 		}
 	}
+	assertUsersMatch(t, repos, users)
+}
+
+// assertUsersMatch checks Options.Users with RepoPermission: every listed user has a row with the permission of
+// GetUserRepoPermission (auditors not raised) and its 2FA block, whether or not they have a path.
+func assertUsersMatch(t *testing.T, repos []*repo_model.Repository, users []*user_model.User) {
+	t.Helper()
+	ctx := db.DefaultContext
+	uids := make([]int64, len(users))
+	for i, u := range users {
+		uids[i] = u.ID
+	}
+	for _, repo := range repos {
+		rows, err := Compute(ctx, Options{RepoIDs: []int64{repo.ID}, Users: uids, RepoPermission: true})
+		require.NoError(t, err)
+		if repo.IsTrashed() {
+			assert.Empty(t, rows)
+			continue
+		}
+		require.NoError(t, repo.LoadOwner(ctx))
+		for _, u := range users {
+			expected, err := access_model.GetUserRepoPermission(ctx, repo, u)
+			require.NoError(t, err)
+			row := findRow(rows, repo.ID, u.ID)
+			if !assert.NotNil(t, row, "user %d on repo %d", u.ID, repo.ID) {
+				continue
+			}
+			assertSamePerm(t, expected, row.Perm, fmt.Sprintf("listed user %d on repo %d", u.ID, repo.ID))
+			blocked, err := u.TwoFactorBlocked(ctx, repo.Owner)
+			require.NoError(t, err)
+			assert.Equal(t, blocked, row.TwoFactorBlocked, "2FA of user %d on repo %d", u.ID, repo.ID)
+		}
+	}
 }
 
 func findRow(rows []*Row, repoID, uid int64) *Row {
@@ -359,6 +392,7 @@ func TestComputeMatchesGetUserRepoPermissionTwoFactorRequired(t *testing.T) {
 			assertSamePerm(t, expected, effective(t, rows, repo, u), fmt.Sprintf("user %d on repo %d", u.ID, repo.ID))
 		}
 	}
+	assertUsersMatch(t, repos, users)
 	// user 4 has TOTP: still writes repo 3 through team1; user 2's paths to repo 3 no longer apply
 	assert.True(t, findRow(rows, 3, 4).Perm.CanWrite(unit.TypeCode))
 	assert.False(t, findRow(rows, 3, 2).Perm.HasAccess())
