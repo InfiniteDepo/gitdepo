@@ -4,6 +4,7 @@
 package integration
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -478,6 +479,77 @@ jobs:
 				&api.DispatchWorkflowOption{Ref: "refs/heads/refs/tags/v99", Inputs: map[string]string{"target": "from-input"}},
 			).AddTokenAuth(token), http.StatusNoContent)
 			runner.execTask(t, runner.fetchTask(t), &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
+		})
+
+		t.Run("a ref with revision syntax gets its answer at once, on the API and the web", func(t *testing.T) {
+			for _, ref := range []string{"release/1@{1}", "main@{0}", "a..b", "x:y", "main~1", "main^"} {
+				answered := make(chan [2]int, 1)
+				go func() {
+					api := MakeRequest(t, NewRequestWithJSON(t, http.MethodPost,
+						fmt.Sprintf("/api/v1/repos/%s/%s/actions/workflows/env-dispatch.yml/dispatches", user2.Name, repo.Name),
+						&api.DispatchWorkflowOption{Ref: ref, Inputs: map[string]string{"target": "from-input"}},
+					).AddTokenAuth(token), NoExpectedStatus)
+					web := session.MakeRequest(t, NewRequestWithValues(t, "POST", fmt.Sprintf("/%s/%s/actions/manual", user2.Name, repo.Name),
+						map[string]string{"workflow": "env-dispatch.yml", "ref": ref}), NoExpectedStatus)
+					answered <- [2]int{api.Code, web.Code}
+				}()
+				select {
+				case codes := <-answered:
+					assert.Equal(t, http.StatusBadRequest, codes[0], ref)
+					assert.Equal(t, http.StatusBadRequest, codes[1], ref)
+				case <-time.After(10 * time.Second):
+					require.FailNow(t, "no answer", ref)
+				}
+			}
+		})
+
+		t.Run("a malformed environment answers 400 on dispatch, not 500", func(t *testing.T) {
+			for name, environment := range map[string]string{
+				"a list":          "environment: [a, b]",
+				"a map no name":   "environment:\n      url: https://example.com",
+				"uses and a name": "uses: ./.gitea/workflows/env-dispatch.yml\n    environment: prod",
+			} {
+				file := fmt.Sprintf("bad-env-%d.yml", len(name))
+				content := fmt.Sprintf("name: bad\non: workflow_dispatch\njobs:\n  deploy:\n    %s\n", environment)
+				if !strings.Contains(environment, "uses:") {
+					content += "    runs-on: env-a\n    steps:\n      - run: echo\n"
+				}
+				createWorkflowFile(t, token, user2.Name, repo.Name, ".gitea/workflows/"+file, getWorkflowCreateFileOptions(user2, repo.DefaultBranch, "bad env", content))
+				MakeRequest(t, NewRequestWithJSON(t, http.MethodPost,
+					fmt.Sprintf("/api/v1/repos/%s/%s/actions/workflows/%s/dispatches", user2.Name, repo.Name, file),
+					&api.DispatchWorkflowOption{Ref: repo.DefaultBranch},
+				).AddTokenAuth(token), http.StatusBadRequest)
+				resp := session.MakeRequest(t, NewRequestWithValues(t, "POST", fmt.Sprintf("/%s/%s/actions/manual", user2.Name, repo.Name),
+					map[string]string{"workflow": file, "ref": repo.DefaultBranch}), NoExpectedStatus)
+				assert.Less(t, resp.Code, 500, name)
+			}
+		})
+
+		t.Run("more dead jobs than one request fails don't stall a runner", func(t *testing.T) {
+			gone := newEnv("many-gone", nil)
+			var ns []string
+			for i := range 25 {
+				ns = append(ns, fmt.Sprint(i))
+			}
+			jobs := push("env-a", "environment: many-gone\n    strategy:\n      matrix:\n        n: ["+strings.Join(ns, ", ")+"]")
+			require.Len(t, jobs, 25)
+			require.Eventually(t, func() bool {
+				n, err := db.GetEngine(db.DefaultContext).Where("environment_id = ? AND status = ?", gone.ID, actions_model.DeploymentReleased).Count(new(actions_model.ActionDeployment))
+				return err == nil && n == 25
+			}, 10*time.Second, 100*time.Millisecond)
+			// as if the delete missed them (another server, a race): the jobs are released and no runner took them
+			require.NoError(t, actions_model.DeleteEnvironment(ctx, gone, func(context.Context) error { return nil }))
+			plain := push("env-a", "")
+			task := runner.fetchTask(t, 20*time.Second)
+			var picked actions_model.ActionTask
+			has, err := db.GetEngine(t.Context()).ID(task.GetId()).Get(&picked)
+			require.NoError(t, err)
+			require.True(t, has)
+			assert.Equal(t, plain[0].ID, picked.JobID)
+			runner.execTask(t, task, &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
+			for _, j := range jobs {
+				assert.Equal(t, actions_model.StatusFailure, reload(j).Status)
+			}
 		})
 
 		t.Run("deleting an environment fails the jobs that no runner took", func(t *testing.T) {

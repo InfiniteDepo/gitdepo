@@ -6,6 +6,8 @@ package actions
 import (
 	"testing"
 
+	"forgejo.org/modules/util"
+
 	"code.forgejo.org/forgejo/runner/v13/act/jobparser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -96,10 +98,11 @@ func TestJobParserRefusesBadEnvironment(t *testing.T) {
 		_, err := JobParser([]byte("on: push\njobs:\n  a:\n    runs-on: docker\n    environment: " + env + "\n    steps: [{run: echo}]\n"))
 		require.Error(t, err, name)
 	}
-	// a map without a name is read as an empty name, which the gate refuses
-	sws, err := JobParser([]byte("on: push\njobs:\n  a:\n    runs-on: docker\n    environment: {url: 'https://x.y'}\n    steps: [{run: echo}]\n"))
-	require.NoError(t, err)
-	assert.Equal(t, &JobEnvironment{URL: "https://x.y"}, environmentOf(t, sws[0]))
+	// a map without a name is an invalid argument, so that a dispatch answers 400
+	for name, env := range map[string]string{"no name": "{url: 'https://x.y'}", "empty name": "{name: ''}", "empty": "''"} {
+		_, err := JobParser([]byte("on: push\njobs:\n  a:\n    runs-on: docker\n    environment: " + env + "\n    steps: [{run: echo}]\n"))
+		require.ErrorIs(t, err, util.ErrInvalidArgument, name)
+	}
 }
 
 // A job that calls a reusable workflow can't have an environment, as on GitHub.

@@ -5,6 +5,7 @@ package actions
 
 import (
 	"errors"
+	"html"
 	"html/template"
 	"net/http"
 	"net/url"
@@ -120,6 +121,9 @@ func dispatchErrorFlash(ctx *app_context.Context, err error) (template.HTML, boo
 		return ctx.Locale.Tr("actions.workflow.dispatch.schedule_inputs_too_large"), true
 	case errors.Is(err, actions_service.ErrScheduleLimit):
 		return ctx.Locale.Tr("actions.workflow.dispatch.schedule_limit"), true
+	case errors.Is(err, util.ErrInvalidArgument):
+		// a fault of the workflow file (for example its `environment:`); the text is escaped, the file is the user's
+		return template.HTML(html.EscapeString(err.Error())), true
 	}
 	return "", false
 }

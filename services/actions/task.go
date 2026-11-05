@@ -62,6 +62,9 @@ func failPickedJob(ctx context.Context, jobID int64) error {
 	}
 	if failure != nil {
 		notifyFailedJobs(ctx, []*jobFailure{failure})
+		// the runner asks again only when the tasks version moved, and a request fails at most maxFailedPicks jobs:
+		// without this, the jobs behind them would wait until something else turns a job to waiting
+		return actions_model.IncreaseTaskVersion(ctx, failure.job.OwnerID, failure.job.RepoID)
 	}
 	return nil
 }

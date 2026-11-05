@@ -5,7 +5,8 @@ package actions
 
 import (
 	"errors"
-	"fmt"
+
+	"forgejo.org/modules/util"
 
 	"code.forgejo.org/forgejo/runner/v13/act/jobparser"
 	"code.forgejo.org/forgejo/runner/v13/act/model"
@@ -49,11 +50,14 @@ func readRawJobs(content []byte) (map[string]rawJob, error) {
 		Jobs map[string]rawJob `yaml:"jobs"`
 	}
 	if err := yaml.Unmarshal(content, &raw); err != nil {
-		return nil, fmt.Errorf("invalid environment: %w", err)
+		return nil, util.NewInvalidArgumentErrorf("invalid environment: %v", err)
 	}
 	for id, job := range raw.Jobs {
+		if job.Environment != nil && job.Environment.Name == "" {
+			return nil, util.NewInvalidArgumentErrorf("job %q: the environment needs a name", id)
+		}
 		if job.Uses != "" && job.Environment != nil {
-			return nil, fmt.Errorf("job %q calls a reusable workflow, so it can't have an environment", id)
+			return nil, util.NewInvalidArgumentErrorf("job %q calls a reusable workflow, so it can't have an environment", id)
 		}
 	}
 	return raw.Jobs, nil

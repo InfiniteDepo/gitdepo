@@ -49,6 +49,14 @@ func TestEnvironmentNormalize(t *testing.T) {
 		"name with bidi override": func(e *ActionEnvironment) { e.Name = "prod\u202euction" },
 		"name with nbsp":          func(e *ActionEnvironment) { e.Name = "prod\u00a0uction" },
 		"name with private use":   func(e *ActionEnvironment) { e.Name = "prod\ue000uction" },
+		"name with Cyrillic o":    func(e *ActionEnvironment) { e.Name = "pr\u043ed" },
+		"name fullwidth":          func(e *ActionEnvironment) { e.Name = "\uff30\uff52\uff4f\uff44" },
+		"name with combining":     func(e *ActionEnvironment) { e.Name = "pro\u0301d" },
+		"name with dotted I":      func(e *ActionEnvironment) { e.Name = "PR\u0130D" },
+		"name with Kelvin sign":   func(e *ActionEnvironment) { e.Name = "\u212aprod" },
+		"name with tab":           func(e *ActionEnvironment) { e.Name = "pro\td" },
+		"name with unicode space": func(e *ActionEnvironment) { e.Name = "prod\u2003" },
+		"name with DEL":           func(e *ActionEnvironment) { e.Name = "pro\x7fd" },
 		"unknown policy":          func(e *ActionEnvironment) { e.RefPolicy = 3 },
 		"negative policy":         func(e *ActionEnvironment) { e.RefPolicy = -1 },
 		"patterns without policy": func(e *ActionEnvironment) { e.RefPolicy = EnvironmentRefAny },
@@ -59,11 +67,13 @@ func TestEnvironmentNormalize(t *testing.T) {
 				e.RefPatterns[i] = EnvironmentRefPattern{EnvironmentPatternBranch, fmt.Sprint("b", i)}
 			}
 		},
-		"unknown pattern type": func(e *ActionEnvironment) { e.RefPatterns[0].Type = "commit" },
-		"empty pattern":        func(e *ActionEnvironment) { e.RefPatterns[0].Pattern = "" },
-		"long pattern":         func(e *ActionEnvironment) { e.RefPatterns[0].Pattern = strings.Repeat("a", 256) },
-		"pattern with control": func(e *ActionEnvironment) { e.RefPatterns[0].Pattern = "a\tb" },
-		"pattern with format":  func(e *ActionEnvironment) { e.RefPatterns[0].Pattern = "a\u200bb" },
+		"unknown pattern type":  func(e *ActionEnvironment) { e.RefPatterns[0].Type = "commit" },
+		"empty pattern":         func(e *ActionEnvironment) { e.RefPatterns[0].Pattern = "" },
+		"long pattern":          func(e *ActionEnvironment) { e.RefPatterns[0].Pattern = strings.Repeat("a", 256) },
+		"pattern with control":  func(e *ActionEnvironment) { e.RefPatterns[0].Pattern = "a\tb" },
+		"pattern with format":   func(e *ActionEnvironment) { e.RefPatterns[0].Pattern = "a\u200bb" },
+		"pattern with Cyrillic": func(e *ActionEnvironment) { e.RefPatterns[0].Pattern = "rel\u0435ase/*" },
+		"pattern with Kelvin":   func(e *ActionEnvironment) { e.RefPatterns[0].Pattern = "\u212a*" },
 		"pattern that doesn't compile": func(e *ActionEnvironment) {
 			e.RefPatterns[0].Pattern = "a[" // an open character class
 		},
@@ -75,11 +85,12 @@ func TestEnvironmentNormalize(t *testing.T) {
 				e.RunnerLabels = append(e.RunnerLabels, fmt.Sprint("l", i))
 			}
 		},
-		"empty label":      func(e *ActionEnvironment) { e.RunnerLabels = []string{""} },
-		"long label":       func(e *ActionEnvironment) { e.RunnerLabels = []string{strings.Repeat("l", 256)} },
-		"label with CR":    func(e *ActionEnvironment) { e.RunnerLabels = []string{"a\rb"} },
-		"label with nbsp":  func(e *ActionEnvironment) { e.RunnerLabels = []string{"a\u00a0b"} },
-		"duplicate labels": func(e *ActionEnvironment) { e.RunnerLabels = []string{"a", "b", "a"} },
+		"empty label":         func(e *ActionEnvironment) { e.RunnerLabels = []string{""} },
+		"long label":          func(e *ActionEnvironment) { e.RunnerLabels = []string{strings.Repeat("l", 256)} },
+		"label with CR":       func(e *ActionEnvironment) { e.RunnerLabels = []string{"a\rb"} },
+		"label with nbsp":     func(e *ActionEnvironment) { e.RunnerLabels = []string{"a\u00a0b"} },
+		"label with Cyrillic": func(e *ActionEnvironment) { e.RunnerLabels = []string{"d\u043ecker"} },
+		"duplicate labels":    func(e *ActionEnvironment) { e.RunnerLabels = []string{"a", "b", "a"} },
 	} {
 		t.Run(name, func(t *testing.T) {
 			e := valid()
@@ -402,4 +413,23 @@ func TestEnvironmentSecretVariableAudit(t *testing.T) {
 		"repo.actions_env_secret.created", "repo.actions_env_secret.updated", "repo.actions_env_secret.deleted",
 		"repo.actions_env_variable.created", "repo.actions_env_variable.updated", "repo.actions_env_variable.deleted",
 	}, actions)
+}
+
+// A look-alike or non-ASCII name finds no environment (the Kelvin sign lower-cases to an ASCII k) and creates none.
+func TestEnvironmentNamesAreASCII(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := auditCtx()
+	require.NoError(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 1, Name: "Kprod"}))
+	got, err := GetRepoEnvironmentByName(ctx, 1, "  kPROD ")
+	require.NoError(t, err)
+	assert.Equal(t, "Kprod", got.Name)
+	for _, name := range []string{"\u212aprod", "pr\u043ed", "Kprod\u00a0", ""} {
+		_, err := GetRepoEnvironmentByName(ctx, 1, name)
+		require.ErrorIs(t, err, ErrEnvironmentNotFound, name)
+		_, err = GetOrCreateRepoEnvironment(ctx, 1, name)
+		require.ErrorIs(t, err, util.ErrInvalidArgument, name)
+	}
+	n, err := db.GetEngine(ctx).Where("repo_id = 1").Count(new(ActionEnvironment))
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, n)
 }

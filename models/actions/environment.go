@@ -8,8 +8,6 @@ import (
 	"errors"
 	"slices"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
@@ -78,14 +76,18 @@ func init() {
 	db.RegisterModel(new(ActionEnvironment))
 }
 
-// hasControl tells if s holds a character that can make one name look like another or hide in it: a control
-// character (NUL, newline, escape, ...), a format character (zero width space, bidi override, ...), a private-use or
-// surrogate one, or a space other than the plain ASCII one.
-func hasControl(s string) bool {
-	return strings.IndexFunc(s, func(r rune) bool {
-		return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Co, r) || unicode.Is(unicode.Cs, r) ||
-			(unicode.IsSpace(r) && r != ' ')
-	}) >= 0
+// isPrintableASCII tells if s holds only the printable ASCII characters 0x20 to 0x7E. Names, ref patterns and runner
+// labels are limited to them: no control, format or look-alike character (Cyrillic о, fullwidth letters, combining
+// marks) can make one name pass for another, and no Unicode lower-casing (the Kelvin sign is a "k") can merge two.
+func isPrintableASCII(s string) bool {
+	return !strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r > 0x7e })
+}
+
+// lowerName returns the name as stored in lower_name: without the spaces around it, in ASCII lower case; ok is false
+// for a name no environment can have.
+func lowerName(name string) (lower string, ok bool) {
+	name = strings.Trim(name, " ")
+	return strings.ToLower(name), name != "" && isPrintableASCII(name)
 }
 
 // compilePattern compiles a ref pattern as matchPattern uses it.
@@ -108,9 +110,10 @@ func matchPattern(pattern, name string) (matched bool) {
 // Normalize trims and lowercases the name and removes empty slices, then validates every rule of the environment.
 // Every writer calls it.
 func (e *ActionEnvironment) Normalize() error {
-	e.Name = strings.TrimSpace(e.Name)
-	e.LowerName = strings.ToLower(e.Name)
-	if e.Name == "" || len(e.Name) > MaxEnvironmentName || len(e.LowerName) > MaxEnvironmentName || !utf8.ValidString(e.Name) || hasControl(e.Name) {
+	e.Name = strings.Trim(e.Name, " ")
+	lower, ok := lowerName(e.Name)
+	e.LowerName = lower
+	if !ok || len(e.Name) > MaxEnvironmentName {
 		return util.NewInvalidArgumentErrorf("invalid environment name")
 	}
 	if e.RefPolicy < EnvironmentRefAny || e.RefPolicy > EnvironmentRefPatterns {
@@ -129,7 +132,7 @@ func (e *ActionEnvironment) Normalize() error {
 		if p.Type != EnvironmentPatternBranch && p.Type != EnvironmentPatternTag {
 			return util.NewInvalidArgumentErrorf("invalid ref pattern type")
 		}
-		if p.Pattern == "" || len(p.Pattern) > 255 || !utf8.ValidString(p.Pattern) || hasControl(p.Pattern) {
+		if p.Pattern == "" || len(p.Pattern) > 255 || !isPrintableASCII(p.Pattern) {
 			return util.NewInvalidArgumentErrorf("invalid ref pattern")
 		}
 		if _, err := compilePattern(p.Pattern); err != nil {
@@ -143,7 +146,7 @@ func (e *ActionEnvironment) Normalize() error {
 		return util.NewInvalidArgumentErrorf("too many runner labels")
 	}
 	for i, l := range e.RunnerLabels {
-		if l == "" || len(l) > 255 || !utf8.ValidString(l) || hasControl(l) || slices.Contains(e.RunnerLabels[:i], l) {
+		if l == "" || len(l) > 255 || !isPrintableASCII(l) || slices.Contains(e.RunnerLabels[:i], l) {
 			return util.NewInvalidArgumentErrorf("invalid runner label")
 		}
 	}
@@ -298,8 +301,12 @@ func GetOrCreateRepoEnvironment(ctx context.Context, repoID int64, name string) 
 
 // GetRepoEnvironmentByName finds the environment of the repository by name, ignoring case.
 func GetRepoEnvironmentByName(ctx context.Context, repoID int64, name string) (*ActionEnvironment, error) {
+	lower, ok := lowerName(name)
+	if !ok {
+		return nil, ErrEnvironmentNotFound
+	}
 	e := new(ActionEnvironment)
-	has, err := db.GetEngine(ctx).Where("owner_id = 0 AND repo_id = ? AND lower_name = ?", repoID, strings.ToLower(strings.TrimSpace(name))).Get(e)
+	has, err := db.GetEngine(ctx).Where("owner_id = 0 AND repo_id = ? AND lower_name = ?", repoID, lower).Get(e)
 	if err != nil {
 		return nil, err
 	} else if !has {

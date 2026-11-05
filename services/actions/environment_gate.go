@@ -167,7 +167,7 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 		name, err := evaluateEnvironmentText(ctx, job, vars, jobEnv.Name)
 		if jobEnv.Unsupported {
 			reason = actions_model.DeploymentReasonUnsupported
-		} else if name = strings.TrimSpace(name); err != nil || name == "" {
+		} else if name = strings.Trim(name, " "); err != nil || name == "" {
 			reason = actions_model.DeploymentReasonInvalidName
 		} else if env, err = findOrCreateEnvironment(ctx, run, name); errors.Is(err, actions_model.ErrEnvironmentNotFound) && isForkRun(run) {
 			reason = actions_model.DeploymentReasonNotFound

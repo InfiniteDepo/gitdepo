@@ -229,13 +229,11 @@ func TestGateEnvironment(t *testing.T) {
 
 	t.Run("an invalid name fails the job", func(t *testing.T) {
 		for name, env := range map[string]string{
-			"empty":              "    environment: ''\n",
 			"empty expression":   "    environment: ${{ inputs.missing }}\n",
 			"broken expression":  "    environment: ${{ inputs.( }}\n",
 			"control characters": "    environment: \"a\\nb\"\n",
 			"too long":           fmt.Sprintf("    environment: %s\n", string(make([]byte, 0))+fmt.Sprintf("%0256d", 1)),
 			"unknown context":    "    environment: ${{ matrix.x }}\n",
-			"no name in the map": "    environment:\n      url: https://example.com\n",
 		} {
 			require.NoError(t, unittest.PrepareTestDatabase())
 			job := gateJob(t, envWorkflow(env), "refs/heads/main")
