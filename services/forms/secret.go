@@ -16,7 +16,9 @@ import (
 // CreateSecretForm needs to be filled in by the user to create a new secret.
 type CreateSecretForm struct {
 	Name string `binding:"Required;MaxSize(255)"`
-	Data string `binding:"Required;MaxSize(65535)"`
+	// only a bound on the request: the size of the value is checked after its line breaks are normalized
+	// (secret_model.ValidateValue), and "\r\n" takes two characters
+	Data string `binding:"Required;MaxSize(131072)"`
 }
 
 // Validate validates the submitted CreateSecretForm.
@@ -28,7 +30,7 @@ func (f *CreateSecretForm) Validate(req *http.Request, errs binding.Errors) bind
 // EditSecretForm needs to be filled in by the user to change an existing secret.
 type EditSecretForm struct {
 	Name string `binding:"Required;MaxSize(255)"`
-	Data string `binding:"MaxSize(65535)"`
+	Data string `binding:"MaxSize(131072)"` // see CreateSecretForm
 }
 
 // Validate validates the submitted EditSecretForm.

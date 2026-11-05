@@ -78,11 +78,16 @@ type Row struct {
 	AccessToken  *auth_model.AccessToken // a token of the repository, its project or its organization
 	Team         *organization.Team      // a team shown as one row, for viewers outside the org
 	OrgMember    bool                    // the user is a member of the repository's owner org
-	// TwoFactorBlocked is set under Options.IgnoreTwoFactor for a user the owner's two-factor requirement blocks.
+	Repo         *repo_model.Repository
+	Perm         access_model.Permission
+	Paths        []*Path
+	// TwoFactorStranger is the plain result of the permission code: the owner organization's two-factor requirement
+	// makes the user a stranger to the repository (user_model.User.TwoFactorBlocked), and Perm is computed so. Always
+	// false under Options.IgnoreTwoFactor.
+	TwoFactorStranger bool
+	// TwoFactorBlocked is set only under Options.IgnoreTwoFactor, for a user the owner's two-factor requirement would
+	// block: Perm is then the access they would have without it.
 	TwoFactorBlocked bool
-	Repo             *repo_model.Repository
-	Perm             access_model.Permission
-	Paths            []*Path
 }
 
 // Options selects what Compute reports.
@@ -95,6 +100,11 @@ type Options struct {
 	// Outsider computes for a viewer outside the owner org: users as if they were in no team and in no org, and
 	// one row per team instead of its members.
 	Outsider bool
+	// Users are reported too, with a row even when they have no path: their access is then the one the pseudo-rows
+	// stand for, decided for them (none if they can't see the owner, are restricted or the repository is private).
+	Users []int64
+	// RepoPermission reports access_model.GetUserRepoPermission itself: an auditor's access is not raised to read.
+	RepoPermission bool
 	// IgnoreTwoFactor computes the access users have when the owner's two-factor requirement doesn't apply to them,
 	// and marks the rows it would have changed (Row.TwoFactorBlocked).
 	IgnoreTwoFactor bool
@@ -141,6 +151,7 @@ func Compute(ctx context.Context, opts Options) ([]*Row, error) {
 		return nil, err
 	}
 
+	listed := container.SetOf(opts.Users...)
 	var rows []*Row
 	for _, repo := range repos {
 		owner := d.owners[repo.OwnerID]
@@ -163,9 +174,17 @@ func Compute(ctx context.Context, opts Options) ([]*Row, error) {
 			if u == nil {
 				continue
 			}
-			row := &Row{User: u, Repo: repo, Perm: d.permission(repo, u), Paths: d.paths(repo, u), OrgMember: d.orgMember[key{repo.OwnerID, u.ID}]}
-			row.TwoFactorBlocked = opts.IgnoreTwoFactor && d.blockedByTwoFactor(owner, u)
-			if len(row.Paths) == 0 {
+			row := &Row{
+				User: u, Repo: repo, Paths: d.paths(repo, u), OrgMember: d.orgMember[key{repo.OwnerID, u.ID}],
+				TwoFactorStranger: d.twoFactorBlocked(owner, u),
+				TwoFactorBlocked:  opts.IgnoreTwoFactor && d.blockedByTwoFactor(owner, u),
+			}
+			if opts.RepoPermission {
+				row.Perm = d.userPermission(repo, u)
+			} else {
+				row.Perm = d.permission(repo, u)
+			}
+			if len(row.Paths) == 0 && !listed.Contains(uid) {
 				continue
 			}
 			setApplied(row)
@@ -417,6 +436,7 @@ func load(ctx context.Context, repos repo_model.RepositoryList, opts Options) (*
 		for _, tu := range teamUsers {
 			uids = append(uids, tu.UID)
 		}
+		uids = append(uids, opts.Users...)
 		roles := builder.NewCond()
 		if !opts.Plain {
 			roles = builder.Or(builder.Eq{"is_admin": true}, builder.Eq{"is_auditor": true})
@@ -449,11 +469,13 @@ func load(ctx context.Context, repos repo_model.RepositoryList, opts Options) (*
 	return d, nil
 }
 
-// twoFactorBlocked is user_model.User.TwoFactorBlocked.
+// twoFactorBlocked tells if the permission code treats the user as blocked (Row.TwoFactorStranger):
+// blockedByTwoFactor, unless Options.IgnoreTwoFactor.
 func (d *data) twoFactorBlocked(owner, u *user_model.User) bool {
 	return !d.ignore2FA && d.blockedByTwoFactor(owner, u)
 }
 
+// blockedByTwoFactor is user_model.User.TwoFactorBlocked.
 func (d *data) blockedByTwoFactor(owner, u *user_model.User) bool {
 	return owner.IsOrganization() && owner.RequireTwoFactor && !u.IsAdmin && u.ID > 0 && !d.twoFactor.Contains(u.ID)
 }
@@ -466,6 +488,7 @@ func (d *data) candidates(repo *repo_model.Repository, opts Options) []int64 {
 	set := container.Set[int64]{}
 	set.Add(repo.OwnerID)
 	set.AddMultiple(d.roleUsers...)
+	set.AddMultiple(opts.Users...)
 	for k := range d.collab {
 		if k.b == repo.ID {
 			set.Add(k.a)

@@ -1220,3 +1220,29 @@ func TestGetUserByEmailSimple(t *testing.T) {
 		assert.Nil(t, u)
 	})
 }
+
+func TestVisibleToViewerMatchesIsUserVisibleToViewer(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := db.DefaultContext
+	// a private user who follows user 2, and one in an org with user 2 (user 2 is in org 3's teams)
+	_, err := db.GetEngine(ctx).In("id", 4, 5, 8, 10).Cols("visibility").Update(&user_model.User{Visibility: structs.VisibleTypePrivate})
+	require.NoError(t, err)
+	require.NoError(t, user_model.FollowUser(ctx, 10, 2))
+
+	users := make([]*user_model.User, 0, 50)
+	require.NoError(t, db.GetEngine(ctx).OrderBy("id").Find(&users))
+	viewers := append([]*user_model.User{nil}, users...)
+	for _, viewer := range viewers {
+		visible, err := user_model.VisibleToViewer(ctx, users, viewer)
+		require.NoError(t, err)
+		for _, u := range users {
+			assert.Equal(t, user_model.IsUserVisibleToViewer(ctx, u, viewer), visible.Contains(u.ID), "user %d to viewer %v", u.ID, viewer)
+		}
+	}
+	two := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	visible, err := user_model.VisibleToViewer(ctx, users, two)
+	require.NoError(t, err)
+	assert.True(t, visible.Contains(10), "follows the viewer")
+	assert.True(t, visible.Contains(4), "shares an organization with the viewer")
+	assert.False(t, visible.Contains(5), "no follow, no shared organization")
+}

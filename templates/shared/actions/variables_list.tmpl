@@ -1,18 +1,23 @@
+{{/* .ActionsReadOnly hides the buttons that change anything. .VariablesLink, .VariablesTitle and .VariablesDescription, if set, replace .Link and the default title: a page with both lists, such as an environment, sets them */}}
+{{$link := or .VariablesLink .Link}}
 <h4 class="ui top attached header">
-	{{ctx.Locale.Tr "actions.variables.management"}}
+	{{or .VariablesTitle (ctx.Locale.Tr "actions.variables.management")}}
 	<div class="ui right">
+		{{if not .ActionsReadOnly}}
 		<button class="ui primary tiny button show-modal"
 			data-modal="#edit-variable-modal"
-			data-modal-form.action="{{.Link}}/new"
+			data-modal-form.action="{{$link}}/new"
 			data-modal-header="{{ctx.Locale.Tr "actions.variables.creation"}}"
 			data-modal-dialog-variable-name=""
 			data-modal-dialog-variable-data=""
 		>
 			{{ctx.Locale.Tr "actions.variables.creation"}}
 		</button>
+		{{end}}
 	</div>
 </h4>
 <div class="ui attached segment">
+	{{if .VariablesDescription}}<p>{{.VariablesDescription}}</p>{{end}}
 	{{if .Variables}}
 	<div class="flex-list">
 		{{range .Variables}}
@@ -22,7 +27,7 @@
 			</div>
 			<div class="flex-item-main">
 				<div class="flex-item-title">
-					{{.Name}}{{if and $.OverridesOrg (index $.OverridesOrg .Name)}} <span class="ui tiny label">{{ctx.Locale.Tr "repo_group.overrides_org"}}</span>{{end}}
+					{{.Name}}{{if and $.OverridesOrg (index $.OverridesOrg .Name)}} <span class="ui tiny label">{{ctx.Locale.Tr "repo_group.overrides_org"}}</span>{{else if and $.OverridesRepo (index $.OverridesRepo .Name)}} <span class="ui tiny label">{{ctx.Locale.Tr "actions.environments.overrides_repo"}}</span>{{end}}
 				</div>
 				<div class="flex-item-body">
 					{{.Data}}
@@ -32,10 +37,11 @@
 				<span class="color-text-light-2">
 					{{ctx.Locale.Tr "settings.added_on" (DateUtils.AbsoluteShort .CreatedUnix)}}
 				</span>
+				{{if not $.ActionsReadOnly}}
 				<button class="btn interact-bg tw-p-2 show-modal"
 					data-tooltip-content="{{ctx.Locale.Tr "actions.variables.edit"}}"
 					data-modal="#edit-variable-modal"
-					data-modal-form.action="{{$.Link}}/{{.ID}}/edit"
+					data-modal-form.action="{{$link}}/{{.ID}}/edit"
 					data-modal-header="{{ctx.Locale.Tr "actions.variables.edit"}}"
 					data-modal-dialog-variable-name="{{.Name}}"
 					data-modal-dialog-variable-data="{{.Data}}"
@@ -44,11 +50,12 @@
 				</button>
 				<button class="btn interact-bg tw-p-2 link-action"
 					data-tooltip-content="{{ctx.Locale.Tr "actions.variables.deletion"}}"
-					data-url="{{$.Link}}/{{.ID}}/delete"
+					data-url="{{$link}}/{{.ID}}/delete"
 					data-modal-id="delete-variable"
 				>
 					{{svg "octicon-trash"}}
 				</button>
+				{{end}}
 			</div>
 		</div>
 		{{end}}
@@ -72,18 +79,20 @@
 					<input autofocus required
 						name="name"
 						id="dialog-variable-name"
+						aria-describedby="variable-name-description"
 						value="{{.name}}"
 						pattern="^(?!CI$)(?!FORGEJO_|GITEA_|GITHUB_)[a-zA-Z_][a-zA-Z0-9_]*$"
 					>
-					<p id="name-description" class="help">{{ctx.Locale.Tr "actions.variables.mutation.name_description"}}</p>
+					<p id="variable-name-description" class="help">{{ctx.Locale.Tr "actions.variables.mutation.name_description"}}</p>
 				</div>
 				<div class="field">
 					<label for="dialog-variable-data">{{ctx.Locale.Tr "value"}}</label>
 					<textarea required
 						name="data"
 						id="dialog-variable-data"
+						aria-describedby="variable-data-description"
 					></textarea>
-					<p id="data-description" class="help">{{ctx.Locale.Tr "actions.variables.mutation.value_description"}}</p>
+					<p id="variable-data-description" class="help">{{ctx.Locale.Tr "actions.variables.mutation.value_description"}}</p>
 				</div>
 			</fieldset>
 			{{template "base/modal_actions_confirm" (dict "ModalButtonTypes" "confirm")}}

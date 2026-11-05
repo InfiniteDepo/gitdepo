@@ -115,6 +115,20 @@ func matchPattern(pattern, name string) (matched bool) {
 	return err == nil && g.Match(name)
 }
 
+// ErrInvalidEnvironmentRule is a rule that Normalize refuses: Field names the rule ("name", "ref_policy",
+// "ref_patterns", "wait_timer", "runner_labels", "allowed_workflows") and Value the entry at fault ("" for the rule as
+// a whole). It is an invalid argument; its text is Message.
+type ErrInvalidEnvironmentRule struct {
+	Field, Value, Message string
+}
+
+func (e ErrInvalidEnvironmentRule) Error() string { return e.Message }
+func (e ErrInvalidEnvironmentRule) Unwrap() error { return util.ErrInvalidArgument }
+
+func ruleError(field, value, message string) error {
+	return ErrInvalidEnvironmentRule{Field: field, Value: value, Message: message}
+}
+
 // Normalize trims and lowercases the name and removes empty slices, then validates every rule of the environment.
 // Every writer calls it.
 func (e *ActionEnvironment) Normalize() error {
@@ -124,48 +138,48 @@ func (e *ActionEnvironment) Normalize() error {
 	// ":" delimits the environment in the subject of an ID token (`...:environment:<name>`), so neither it nor a space is
 	// allowed; the name is a path segment of the API and the web, so it is never "." or "..", nor holds "/?#%\"
 	if !ok || len(e.Name) > MaxEnvironmentName || strings.ContainsAny(e.Name, ": /?#%\\") || strings.Trim(e.Name, ".") == "" {
-		return util.NewInvalidArgumentErrorf("invalid environment name")
+		return ruleError("name", "", "invalid environment name")
 	}
 	if e.RefPolicy < EnvironmentRefAny || e.RefPolicy > EnvironmentRefPatterns {
-		return util.NewInvalidArgumentErrorf("invalid deployment ref policy")
+		return ruleError("ref_policy", "", "invalid deployment ref policy")
 	}
 	if e.RefPolicy != EnvironmentRefPatterns && len(e.RefPatterns) > 0 {
-		return util.NewInvalidArgumentErrorf("ref patterns need the pattern policy")
+		return ruleError("ref_policy", "", "ref patterns need the pattern policy")
 	}
 	if e.RefPolicy == EnvironmentRefPatterns && len(e.RefPatterns) == 0 {
-		return util.NewInvalidArgumentErrorf("the pattern policy needs a pattern")
+		return ruleError("ref_patterns", "", "the pattern policy needs a pattern")
 	}
 	if len(e.RefPatterns) > MaxRefPatterns {
-		return util.NewInvalidArgumentErrorf("too many ref patterns")
+		return ruleError("ref_patterns", "", "too many ref patterns")
 	}
 	for _, p := range e.RefPatterns {
 		if p.Type != EnvironmentPatternBranch && p.Type != EnvironmentPatternTag {
-			return util.NewInvalidArgumentErrorf("invalid ref pattern type")
+			return ruleError("ref_patterns", p.Pattern, "invalid ref pattern type")
 		}
 		if p.Pattern == "" || len(p.Pattern) > 255 || !isPrintableASCII(p.Pattern) {
-			return util.NewInvalidArgumentErrorf("invalid ref pattern")
+			return ruleError("ref_patterns", p.Pattern, "invalid ref pattern")
 		}
 		if _, err := compilePattern(p.Pattern); err != nil {
-			return util.NewInvalidArgumentErrorf("invalid ref pattern")
+			return ruleError("ref_patterns", p.Pattern, "invalid ref pattern")
 		}
 	}
 	if e.WaitTimerMinutes < 0 || e.WaitTimerMinutes > MaxWaitTimerMinutes {
-		return util.NewInvalidArgumentErrorf("invalid wait timer")
+		return ruleError("wait_timer", "", "invalid wait timer")
 	}
 	if len(e.RunnerLabels) > MaxRunnerLabels {
-		return util.NewInvalidArgumentErrorf("too many runner labels")
+		return ruleError("runner_labels", "", "too many runner labels")
 	}
 	for i, l := range e.RunnerLabels {
 		if l == "" || len(l) > 255 || !isPrintableASCII(l) || slices.Contains(e.RunnerLabels[:i], l) {
-			return util.NewInvalidArgumentErrorf("invalid runner label")
+			return ruleError("runner_labels", l, "invalid runner label")
 		}
 	}
 	if len(e.AllowedWorkflows) > MaxAllowedWorkflows {
-		return util.NewInvalidArgumentErrorf("too many allowed workflows")
+		return ruleError("allowed_workflows", "", "too many allowed workflows")
 	}
 	for _, p := range e.AllowedWorkflows {
 		if _, err := compilePattern(p); err != nil || p == "" || len(p) > 255 || !isPrintableASCII(p) {
-			return util.NewInvalidArgumentErrorf("invalid allowed workflow")
+			return ruleError("allowed_workflows", p, "invalid allowed workflow")
 		}
 	}
 	if e.AllowedWorkflows == nil {

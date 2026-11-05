@@ -5,6 +5,7 @@ package actions
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -13,6 +14,8 @@ import (
 	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	org_model "forgejo.org/models/organization"
+	repo_model "forgejo.org/models/repo"
+	"forgejo.org/models/unit"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/queue"
@@ -371,12 +374,7 @@ func TestApprovalRevokedWhenApproverIsNoLongerEligible(t *testing.T) {
 			_, err := db.GetEngine(t.Context()).Exec("UPDATE user SET is_active = ? WHERE id = 4", false)
 			require.NoError(t, err)
 		},
-		"lost access to Actions": func(t *testing.T, f *reviewFixture) {
-			_, err := db.GetEngine(t.Context()).Exec("DELETE FROM collaboration WHERE user_id = 4 AND repo_id = 63")
-			require.NoError(t, err)
-			_, err = db.GetEngine(t.Context()).Exec("DELETE FROM access WHERE user_id = 4 AND repo_id = 63")
-			require.NoError(t, err)
-		},
+		"lost access to Actions": func(t *testing.T, f *reviewFixture) { revokeActionsRead(t, 4) },
 	} {
 		t.Run("the approver is "+name+" during the timer", func(t *testing.T) {
 			f := setup(t)
@@ -501,6 +499,176 @@ func TestReviewerTeamsCheckedInTransaction(t *testing.T) {
 	unittest.AssertNotExistsBean(t, &actions_model.ActionEnvironment{RepoID: 3, LowerName: "other"})
 }
 
+// The bulk decision of the settings pages gives the reasons of ReviewChecker.May without the rules of one run.
+func TestCheckEnvironmentReviewers(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	require.NoError(t, db.Insert(t.Context(), &repo_model.RepoUnit{RepoID: 3, Type: unit.TypeActions}))
+	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 3}) // private, of org3
+	require.NoError(t, repo.LoadOwner(t.Context()))
+	envs := []*actions_model.ActionEnvironment{{ID: 1, ReviewsRequired: true}, {ID: 2, ReviewsRequired: true}, {ID: 3, ReviewsRequired: true}, {ID: 4}}
+	reviewers := map[int64][]*actions_model.ActionEnvironmentReviewer{
+		1: {{UserID: 2}},                  // an owner of org3
+		2: {{UserID: 10}, {TeamID: 7}},    // no path (one answer); a team whose member (user15) can't read repo3
+		3: {{UserID: 10}, {TeamID: 1}},    // the Owners team of org3 counts
+		4: {{UserID: 99999}, {TeamID: 7}}, // a missing user; reviews not required: no warning
+	}
+	owner := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	check, err := CheckEnvironmentReviewers(t.Context(), repo, owner, envs, reviewers)
+	require.NoError(t, err)
+	assert.Equal(t, map[int64]bool{1: false, 2: true, 3: false, 4: false}, check.NoReviewer)
+	assert.Equal(t, map[string]string{"user:10": ReviewerOutsider, "team:7": ReviewerNoneInTeam, "user:99999": ReviewerNotUsable}, check.Ineligible)
+
+	// a reviewer that can't sign in no longer counts
+	_, err = db.GetEngine(t.Context()).ID(2).Cols("prohibit_login").Update(&user_model.User{ProhibitLogin: true})
+	require.NoError(t, err)
+	check, err = CheckEnvironmentReviewers(t.Context(), repo, owner, envs[:1], reviewers)
+	require.NoError(t, err)
+	assert.True(t, check.NoReviewer[1])
+	assert.Equal(t, ReviewerNotUsable, check.Ineligible["user:2"])
+}
+
+// For a site administrator the bulk check decides every user as reviewerIneligibility does, on public and private
+// repositories of users and organizations, with and without a 2FA requirement. For anyone else it does so for the
+// users with a membership path, and gives every other user the one answer of the repository.
+func TestCheckEnvironmentReviewersMatchesIneligibility(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := t.Context()
+	_, err := db.GetEngine(ctx).ID(17).Cols("require_two_factor").Update(&user_model.User{RequireTwoFactor: true})
+	require.NoError(t, err)
+	users := make([]*user_model.User, 0, 50)
+	require.NoError(t, db.GetEngine(ctx).OrderBy("id").Find(&users))
+	listed := []*actions_model.ActionEnvironmentReviewer{}
+	for _, u := range users {
+		listed = append(listed, &actions_model.ActionEnvironmentReviewer{UserID: u.ID})
+	}
+	admin := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
+	owner := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2}) // owns repos 1 and 2, an owner of org3
+	for _, repoID := range []int64{1, 2, 3, 5, 24, 32} {                  // public/private, of a user and of orgs (org17 requires 2FA)
+		if repoID != 1 {
+			require.NoError(t, db.Insert(ctx, &repo_model.RepoUnit{RepoID: repoID, Type: unit.TypeActions}))
+		}
+		repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: repoID})
+		require.NoError(t, repo.LoadOwner(ctx))
+		check, err := CheckEnvironmentReviewers(ctx, repo, admin, []*actions_model.ActionEnvironment{{ID: 1}}, map[int64][]*actions_model.ActionEnvironmentReviewer{1: listed})
+		require.NoError(t, err)
+		plain, err := CheckEnvironmentReviewers(ctx, repo, owner, []*actions_model.ActionEnvironment{{ID: 1}}, map[int64][]*actions_model.ActionEnvironmentReviewer{1: listed})
+		require.NoError(t, err)
+		for _, u := range users {
+			key := fmt.Sprintf("user:%d", u.ID)
+			expected, err := reviewerIneligibility(ctx, repo, u)
+			require.NoError(t, err)
+			assert.Equal(t, expected, check.Ineligible[key], "user %d on repo %d", u.ID, repoID)
+
+			member, err := isMember(ctx, repo, u)
+			require.NoError(t, err)
+			switch {
+			case member:
+				assert.Equal(t, expected, plain.Ineligible[key], "member %d on repo %d", u.ID, repoID)
+			case u.IsIndividual():
+				assert.Equal(t, ReviewerOutsider, plain.Ineligible[key], "user %d without a path on repo %d", u.ID, repoID)
+			default:
+				assert.Equal(t, ReviewerNotUsable, plain.Ineligible[key], "organization %d on repo %d", u.ID, repoID)
+			}
+		}
+		if repoID != 24 { // org17 requires 2FA, which none of its members has
+			assert.NotEmpty(t, check.Readers, "repo %d", repoID)
+		}
+		assert.Less(t, len(check.Ineligible), len(users), "someone can approve on repo %d", repoID)
+		assert.Equal(t, check.Readers, plain.Readers, "the readers don't depend on the doer")
+		for _, r := range check.Readers {
+			assert.Empty(t, check.Ineligible[fmt.Sprintf("user:%d", r.ID)], "reader %d of repo %d can approve", r.ID, repoID)
+			member, err := isMember(ctx, repo, r)
+			require.NoError(t, err)
+			assert.True(t, member, "reader %d of repo %d is a member", r.ID, repoID)
+		}
+	}
+}
+
+// isMember tells if u relates to repo (whose owner is loaded) as its owner, a member of one of its teams (owners
+// included) or a collaborator, read without accessreport.
+func isMember(ctx context.Context, repo *repo_model.Repository, u *user_model.User) (bool, error) {
+	if u.ID == repo.OwnerID {
+		return true, nil
+	}
+	if ok, err := repo_model.IsCollaborator(ctx, repo.ID, u.ID); err != nil || ok {
+		return ok, err
+	}
+	if !repo.Owner.IsOrganization() {
+		return false, nil
+	}
+	teams, err := org_model.GetUserRepoTeams(ctx, repo.OwnerID, u.ID, repo.ID)
+	return len(teams) > 0, err
+}
+
+// The settings pages tell an account's state (2FA, sign-in, site administrator) only for users related to the
+// repository: anyone else gets the one answer of the repository, and a site administrator or auditor without another
+// path is not offered as a reviewer.
+func TestCheckEnvironmentReviewersOutsiders(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := t.Context()
+	owner := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	_, err := db.GetEngine(ctx).ID(8).Cols("is_auditor").Update(&user_model.User{IsAuditor: true})
+	require.NoError(t, err)
+	_, err = db.GetEngine(ctx).ID(9).Cols("prohibit_login").Update(&user_model.User{ProhibitLogin: true})
+	require.NoError(t, err)
+	// user4 has no 2FA, user24 has; user1 is a site admin, user8 an auditor, user9 can't sign in: none is related
+	listed := []*actions_model.ActionEnvironmentReviewer{{UserID: 1}, {UserID: 4}, {UserID: 8}, {UserID: 9}, {UserID: 24}}
+	decide := func(repo *repo_model.Repository, doer *user_model.User) *EnvironmentReviewerCheck {
+		require.NoError(t, repo.LoadOwner(ctx))
+		check, err := CheckEnvironmentReviewers(ctx, repo, doer, []*actions_model.ActionEnvironment{{ID: 1, ReviewsRequired: true}}, map[int64][]*actions_model.ActionEnvironmentReviewer{1: listed})
+		require.NoError(t, err)
+		return check
+	}
+	readers := func(check *EnvironmentReviewerCheck) []int64 {
+		ids := []int64{}
+		for _, u := range check.Readers {
+			ids = append(ids, u.ID)
+		}
+		return ids
+	}
+
+	t.Run("a public repository of an organization that requires 2FA", func(t *testing.T) {
+		_, err := db.GetEngine(ctx).ID(3).Cols("require_two_factor").Update(&user_model.User{RequireTwoFactor: true})
+		require.NoError(t, err)
+		defer func() {
+			_, err := db.GetEngine(ctx).ID(3).Cols("require_two_factor").Update(&user_model.User{RequireTwoFactor: false})
+			require.NoError(t, err)
+		}()
+		repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 32}) // public, of org3
+		require.NoError(t, db.Insert(ctx, &repo_model.RepoUnit{RepoID: repo.ID, Type: unit.TypeActions}))
+		check := decide(repo, owner)
+		assert.Equal(t, map[string]string{"user:1": ReviewerOutsider, "user:4": ReviewerOutsider, "user:8": ReviewerOutsider, "user:9": ReviewerOutsider, "user:24": ReviewerOutsider}, check.Ineligible)
+		assert.False(t, check.NoReviewer[1], "an outsider may approve a public repository's deployments")
+		assert.NotContains(t, readers(check), int64(1))
+		assert.NotContains(t, readers(check), int64(8))
+
+		// a site administrator sees the reasons
+		check = decide(repo, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1}))
+		assert.Equal(t, ReviewerTwoFactor, check.Ineligible["user:4"])
+		assert.Equal(t, ReviewerNotUsable, check.Ineligible["user:9"])
+		assert.Empty(t, check.Ineligible["user:24"])
+	})
+
+	t.Run("a public repository of a user", func(t *testing.T) {
+		repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+		check := decide(repo, owner)
+		assert.Equal(t, ReviewerOutsider, check.Ineligible["user:1"])
+		assert.Equal(t, ReviewerOutsider, check.Ineligible["user:9"])
+		assert.NotContains(t, readers(check), int64(1), "a site administrator is no member")
+		assert.NotContains(t, readers(check), int64(8), "an auditor is no member")
+		assert.Contains(t, readers(check), int64(2))
+	})
+
+	t.Run("a private repository of a user", func(t *testing.T) {
+		repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 2})
+		require.NoError(t, db.Insert(ctx, &repo_model.RepoUnit{RepoID: repo.ID, Type: unit.TypeActions}))
+		check := decide(repo, owner)
+		assert.Equal(t, map[string]string{"user:1": ReviewerOutsider, "user:4": ReviewerOutsider, "user:8": ReviewerOutsider, "user:9": ReviewerOutsider, "user:24": ReviewerOutsider}, check.Ineligible,
+			"a site administrator is told like a stranger")
+		assert.True(t, check.NoReviewer[1])
+	})
+}
+
 // The size of a reviewer list and its duplicates are refused before any account is looked up.
 func TestSaveEnvironmentChecksTheListFirst(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
@@ -519,4 +687,43 @@ func TestSaveEnvironmentChecksTheListFirst(t *testing.T) {
 	assert.Contains(t, err.Error(), "listed once")
 	_, err = SaveEnvironment(ctx, doer, e(), []int64{90001}, nil)
 	assert.Contains(t, err.Error(), "unknown reviewer")
+}
+
+// A user without a membership path to the repository can't be added as a reviewer, with one answer whatever their
+// account (a site administrator, an auditor, an account that can't sign in, one with or without 2FA) and whoever
+// saves, and one listed before stays listed.
+func TestSaveEnvironmentRefusesOutsiders(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := audit_model.WithActor(t.Context(), &audit_model.Actor{Type: audit_model.ActorUser, ID: 2, Credential: audit_model.Credential{Type: audit_model.CredentialAccessToken, ID: 1}})
+	doer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2}) // owns repository 1 (public)
+	_, err := db.GetEngine(ctx).ID(8).Cols("is_auditor").Update(&user_model.User{IsAuditor: true})
+	require.NoError(t, err)
+	_, err = db.GetEngine(ctx).ID(9).Cols("prohibit_login").Update(&user_model.User{ProhibitLogin: true})
+	require.NoError(t, err)
+	e := func() *actions_model.ActionEnvironment {
+		return &actions_model.ActionEnvironment{RepoID: 1, Name: "prod"}
+	}
+	for _, id := range []int64{1, 4, 8, 9, 24} {
+		_, err := SaveEnvironment(ctx, doer, e(), []int64{2, id}, nil)
+		require.ErrorIs(t, err, ErrReviewerNotMember, "user %d", id)
+	}
+	unittest.AssertNotExistsBean(t, &actions_model.ActionEnvironment{RepoID: 1, LowerName: "prod"})
+
+	require.NoError(t, db.Insert(ctx, &repo_model.Collaboration{RepoID: 1, UserID: 4, Mode: 1}))
+	_, err = SaveEnvironment(ctx, doer, e(), []int64{2, 4}, nil)
+	require.NoError(t, err, "the owner and a collaborator")
+
+	admin := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
+	adminCtx := audit_model.WithActor(t.Context(), &audit_model.Actor{Type: audit_model.ActorUser, ID: 1, Credential: audit_model.Credential{Type: audit_model.CredentialAccessToken, ID: 1}})
+	_, err = SaveEnvironment(adminCtx, admin, e(), []int64{2, 4, 24}, nil)
+	require.ErrorIs(t, err, ErrReviewerNotMember, "a site administrator follows the same rule")
+
+	// one listed while they were a collaborator stays listed
+	require.NoError(t, db.Insert(ctx, &repo_model.Collaboration{RepoID: 1, UserID: 24, Mode: 1}))
+	_, err = SaveEnvironment(ctx, doer, e(), []int64{4, 24}, nil)
+	require.NoError(t, err)
+	_, err = db.GetEngine(ctx).Where("repo_id = 1 AND user_id = 24").Delete(&repo_model.Collaboration{})
+	require.NoError(t, err)
+	_, err = SaveEnvironment(ctx, doer, e(), []int64{4, 24}, nil)
+	require.NoError(t, err, "a listed reviewer stays listed")
 }

@@ -304,6 +304,9 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 
 	prior, priorRelease := d.Status, d.ReleaseAfterUnix
 	now := timeutil.TimeStampNow()
+	if isNew {
+		d.Created = now // the ready time: the timer and the expiry count from it
+	}
 	if reason == "" && !isNew && prior == actions_model.DeploymentWaitingTimer && d.ReviewedBy != 0 && env != nil && env.ReviewsRequired && waitingRelease(d, env) <= now {
 		// about to be released on an approval: the approver must still be one who may review
 		if revoked, err := revokeApprovalIfIneligible(ctx, run, env, d); err != nil {
@@ -377,8 +380,10 @@ func revokeApprovalIfIneligible(ctx context.Context, run *actions_model.ActionRu
 // saveDeployment inserts a new deployment, or moves an existing one from prior to its status and release time; one that
 // another server moved meanwhile is an error, so that the pass of the emitter is repeated.
 func saveDeployment(ctx context.Context, d *actions_model.ActionDeployment, isNew bool, prior actions_model.DeploymentStatus, priorRelease timeutil.TimeStamp) error {
-	if isNew {
-		return db.Insert(ctx, d)
+	if isNew { // Created is the ready time the gate set from its clock, so xorm must not stamp it again
+		d.Updated = d.Created
+		_, err := db.GetEngine(ctx).NoAutoTime().Insert(d)
+		return err
 	}
 	if d.Status == prior && d.ReleaseAfterUnix == priorRelease {
 		return nil

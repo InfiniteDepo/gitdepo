@@ -301,3 +301,21 @@ func TestSecretValidateName(t *testing.T) {
 		})
 	}
 }
+
+// A value is measured as stored, with its line breaks normalized, so the API (which passes the raw value) and the web
+// accept the same values.
+func TestInsertEncryptedSecretMeasuresNormalizedValue(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := t.Context()
+	fits := strings.Repeat("a\r\n", MaxValueSize/2)
+	require.NoError(t, ValidateValue(fits))
+	require.ErrorIs(t, ValidateValue(fits+"b"), ErrValueTooLarge)
+
+	s, err := InsertEncryptedSecret(ctx, 0, 0, 1, "CRLF_FITS", fits)
+	require.NoError(t, err)
+	data, err := s.GetDecryptedData()
+	require.NoError(t, err)
+	assert.Len(t, data, MaxValueSize)
+	_, err = InsertEncryptedSecret(ctx, 0, 0, 1, "CRLF_TOO_LARGE", fits+"b")
+	require.ErrorIs(t, err, ErrValueTooLarge)
+}

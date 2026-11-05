@@ -337,7 +337,7 @@ func (f *AddKeyForm) Validate(req *http.Request, errs binding.Errors) binding.Er
 
 type EditVariableForm struct {
 	Name string `binding:"Required;MaxSize(255)"`
-	Data string `binding:"Required;MaxSize(65535)"`
+	Data string `binding:"Required;MaxSize(131072)"` // see CreateSecretForm
 }
 
 func (f *EditVariableForm) Validate(req *http.Request, errs binding.Errors) binding.Errors {

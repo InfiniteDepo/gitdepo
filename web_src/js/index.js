@@ -63,6 +63,7 @@ import {
   initRepoSettingsCollaboration,
   initRepoSettingSearchTeamBox,
 } from './features/repo-settings.js';
+import {initRepoSettingsEnvironment} from './features/repo-settings-environments.js';
 import {initRepoDiffView} from './features/repo-diff.js';
 import {initRepoSuggestionApply} from './features/repo-suggestion.js';
 import {initOrgTeamSearchRepoBox, initOrgTeamSearchUserGroupBox} from './features/org-team.js';
@@ -183,6 +184,7 @@ onDomReady(() => {
   initRepoRelease();
   initRepoReleaseNew();
   initRepoSettingGitHook();
+  initRepoSettingsEnvironment();
   initRepoSettingSearchTeamBox();
   initRepoSettingsCollaboration();
   initRepoTemplateSearch();
