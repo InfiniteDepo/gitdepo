@@ -710,3 +710,27 @@ func TestParseCodeOwnersForeignTeamLooksMissing(t *testing.T) {
 	assert.EqualValues(t, 2, owners.Rules[0].Teams[0].ID)
 	assert.Equal(t, []string{"Line: 1: incorrect codeowner team: org3/ghost", "Line: 1: incorrect codeowner team: org2/team1"}, owners.Warnings)
 }
+
+// A line whose owners all fail to resolve is kept without owners, so no approval covers its files: it blocks.
+func TestParseCodeOwnersUnresolvableLineIsKept(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	parse := func(ownerID int64, text string) *issues_model.CodeOwners {
+		return issues_model.ParseCodeOwners(t.Context(), ownerID, io.NopCloser(strings.NewReader(text)), false)
+	}
+	for name, text := range map[string]string{
+		"deleted user":   "a/.* @nosuchuser\n",
+		"foreign team":   "a/.* @org2/team1\n",
+		"missing org":    "a/.* @nosuchorg/team1\n",
+		"typo in a team": "a/.* @org3/typo\n",
+		"header":         "[Docs] @nosuchuser\na/.*\n",
+	} {
+		owners := parse(3, text)
+		require.Len(t, owners.Rules, 1, name)
+		assert.Empty(t, owners.Rules[0].Users, name)
+		assert.Empty(t, owners.Rules[0].Teams, name)
+		assert.Contains(t, strings.Join(owners.Warnings, "\n"), "this line blocks merges", name)
+	}
+	owners := parse(3, "a/.* @user2 @org2/team1\n")
+	require.Len(t, owners.Rules, 1)
+	assert.Len(t, owners.Rules[0].Users, 1, "the name that resolves stays")
+}

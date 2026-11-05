@@ -71,6 +71,28 @@ func TestCodeOwnerSectionsMerge(t *testing.T) {
 			e.apiMerge(e.owner, index, false, http.StatusOK)
 		})
 
+		// a line whose owners all fail to resolve keeps its pattern with no owner, so it blocks
+		t.Run("unresolvable owners block", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+			for name, codeowners := range map[string]string{
+				"cos-gone":    "docs/.* @nosuchuser\n",
+				"cos-foreign": "docs/.* @org3/team1\n",
+				"cos-header":  "[Docs] @nosuchuser\ndocs/.*\n",
+			} {
+				index := open(name, codeowners)
+				e.approve("user4", index)
+				e.approve("user5", index)
+				assert.Contains(t, e.apiMerge(e.owner, index, false, http.StatusMethodNotAllowed), "1 changed file is not approved by a code owner", name)
+				assert.Contains(t, box(index), "1 changed file is not approved by a code owner", name)
+				resp := e.owner.Session.MakeRequest(t, NewRequest(t, "GET", "/user2/repo1/src/branch/"+name+"/CODEOWNERS"), http.StatusOK)
+				assert.Contains(t, resp.Body.String(), "this line blocks merges of the files it matches until it is fixed", name)
+			}
+			// a name that resolves still covers the line
+			index := open("cos-mixed", "docs/.* @user4 @org3/team1\n")
+			e.approve("user4", index)
+			e.apiMerge(e.owner, index, false, http.StatusOK)
+		})
+
 		t.Run("malformed header", func(t *testing.T) {
 			defer tests.PrintCurrentTest(t)()
 			index := open("cos-bad", "docs/.* @user4\n[Docs\n")

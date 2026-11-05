@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"forgejo.org/models"
 	"forgejo.org/models/auth"
@@ -674,29 +675,41 @@ func loadLastApproverWarnings(ctx *context.Context, u *user_model.User) []lastAp
 	for i, w := range warnings {
 		rows[i] = lastApproverRow{
 			Link: w.Link,
-			Text: ctx.Locale.TrString("admin.users.last_approver_item", w.Rule, w.Branch, w.Where),
+			Text: w.Name,
 			Kind: lastApproverKind(ctx, w.Kind),
+		}
+		if !isLocalLink(rows[i].Link) {
+			rows[i].Link = ""
 		}
 	}
 	ctx.Data["LastApproverWarnings"] = rows
 	return rows
 }
 
-// lastApproverKind is the label of a kind of warning, with literal keys.
+// lastApproverKind is the label of a check's warning: its Kind is a locale key where one exists, else plain text
+// (escaped when rendered).
 func lastApproverKind(ctx *context.Context, kind string) string {
-	switch kind {
+	switch kind { // literal keys, so that the locale lint sees them used
+	case user_service.LastApproverRepoRule:
+		return ctx.Locale.TrString("admin.users.last_approver.kind.repo_rule")
 	case user_service.LastApproverProjectRule:
-		return ctx.Locale.TrString("admin.users.last_approver_kind_project_rule")
+		return ctx.Locale.TrString("admin.users.last_approver.kind.project_rule")
 	case user_service.LastApproverOrgRule:
-		return ctx.Locale.TrString("admin.users.last_approver_kind_org_rule")
+		return ctx.Locale.TrString("admin.users.last_approver.kind.org_rule")
 	}
-	return ctx.Locale.TrString("admin.users.last_approver_kind_repo_rule")
+	if ctx.Locale.HasKey(kind) { // another check's key
+		return ctx.Locale.TrString(kind)
+	}
+	return kind
 }
 
-// isLocalLink is true for a path on this site: it starts with one slash, not "//" or "/\", which browsers read as a
-// host.
+// isLocalLink is true for a path on this site: it starts with one slash, and has no second slash right after it,
+// no backslash and no control character (C0, C1 or DEL), which browsers drop or read as a host.
 func isLocalLink(link string) bool {
-	return strings.HasPrefix(link, "/") && !strings.HasPrefix(link, "//") && !strings.HasPrefix(link, `/\`)
+	if !strings.HasPrefix(link, "/") || strings.HasPrefix(link, "//") {
+		return false
+	}
+	return !strings.ContainsFunc(link, func(r rune) bool { return r == '\\' || unicode.IsControl(r) })
 }
 
 func flashName(s string, limit int) string {

@@ -75,7 +75,7 @@ func TestCodeOwnerLineMarksBounded(t *testing.T) {
 	run := func(n int) (int64, []LineOwnerMarks, time.Duration) {
 		counter.n.Store(0)
 		start := time.Now()
-		marks, _, err := CodeOwnerLineMarks(ctx, repo, OwnerViewer{Details: true}, lines(n))
+		marks, _, err := CodeOwnerLineMarks(ctx, repo, OwnerViewer{Details: true, Reasons: true}, lines(n))
 		require.NoError(t, err)
 		return counter.n.Load(), marks, time.Since(start)
 	}
@@ -147,7 +147,7 @@ func TestIneligibleOwnersReasonByCause(t *testing.T) {
 	}
 	grantAccess(t, 3, 10, perm.AccessModeRead) // read-only, without two-factor
 	grantAccess(t, 3, 12, perm.AccessModeRead) // read-only, with two-factor
-	all := OwnerViewer{Details: true, TwoFactor: true}
+	all := OwnerViewer{Details: true, Reasons: true, TwoFactor: true}
 	set := OwnerSet{UserIDs: []int64{8, 11, 10, 12, 4, 9}}
 
 	c, _ := ownerMarks(t, repo, all, set)
@@ -165,10 +165,15 @@ func TestIneligibleOwnersReasonByCause(t *testing.T) {
 	for _, r := range reasonsOf(c) {
 		assert.Equal(t, OwnerReason(""), r)
 	}
-	// a repository admin sees the cause, but not the two-factor one
+	// a repository admin sees the neutral mark for everyone: the reasons are for site admins
 	c, _ = ownerMarks(t, repo, OwnerViewer{Details: true}, set)
-	assert.Equal(t, OwnerReason(""), reasonsOf(c)["user4"])
-	assert.Equal(t, OwnerNoWrite, reasonsOf(c)["user8"])
+	for name, r := range reasonsOf(c) {
+		assert.Equal(t, OwnerReason(""), r, name)
+	}
+	// an acting owner of the organization sees the two-factor reason, and no other
+	c, _ = ownerMarks(t, repo, OwnerViewer{Details: true, TwoFactor: true}, set)
+	assert.Equal(t, OwnerTwoFactor, reasonsOf(c)["user4"])
+	assert.Equal(t, OwnerReason(""), reasonsOf(c)["user8"])
 
 	// the state reasons apply once the person would write
 	grantAccess(t, 3, 9, perm.AccessModeWrite)

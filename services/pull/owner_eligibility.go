@@ -42,10 +42,12 @@ func (r OwnerReason) Text(l translation.Locale) string {
 	return l.TrString("repo.codeowners.reason_no_write")
 }
 
-// OwnerViewer says how much of the reasons a viewer sees: the specific reasons are for repository and site admins,
-// and the two-factor reason for site admins and the acting owners of the organization that requires it (as the
-// members page of #147 does). Everyone else sees the neutral mark.
-type OwnerViewer struct{ Details, TwoFactor bool }
+// OwnerViewer says how much a viewer sees. The specific reasons (inactive, login prohibited, no write access) are
+// for site admins (Reasons), and the two-factor reason for site admins and the acting owners of the organization
+// that requires it (TwoFactor, as the members page of #147 does); everyone else sees the neutral mark for every
+// owner who can't approve. Details (repository admins and site admins) is what names the people and teams an
+// approval rule lists and how many members of a team can approve.
+type OwnerViewer struct{ Details, Reasons, TwoFactor bool }
 
 // NewOwnerViewer returns what doer may see in repo. repoAdmin is whether they administer it (site admins do).
 func NewOwnerViewer(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, repoAdmin bool) OwnerViewer {
@@ -54,7 +56,7 @@ func NewOwnerViewer(ctx context.Context, doer *user_model.User, repo *repo_model
 		return OwnerViewer{}
 	}
 	if doer.IsAdmin {
-		v.Details, v.TwoFactor = true, true
+		v.Details, v.Reasons, v.TwoFactor = true, true, true
 	} else if repo.Owner != nil && repo.Owner.IsOrganization() {
 		owner, err := organization.GetOrgByID(ctx, repo.OwnerID)
 		if err == nil {
@@ -64,8 +66,14 @@ func NewOwnerViewer(ctx context.Context, doer *user_model.User, repo *repo_model
 	return v
 }
 
+// NewOrgOwnerViewer is the viewer of the rule pages of an organization or a project: its acting owners or a site
+// admin.
+func NewOrgOwnerViewer(doer *user_model.User) OwnerViewer {
+	return OwnerViewer{Details: true, TwoFactor: true, Reasons: doer != nil && doer.IsAdmin}
+}
+
 func (v OwnerViewer) reason(r OwnerReason) OwnerReason {
-	if !v.Details || r == OwnerTwoFactor && !v.TwoFactor {
+	if r == OwnerTwoFactor && !v.TwoFactor || r != OwnerTwoFactor && !v.Reasons {
 		return ""
 	}
 	return r

@@ -4,6 +4,7 @@
 package integration
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	auth_model "forgejo.org/models/auth"
@@ -26,6 +28,7 @@ import (
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/test"
 	pull_service "forgejo.org/services/pull"
+	user_service "forgejo.org/services/user"
 	"forgejo.org/tests"
 
 	"github.com/PuerkitoBio/goquery"
@@ -89,9 +92,18 @@ func TestStaleOwners(t *testing.T) {
 			return NewHTMLParser(t, MakeRequest(t, NewRequest(t, "GET", path), http.StatusOK).Body)
 		}
 
+		siteAdmin := APITestContext{Session: loginUser(t, "user1")}
+
 		t.Run("file view", func(t *testing.T) {
 			defer tests.PrintCurrentTest(t)()
-			resp := e.owner.Session.MakeRequest(t, NewRequest(t, "GET", "/user2/repo1/src/branch/so-main/CODEOWNERS"), http.StatusOK)
+			// the specific reasons are for site admins; a repository admin sees the neutral mark
+			ownerView := NewHTMLParser(t, e.owner.Session.MakeRequest(t, NewRequest(t, "GET", "/user2/repo1/src/branch/so-main/CODEOWNERS"), http.StatusOK).Body)
+			ownerMarks := text(ownerView, ".codeowners-ineligible")
+			assert.Contains(t, ownerMarks, "Line 1: user4 can't approve; user5 can't approve; user8 can't approve")
+			for _, reason := range []string{"inactive", "login prohibited", "no write access", "two-factor"} {
+				assert.NotContains(t, ownerMarks, reason)
+			}
+			resp := siteAdmin.Session.MakeRequest(t, NewRequest(t, "GET", "/user2/repo1/src/branch/so-main/CODEOWNERS"), http.StatusOK)
 			doc := NewHTMLParser(t, resp.Body)
 			marks := text(doc, ".codeowners-ineligible")
 			assert.Contains(t, marks, "Line 1: user4 can't approve (inactive); user5 can't approve (login prohibited); user8 can't approve (no write access)")
@@ -121,10 +133,14 @@ func TestStaleOwners(t *testing.T) {
 
 		t.Run("merge box", func(t *testing.T) {
 			defer tests.PrintCurrentTest(t)()
-			box := text(e.mergeBox(e.owner, index), ".merge-section .codeowners-ineligible")
+			// a repository admin sees the rule's listed approvers by name, with the neutral mark
+			ownerBox := text(e.mergeBox(e.owner, index), ".merge-section .codeowners-ineligible")
+			assert.Contains(t, ownerBox, "user10 can't approve")
+			assert.NotContains(t, ownerBox, "(")
+			box := text(e.mergeBox(siteAdmin, index), ".merge-section .codeowners-ineligible")
 			assert.Contains(t, box, "user4 can't approve (inactive)")
 			assert.Contains(t, box, "user8 can't approve (no write access)")
-			assert.Contains(t, box, "user10 can't approve (no write access)", "a repository admin sees the rule's listed approvers")
+			assert.Contains(t, box, "user10 can't approve (no write access)", "a site admin sees the rule's listed approvers")
 			// the list of who can approve comes from the same check: nobody marked above is in it
 			can := regexp.MustCompile(`Can approve: (\w+(?:, \w+)*)`).FindStringSubmatch(text(e.mergeBox(e.owner, index), ".merge-section"))
 			require.NotNil(t, can)
@@ -155,7 +171,10 @@ func TestStaleOwners(t *testing.T) {
 			e.base("so-rule", create("CODEOWNERS", "[Core][2]\ncore/.* @user4 @user5\ndocs/.* @user4\nlib/.* @user2\n"))
 			leads := &api.ApprovalRule{Name: "Leads", RequiredCount: 2, Usernames: []string{"user4", "user5", "user2"}}
 			e.protect("so-rule", true, owners, leads)
+			// the reasons are for site admins; a repository admin sees the neutral mark
 			resp := e.owner.Session.MakeRequest(t, NewRequest(t, "GET", "/user2/repo1/settings/branches/edit?rule_name=so-rule"), http.StatusOK)
+			assert.Contains(t, text(NewHTMLParser(t, resp.Body), ".rule-warnings"), "Only 1 person can approve. (user4 can't approve; user5 can't approve)")
+			resp = siteAdmin.Session.MakeRequest(t, NewRequest(t, "GET", "/user2/repo1/settings/branches/edit?rule_name=so-rule"), http.StatusOK)
 			doc := NewHTMLParser(t, resp.Body)
 			warn := text(doc, ".rule-warnings")
 			assert.Contains(t, warn, "This rule can block merges:")
@@ -240,7 +259,7 @@ func TestStaleOwnersOrgRulePages(t *testing.T) {
 		group, err := repo_model.GetRepoGroupByName(db.DefaultContext, f.org.ID, "proj")
 		require.NoError(t, err)
 		setUserCols(t, 4, func(u *user_model.User) { u.IsActive = false }, "is_active")
-		session := loginUser(t, "user2")
+		session := loginUser(t, "user1") // the reasons are for site admins
 
 		// the organization's rule and the project's rule each list user4, who is inactive, and count on 1 approval
 		orgPage := "/org/" + f.org.Name + "/settings/branches/edit?rule_name=main"
@@ -264,6 +283,12 @@ func TestStaleOwnersOrgRulePages(t *testing.T) {
 		require.NoError(t, err)
 		grantWrite(t, priv.ID, 4)
 		assert.Contains(t, warn(projectPage), nobody+"(user4 can't approve (inactive))")
+		// an owner of the organization who is no site admin sees the neutral mark
+		owner := loginUser(t, "user2")
+		for _, page := range []string{orgPage, projectPage} {
+			body := text(NewHTMLParser(t, owner.MakeRequest(t, NewRequest(t, "GET", page), http.StatusOK).Body), ".rule-warnings")
+			assert.Contains(t, body, nobody+"(user4 can't approve)", page)
+		}
 	})
 }
 
@@ -281,7 +306,7 @@ func TestStaleOwnersProject(t *testing.T) {
 		// inserted as it is: SetApprovalRules would drop user4, who can't write the repository
 		require.NoError(t, db.Insert(db.DefaultContext, &git_model.ApprovalRule{ProtectedBranchID: rule.ID, Name: "Leads", RequiredCount: 1, UserIDs: []int64{4}}))
 
-		session := loginUser(t, "user2")
+		session := loginUser(t, "user1") // the reasons are for site admins
 		resp := session.MakeRequest(t, NewRequest(t, "GET", priv.Link()+"/settings/branches/edit?rule_name=main"), http.StatusOK)
 		warn := text(NewHTMLParser(t, resp.Body), ".rule-warnings")
 		assert.Contains(t, warn, "Approval rule Leads needs 1 approval. Nobody can approve. (user4 can't approve (no write access))")
@@ -345,6 +370,19 @@ func TestStaleOwnersTwoFactor(t *testing.T) {
 		assert.Contains(t, marks, "user4 can't approve")
 		assert.NotContains(t, marks, "two-factor")
 		assert.NotContains(t, marks, "no write access", "that would be false without the requirement")
+
+		// an acting owner of the organization (user2 has a second factor) sees the two-factor reason and no other
+		ownerSession := loginUser(t, "user2") // before the second factor makes a sign-in need it
+		require.NoError(t, db.Insert(db.DefaultContext, &auth_model.TwoFactor{UID: 2, Secret: []byte("secret"), ScratchSalt: "salt", ScratchHash: "hash"}))
+		t.Cleanup(func() {
+			_, err := db.GetEngine(db.DefaultContext).Where("uid = 2").Delete(&auth_model.TwoFactor{})
+			require.NoError(t, err)
+		})
+		marks = view(ownerSession)
+		assert.Contains(t, marks, "user4 can't approve (blocked by the organization's two-factor requirement)")
+		assert.Contains(t, marks, "user8 can't approve")
+		assert.NotContains(t, marks, "user8 can't approve (")
+		assert.NotContains(t, marks, "no write access")
 	})
 }
 
@@ -363,7 +401,7 @@ func TestStaleOwnersAdminPage(t *testing.T) {
 		resp := session.MakeRequest(t, NewRequest(t, "GET", "/admin/users/4/edit"), http.StatusOK)
 		doc := NewHTMLParser(t, resp.Body)
 		assert.Contains(t, text(doc, ".last-approver-warnings"), "Approval rule Only <b>user4</b> of branch rule so-admin in user2/repo1 (Repository approval rule)")
-		assert.Contains(t, text(doc, ".last-approver-warnings .header"), "Turning off \"Activated account\" or turning on \"Suspended account\"")
+		assert.Contains(t, text(doc, ".last-approver-warnings .header"), "Approvers this change affects. Turning off \"Activated account\" or turning on \"Suspended account\"")
 		assert.Zero(t, doc.Find(".last-approver-warnings b").Length(), "names are escaped")
 		href, _ := doc.Find(".last-approver-warnings a").First().Attr("href")
 		assert.Equal(t, "/user2/repo1/settings/branches/edit?rule_name=so-admin", href)
@@ -399,10 +437,40 @@ func TestStaleOwnersAdminPage(t *testing.T) {
 			}
 		}
 		doc = flash()
-		assert.Contains(t, text(doc, ".flash-warning"), "These now lack approvers:")
+		assert.Contains(t, text(doc, ".flash-warning"), "Approvers this change affects:")
 		assert.Contains(t, text(doc, ".flash-warning li"), "Approval rule Only <b>user4</b> of", "the first rule, cut to fit")
 		assert.LessOrEqual(t, doc.Find(".flash-warning li").Length(), maxFlashItems+1, "the list and its \"more\" line")
 		assert.Zero(t, doc.Find(".flash-warning b").Length(), "names are escaped")
 		assert.Contains(t, text(doc, ".flash-warning"), "…", "a long name is cut")
+	})
+}
+
+// Another feature registers its own check against the shared shape: the page shows its Name, a Kind that is a locale
+// key translated and any other Kind as escaped text, and a link only if it is a plain path.
+func TestLastApproverRegistryFakeCheck(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		var on atomic.Bool
+		user_service.RegisterLastApproverCheck(func(_ context.Context, ids []int64) ([]user_service.LastApproverWarning, error) {
+			if !on.Load() {
+				return nil, nil
+			}
+			return []user_service.LastApproverWarning{
+				{UserID: ids[0], Kind: "admin.users.last_approver.kind.org_rule", Link: "/fake/one", Name: "Fake <i>one</i>"},
+				{UserID: ids[0], Kind: "Custom <b>kind</b>", Link: "//evil.example/x", Name: "Fake two"},
+				{UserID: ids[0], Kind: "Third", Link: "/\\evil.example", Name: "Fake three"},
+			}, nil
+		})
+		on.Store(true)
+		t.Cleanup(func() { on.Store(false) })
+		session := loginUser(t, "user1")
+		doc := NewHTMLParser(t, session.MakeRequest(t, NewRequest(t, "GET", "/admin/users/4/edit"), http.StatusOK).Body)
+		box := text(doc, ".last-approver-warnings")
+		assert.Contains(t, box, "Approvers this change affects")
+		assert.Contains(t, box, "Fake <i>one</i> (Organization approval rule)", "a locale key is translated, the name escaped")
+		assert.Contains(t, box, "Fake two (Custom <b>kind</b>)", "other kinds are plain text")
+		assert.Zero(t, doc.Find(".last-approver-warnings i, .last-approver-warnings b").Length())
+		var hrefs []string
+		doc.Find(".last-approver-warnings a").Each(func(_ int, a *goquery.Selection) { href, _ := a.Attr("href"); hrefs = append(hrefs, href) })
+		assert.Equal(t, []string{"/fake/one"}, hrefs, "links that are not plain paths are not links")
 	})
 }

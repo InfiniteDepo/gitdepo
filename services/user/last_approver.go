@@ -16,17 +16,16 @@ import (
 	repo_model "forgejo.org/models/repo"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/setting"
+	"forgejo.org/modules/translation"
 	"forgejo.org/services/approvers"
 )
 
 // LastApproverWarning says that deactivating a user, or prohibiting their login, would leave something that
-// needs approvals without enough people. Kind is a code (the LastApprover constants), Link a relative URL to the
-// rule, Rule the name of the approval rule, Branch the branch rule it belongs to and Where the repository, project
-// or organization of that rule. The callers render the words, so none is built here.
+// needs approvals without enough people. Kind is a readable label of what it is (a locale key, which the admin page
+// translates, or plain text), Link a relative URL to it and Name its display text, which the check builds.
 type LastApproverWarning struct {
-	UserID              int64
-	Kind, Link          string
-	Rule, Branch, Where string
+	UserID           int64
+	Kind, Link, Name string
 }
 
 var (
@@ -61,9 +60,9 @@ func LastApproverWarnings(ctx context.Context, userIDs []int64) ([]LastApproverW
 // Kinds of the warnings of the approval rule check. A Kind is a short label a person reads as it is, so that the
 // admin page needs no table of the kinds of every check.
 const (
-	LastApproverRepoRule    = "repo_rule"
-	LastApproverProjectRule = "project_rule"
-	LastApproverOrgRule     = "org_rule"
+	LastApproverRepoRule    = "admin.users.last_approver.kind.repo_rule"
+	LastApproverProjectRule = "admin.users.last_approver.kind.project_rule"
+	LastApproverOrgRule     = "admin.users.last_approver.kind.org_rule"
 )
 
 func init() { RegisterLastApproverCheck(approvalRuleWarnings) }
@@ -118,7 +117,9 @@ func approvalRuleWarnings(ctx context.Context, userIDs []int64) ([]LastApproverW
 			continue
 		}
 		w := LastApproverWarning{UserID: res.Leaving}
-		w.Rule, w.Branch = r.Name, pb.RuleName
+		name := func(where string) string {
+			return translation.NewLocale("").TrString("admin.users.last_approver_item", r.Name, pb.RuleName, where)
+		}
 		edit := "/settings/branches/edit?rule_name=" + url.QueryEscape(pb.RuleName)
 		switch {
 		case pb.RepoID != 0:
@@ -126,19 +127,19 @@ func approvalRuleWarnings(ctx context.Context, userIDs []int64) ([]LastApproverW
 			if repo == nil {
 				continue
 			}
-			w.Kind, w.Link, w.Where = LastApproverRepoRule, repo.Link()+edit, repo.FullName()
+			w.Kind, w.Link, w.Name = LastApproverRepoRule, repo.Link()+edit, name(repo.FullName())
 		case pb.GroupID != 0:
 			owner, group := owners[pb.OrgID], groups[pb.GroupID]
 			if owner == nil || group == nil {
 				continue
 			}
-			w.Kind, w.Link, w.Where = LastApproverProjectRule, setting.AppSubURL+"/org/"+url.PathEscape(owner.Name)+"/groups/"+strconv.FormatInt(pb.GroupID, 10)+edit, owner.Name+"/"+group.Name
+			w.Kind, w.Link, w.Name = LastApproverProjectRule, setting.AppSubURL+"/org/"+url.PathEscape(owner.Name)+"/groups/"+strconv.FormatInt(pb.GroupID, 10)+edit, name(owner.Name+"/"+group.Name)
 		default:
 			owner := owners[pb.OrgID]
 			if owner == nil {
 				continue
 			}
-			w.Kind, w.Link, w.Where = LastApproverOrgRule, setting.AppSubURL+"/org/"+url.PathEscape(owner.Name)+edit, owner.Name
+			w.Kind, w.Link, w.Name = LastApproverOrgRule, setting.AppSubURL+"/org/"+url.PathEscape(owner.Name)+edit, name(owner.Name)
 		}
 		warnings = append(warnings, w)
 	}

@@ -16,6 +16,7 @@ import (
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/translation"
 
 	"code.forgejo.org/xorm/xorm/contexts"
 	"github.com/stretchr/testify/assert"
@@ -52,6 +53,7 @@ func addRule(t *testing.T, pb *git_model.ProtectedBranch, rule *git_model.Approv
 
 func TestLastApproverWarnings(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
+	translation.InitLocales(t.Context())
 	ctx := t.Context()
 	kinds := func(userIDs ...int64) map[string]string {
 		w, err := LastApproverWarnings(ctx, userIDs)
@@ -59,7 +61,7 @@ func TestLastApproverWarnings(t *testing.T) {
 		got := map[string]string{}
 		for _, x := range w {
 			assert.Contains(t, userIDs, x.UserID)
-			got[x.Rule+"|"+x.Branch+"|"+x.Where] = x.Kind + " " + x.Link
+			got[x.Name] = x.Kind + " " + x.Link
 		}
 		return got
 	}
@@ -76,8 +78,8 @@ func TestLastApproverWarnings(t *testing.T) {
 
 	got := kinds(4)
 	assert.Equal(t, map[string]string{
-		`Lead|main|user2/repo1`: "repo_rule /user2/repo1/settings/branches/edit?rule_name=main",
-		`Team|release|org3`:     "org_rule /org/org3/settings/branches/edit?rule_name=release",
+		`Approval rule Lead of branch rule main in user2/repo1`: "admin.users.last_approver.kind.repo_rule /user2/repo1/settings/branches/edit?rule_name=main",
+		`Approval rule Team of branch rule release in org3`:     "admin.users.last_approver.kind.org_rule /org/org3/settings/branches/edit?rule_name=release",
 	}, got, "the shared rule keeps user 5, so it is no warning")
 
 	// user 5 loses write access to the repository: they no longer count as remaining approver of the pair
@@ -85,12 +87,12 @@ func TestLastApproverWarnings(t *testing.T) {
 	require.NoError(t, err)
 	_, err = db.GetEngine(ctx).Where("repo_id = 1 AND user_id = 5").Delete(&access_model.Access{})
 	require.NoError(t, err)
-	assert.Contains(t, kinds(4), `Pair|dev|user2/repo1`)
+	assert.Contains(t, kinds(4), `Approval rule Pair of branch rule dev in user2/repo1`)
 	grantWrite(t, 5)
-	assert.NotContains(t, kinds(4), `Pair|dev|user2/repo1`)
+	assert.NotContains(t, kinds(4), `Approval rule Pair of branch rule dev in user2/repo1`)
 
 	// via team: user 2 is in team 2 as well
-	assert.Equal(t, []string{`Team|release|org3`}, keysOf(kinds(2)))
+	assert.Equal(t, []string{`Approval rule Team of branch rule release in org3`}, keysOf(kinds(2)))
 	// both users leave: the pair is empty too
 	assert.Len(t, kinds(4, 5), 3)
 	assert.Empty(t, kinds(8), "a user no rule lists")
@@ -136,9 +138,9 @@ func TestLastApproverWarnings(t *testing.T) {
 		assert.Greater(t, len(w), 12)
 		names := map[string]string{}
 		for _, x := range w {
-			names[x.Rule+"|"+x.Branch+"|"+x.Where] = x.Kind
+			names[x.Name] = x.Kind
 		}
-		assert.Equal(t, "project_rule", names["Extra|proj-0|org3/proj"], "a project rule names its project")
+		assert.Equal(t, "admin.users.last_approver.kind.project_rule", names["Approval rule Extra of branch rule proj-0 in org3/proj"], "a project rule names its project")
 		assert.Equal(t, before, count(), "the same number of queries with more rules, repositories and levels")
 	})
 }
