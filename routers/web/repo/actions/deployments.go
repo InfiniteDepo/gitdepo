@@ -504,7 +504,7 @@ func Deployments(ctx *app_context.Context) {
 		filter.Refs = []string{ref, git.BranchPrefix + ref, git.TagPrefix + ref}
 		ctx.Data["CurRef"] = ref
 	}
-	actorIDs, err := actions_model.FindDeploymentTriggerUsers(ctx, repo.ID, env.ID)
+	actorIDs, err := actions_model.FindDeploymentTriggerUsers(ctx, repo.ID, env.ID, user_model.BuildCanSeeUserCondition(ctx.Doer))
 	if err != nil {
 		ctx.ServerError("FindDeploymentTriggerUsers", err)
 		return
@@ -522,13 +522,28 @@ func Deployments(ctx *app_context.Context) {
 	}
 	slices.SortFunc(visibleActors, func(a, b *user_model.User) int { return strings.Compare(a.LowerName, b.LowerName) })
 	ctx.Data["Actors"] = visibleActors
+	// the requested actor is decided on its own, never by the capped menu: a user the doer may see filters (and stays
+	// chosen in the menu), one they may not finds nothing, so the filter tells nothing about them
+	actorVisible := filter.TriggerUserID == 0
+	if !actorVisible {
+		requested, err := actions_service.VisibleUsers(ctx, ctx.Doer, []int64{filter.TriggerUserID})
+		if err != nil {
+			ctx.ServerError("VisibleUsers", err)
+			return
+		}
+		if u := requested[filter.TriggerUserID]; u != nil && !u.IsGhost() {
+			actorVisible = true
+			if !slices.ContainsFunc(visibleActors, func(a *user_model.User) bool { return a.ID == u.ID }) {
+				ctx.Data["Actors"] = append(visibleActors, u)
+			}
+		}
+	}
 
 	page := max(ctx.FormInt("page"), 1)
 	opts := db.ListOptions{Page: page, PageSize: 30}
 	var ds []*actions_model.ActionDeployment
 	var total int64
-	// only a user the doer may see filters: one they may not finds nothing, so the filter tells nothing about them
-	if filter.TriggerUserID == 0 || slices.ContainsFunc(visibleActors, func(u *user_model.User) bool { return u.ID == filter.TriggerUserID }) {
+	if actorVisible {
 		if ds, total, err = actions_model.FindRepoDeployments(ctx, repo.ID, filter, opts); err != nil {
 			ctx.ServerError("FindRepoDeployments", err)
 			return

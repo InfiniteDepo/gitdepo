@@ -528,6 +528,43 @@ func TestActionsDeploymentsViewQueries(t *testing.T) {
 		}
 	})
 
+	t.Run("hidden actors take no place in the capped menu, and a requested actor filters past the cap", func(t *testing.T) {
+		defer test.MockVariableValue(&actions_model.MaxDeploymentTriggerUsers, 1)()
+		staging := &actions_model.ActionEnvironment{RepoID: repo.ID, Name: "staging"}
+		require.NoError(t, actions_model.CreateEnvironment(ctx, staging, nil))
+		newActor := func(name string, visibility api.VisibleType) *user_model.User {
+			u := &user_model.User{Name: name, Email: name + "@example.com", IsActive: true}
+			require.NoError(t, user_model.CreateUser(db.DefaultContext, u))
+			u.Visibility = visibility
+			require.NoError(t, user_model.UpdateUserCols(db.DefaultContext, u, "visibility"))
+			return u
+		}
+		var hidden []*user_model.User
+		for i := range 3 { // lower IDs than the visible ones
+			hidden = append(hidden, newActor(fmt.Sprintf("capped-hidden-%d", i), api.VisibleTypeLimited))
+		}
+		first, second := newActor("capped-first", api.VisibleTypePublic), newActor("capped-second", api.VisibleTypePublic)
+		for i, u := range append(hidden, first, second) {
+			insertWaitingRun(t, repo, staging, u.ID, int64(9200+i), 1)
+		}
+		page := func(actor int64) *HTMLDoc {
+			link := fmt.Sprintf("/user2/repo1/actions/deployments?environment=staging&actor=%d", actor)
+			return NewHTMLParser(t, emptyTestSession(t).MakeRequest(t, NewRequest(t, "GET", link), http.StatusOK).Body)
+		}
+		option := func(doc *HTMLDoc, u *user_model.User) int {
+			return doc.Find(fmt.Sprintf(`#deployment-actor option[value="%d"]`, u.ID)).Length()
+		}
+		doc := page(0)
+		assert.Equal(t, 1, option(doc, first), "the hidden actors don't fill the cap")
+		assert.Zero(t, option(doc, second), "past the cap")
+		doc = page(second.ID)
+		assert.Equal(t, 1, doc.Find("#deployment-list .deployment-item").Length(), "filters past the cap")
+		assert.Equal(t, 1, doc.Find(fmt.Sprintf(`#deployment-actor option[value="%d"][selected]`, second.ID)).Length())
+		doc = page(hidden[0].ID)
+		assert.Zero(t, doc.Find("#deployment-list .deployment-item").Length())
+		assert.Zero(t, option(doc, hidden[0]))
+	})
+
 	t.Run("an actor the doer can't see filters to nothing", func(t *testing.T) {
 		hidden := &user_model.User{Name: "limited-deployer", Email: "limited-deployer@example.com", IsActive: true}
 		require.NoError(t, user_model.CreateUser(db.DefaultContext, hidden))

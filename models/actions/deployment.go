@@ -357,14 +357,19 @@ func FindRepoDeployments(ctx context.Context, repoID int64, f DeploymentFilter, 
 	return ds, count, err
 }
 
-// FindDeploymentTriggerUsers returns the users who triggered a deployment of the environment of the repository, at
-// most MaxDeploymentTriggerUsers of them (the lowest IDs).
-func FindDeploymentTriggerUsers(ctx context.Context, repoID, environmentID int64) ([]int64, error) {
+// FindDeploymentTriggerUsers returns the users who triggered a deployment of the environment of the repository and
+// match visible (the users the viewer may see; nil = all), at most MaxDeploymentTriggerUsers of them (the lowest IDs):
+// the condition applies before the limit, so users the viewer can't see never take a place.
+func FindDeploymentTriggerUsers(ctx context.Context, repoID, environmentID int64, visible builder.Cond) ([]int64, error) {
 	var ids []int64
-	return ids, db.GetEngine(ctx).Table("action_deployment").Distinct("trigger_user_id").
-		Where("repo_id = ? AND environment_id = ? AND trigger_user_id <> 0", repoID, environmentID).
-		OrderBy("trigger_user_id").Limit(MaxDeploymentTriggerUsers).Find(&ids)
+	sess := db.GetEngine(ctx).Table("action_deployment").Join("INNER", "`user`", "`user`.id = action_deployment.trigger_user_id").
+		Distinct("action_deployment.trigger_user_id").
+		Where("action_deployment.repo_id = ? AND action_deployment.environment_id = ? AND `user`.id > 0", repoID, environmentID)
+	if visible != nil {
+		sess.And(visible)
+	}
+	return ids, sess.OrderBy("action_deployment.trigger_user_id").Limit(MaxDeploymentTriggerUsers).Find(&ids)
 }
 
 // MaxDeploymentTriggerUsers is how many users the actor filter of the deployments view offers at most.
-const MaxDeploymentTriggerUsers = 100
+var MaxDeploymentTriggerUsers = 100

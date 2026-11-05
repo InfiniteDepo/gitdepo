@@ -66,12 +66,9 @@ func afterCommit(ctx context.Context, what string, send func(ctx context.Context
 // mailDeploymentReviewers mails the users who may review d that it waits for them, once the transaction that made it
 // wait commits: the gate calls it only when a deployment starts to wait for a review (or does again, when an approval
 // is revoked), so a later pass sends nothing and a rerun's new attempt (a new deployment) sends its own. The jobs of a
-// run attempt that deploy to one environment (a matrix) share one mail, which one server claims before sending it.
+// run attempt that deploy to one environment (a matrix) share one mail, which one server claims right before sending it.
 func mailDeploymentReviewers(ctx context.Context, run *actions_model.ActionRun, jobName string, env *actions_model.ActionEnvironment, d *actions_model.ActionDeployment) {
 	afterCommit(ctx, "a deployment waiting for a review", func(ctx context.Context) error {
-		if claimed, err := actions_model.ClaimDeploymentMail(ctx, d); err != nil || !claimed {
-			return err
-		}
 		ids, _, err := DeploymentApprovers(ctx, nil, run, env, d)
 		if err != nil || len(ids) == 0 {
 			return err
@@ -82,6 +79,11 @@ func mailDeploymentReviewers(ctx context.Context, run *actions_model.ActionRun, 
 		}
 		m, err := deploymentMail(ctx, run, jobName, env.Name, d)
 		if err != nil {
+			return err
+		}
+		// claimed last, right before the send: a crash after a successful claim can still drop this one mail, which is
+		// accepted for a notification (a second server never sends it twice)
+		if claimed, err := actions_model.ClaimDeploymentMail(ctx, d); err != nil || !claimed {
 			return err
 		}
 		return sendReviewMail(ctx, users, m)
@@ -95,9 +97,6 @@ func mailDeploymentDecided(ctx context.Context, env *actions_model.ActionEnviron
 		return
 	}
 	afterCommit(ctx, "a rejected or expired deployment", func(ctx context.Context) error {
-		if claimed, err := actions_model.ClaimDeploymentMail(ctx, d); err != nil || !claimed {
-			return err
-		}
 		run, err := actions_model.GetRunByID(ctx, d.RunID)
 		if err != nil {
 			return err
@@ -124,6 +123,11 @@ func mailDeploymentDecided(ctx context.Context, env *actions_model.ActionEnviron
 			if m.Reviewer, err = possibleUser(ctx, d.ReviewedBy); err != nil {
 				return err
 			}
+		}
+		// claimed last, right before the send: a crash after a successful claim can still drop this one mail, which is
+		// accepted for a notification (a second server never sends it twice)
+		if claimed, err := actions_model.ClaimDeploymentMail(ctx, d); err != nil || !claimed {
+			return err
 		}
 		return sendDecidedMail(ctx, u, m)
 	})
