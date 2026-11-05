@@ -4,7 +4,6 @@
 package actions
 
 import (
-
 	actions_model "forgejo.org/models/actions"
 	"forgejo.org/models/db"
 	secret_model "forgejo.org/models/secret"

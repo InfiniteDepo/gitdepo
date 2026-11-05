@@ -374,12 +374,7 @@ func TestApprovalRevokedWhenApproverIsNoLongerEligible(t *testing.T) {
 			_, err := db.GetEngine(t.Context()).Exec("UPDATE user SET is_active = ? WHERE id = 4", false)
 			require.NoError(t, err)
 		},
-		"lost access to Actions": func(t *testing.T, f *reviewFixture) {
-			_, err := db.GetEngine(t.Context()).Exec("DELETE FROM collaboration WHERE user_id = 4 AND repo_id = 63")
-			require.NoError(t, err)
-			_, err = db.GetEngine(t.Context()).Exec("DELETE FROM access WHERE user_id = 4 AND repo_id = 63")
-			require.NoError(t, err)
-		},
+		"lost access to Actions": func(t *testing.T, f *reviewFixture) { revokeActionsRead(t, 4) },
 	} {
 		t.Run("the approver is "+name+" during the timer", func(t *testing.T) {
 			f := setup(t)
@@ -695,8 +690,8 @@ func TestSaveEnvironmentChecksTheListFirst(t *testing.T) {
 }
 
 // A user without a membership path to the repository can't be added as a reviewer, with one answer whatever their
-// account (a site administrator, an auditor, an account that can't sign in, one with or without 2FA); a site
-// administrator may add one, and one listed before stays listed.
+// account (a site administrator, an auditor, an account that can't sign in, one with or without 2FA) and whoever
+// saves, and one listed before stays listed.
 func TestSaveEnvironmentRefusesOutsiders(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	ctx := audit_model.WithActor(t.Context(), &audit_model.Actor{Type: audit_model.ActorUser, ID: 2, Credential: audit_model.Credential{Type: audit_model.CredentialAccessToken, ID: 1}})
@@ -721,7 +716,14 @@ func TestSaveEnvironmentRefusesOutsiders(t *testing.T) {
 	admin := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
 	adminCtx := audit_model.WithActor(t.Context(), &audit_model.Actor{Type: audit_model.ActorUser, ID: 1, Credential: audit_model.Credential{Type: audit_model.CredentialAccessToken, ID: 1}})
 	_, err = SaveEnvironment(adminCtx, admin, e(), []int64{2, 4, 24}, nil)
-	require.NoError(t, err, "a site administrator may list anyone")
+	require.ErrorIs(t, err, ErrReviewerNotMember, "a site administrator follows the same rule")
+
+	// one listed while they were a collaborator stays listed
+	require.NoError(t, db.Insert(ctx, &repo_model.Collaboration{RepoID: 1, UserID: 24, Mode: 1}))
+	_, err = SaveEnvironment(ctx, doer, e(), []int64{4, 24}, nil)
+	require.NoError(t, err)
+	_, err = db.GetEngine(ctx).Where("repo_id = 1 AND user_id = 24").Delete(&repo_model.Collaboration{})
+	require.NoError(t, err)
 	_, err = SaveEnvironment(ctx, doer, e(), []int64{4, 24}, nil)
 	require.NoError(t, err, "a listed reviewer stays listed")
 }

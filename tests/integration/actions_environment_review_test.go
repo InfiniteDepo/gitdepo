@@ -17,6 +17,7 @@ import (
 	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
+	"forgejo.org/models/perm"
 	repo_model "forgejo.org/models/repo"
 	secret_model "forgejo.org/models/secret"
 	"forgejo.org/models/unittest"
@@ -640,6 +641,8 @@ jobs:
 				require.NoError(t, err)
 				return n
 			}
+			// only a member can be listed: user5 becomes a collaborator first
+			require.NoError(t, db.Insert(t.Context(), &repo_model.Collaboration{RepoID: repo.ID, UserID: user5.ID, Mode: perm.AccessModeRead}))
 			e := newEnv("cleanup-rv", []int64{user5.ID}, nil)
 			cleanupEnvID = e.ID
 			assert.EqualValues(t, 1, count())

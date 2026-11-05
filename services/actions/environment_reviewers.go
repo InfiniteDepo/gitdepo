@@ -139,11 +139,8 @@ func environmentReviewers(ctx context.Context, doer *user_model.User, e *actions
 		if found != len(container.SetOf(newUserIDs...)) {
 			return nil, ErrUnknownReviewer
 		}
-		// only who relates to the repository can be listed: anyone else is refused with one answer, so a list never
-		// tells about the account of a stranger (a site administrator sees every account's state anyway)
-		if doer.IsAdmin {
-			return checkReviewerTeams(ctx, repo, stored, teamIDs, reviewers)
-		}
+		// only who relates to the repository can be listed, whoever the doer: anyone else is refused with one answer,
+		// so a list never tells about the account of a stranger
 		rows, err := accessreport.Compute(ctx, accessreport.Options{RepoIDs: []int64{repo.ID}, Users: newUserIDs, RepoPermission: true})
 		if err != nil {
 			return nil, err

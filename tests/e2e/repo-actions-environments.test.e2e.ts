@@ -85,11 +85,16 @@ test('create, edit, give secrets to and delete an environment', async ({page}) =
 
 test('warning when nobody listed can approve', async ({page, request}) => {
   const name = `locked-${dynamic_id()}`;
-  // user9 is deactivated: listed, but can't approve
+  // user37 can't sign in: a collaborator (only members can be listed), listed, but can't approve
+  const added = await request.put('/api/v1/repos/user2/repo1/collaborators/user37', {
+    headers: basicAuth('user2', 'password'),
+    data: {permission: 'read'},
+  });
+  expect(added.status()).toBe(204);
   const response = await request.put(`/api/v1/repos/user2/repo1/actions/environments/${name}`, {
     headers: basicAuth('user2', 'password'),
     data: {
-      reviewers: [{type: 'user', id: 9}], prevent_self_review: false, wait_timer: 0,
+      reviewers: [{type: 'user', id: 37}], prevent_self_review: false, wait_timer: 0,
       ref_policy: 'any', ref_patterns: [], runner_labels: [], allowed_workflows: [],
     },
   });
@@ -113,4 +118,8 @@ test('warning when nobody listed can approve', async ({page, request}) => {
     headers: basicAuth('user2', 'password'),
   });
   expect(deleted.status()).toBe(204);
+  const removed = await request.delete('/api/v1/repos/user2/repo1/collaborators/user37', {
+    headers: basicAuth('user2', 'password'),
+  });
+  expect(removed.status()).toBe(204);
 });

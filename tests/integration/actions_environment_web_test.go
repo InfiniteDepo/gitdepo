@@ -189,19 +189,22 @@ func TestActionsEnvironmentsWeb(t *testing.T) {
 		})
 
 		t.Run("no eligible reviewer warning", func(t *testing.T) {
-			// user10 can't read the private repository, so nobody listed can approve
+			// user10 was a collaborator when listed and no longer is: nobody listed can approve
+			require.NoError(t, db.Insert(ctx, &repo_model.Collaboration{RepoID: repo.ID, UserID: 10, Mode: perm.AccessModeRead}))
 			post(owner, base+"/new", form(map[string][]string{"name": {"locked"}, "reviewers": {"user:10"}}), http.StatusSeeOther)
+			_, err := db.GetEngine(ctx).Where("repo_id = ? AND user_id = 10", repo.ID).Delete(&repo_model.Collaboration{})
+			require.NoError(t, err)
 			locked := envByName(repo.ID, "locked")
 			warning := "Nobody listed can approve a deployment right now"
 			assert.Contains(t, owner.MakeRequest(t, NewRequest(t, "GET", base), http.StatusOK).Body.String(), warning)
 			body := owner.MakeRequest(t, NewRequest(t, "GET", envLink(locked)), http.StatusOK).Body.String()
 			assert.Contains(t, body, warning)
-			assert.Contains(t, body, "no access to Actions", "the listed user is shown with the reason")
+			assert.Contains(t, body, "not a member of this repository", "the listed user is shown with the one answer of a non-member")
 			// the reader can approve: no warning
 			post(owner, envLink(locked), form(map[string][]string{"reviewers": {"user:10,user:5"}}), http.StatusSeeOther)
 			assert.NotContains(t, owner.MakeRequest(t, NewRequest(t, "GET", envLink(locked)), http.StatusOK).Body.String(), warning)
 			// a reviewer that can't sign in no longer counts
-			_, err := db.Exec(ctx, "UPDATE `user` SET prohibit_login = ? WHERE id = 5", true)
+			_, err = db.Exec(ctx, "UPDATE `user` SET prohibit_login = ? WHERE id = 5", true)
 			require.NoError(t, err)
 			defer func() {
 				_, err := db.Exec(ctx, "UPDATE `user` SET prohibit_login = ? WHERE id = 5", false)
