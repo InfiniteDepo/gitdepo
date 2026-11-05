@@ -67,6 +67,9 @@ func AcceptInvite(ctx context.Context, team *org_model.Team, invite *org_model.T
 	if invite.IsExpired() {
 		return org_model.ErrTeamInviteExpired{}
 	}
+	if err := org_model.CheckInviteIsOwnAct(ctx, team, invite); err != nil {
+		return err
+	}
 	if err := models.AddTeamMemberByCooptation(ctx, team, doer.ID, invite.InviterID); err != nil {
 		return err
 	}

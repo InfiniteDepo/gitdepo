@@ -150,6 +150,19 @@ func CheckMemberAddIsOwnAct(ctx context.Context, team *Team) error {
 	if audit_model.IsOwnAct(ctx) {
 		return nil
 	}
+	return checkTeamNotProtected(ctx, team)
+}
+
+// CheckInviteIsOwnAct returns audit_model.ErrNotOwnAct when the team is protected now (see CheckMemberAddIsOwnAct)
+// and the invitation was not its inviter's own act.
+func CheckInviteIsOwnAct(ctx context.Context, team *Team, invite *TeamInvite) error {
+	if invite.OwnAct {
+		return nil
+	}
+	return checkTeamNotProtected(ctx, team)
+}
+
+func checkTeamNotProtected(ctx context.Context, team *Team) error {
 	if team.IsOwnerTeam() {
 		return audit_model.ErrNotOwnAct
 	}

@@ -160,12 +160,67 @@ func TestOrgTeamMemberAddOwnAct(t *testing.T) {
 			unittest.AssertExistsAndLoadBean(t, &org_model.TeamUser{TeamID: owners.ID, UID: 11})
 		})
 
+		t.Run("an invitation made before the team became protected", func(t *testing.T) {
+			defer test.MockVariableValue(&setting.Service.AddMembersByInvitations, true)()
+			require.False(t, unittest.BeanExists(t, &org_model.TeamUser{TeamID: unrelated.ID, UID: 12}))
+			invitee := getUserToken(t, "user12", auth_model.AccessTokenScopeWriteUser)
+			accept := func(status int) {
+				invite := unittest.AssertExistsAndLoadBean(t, &org_model.TeamInvite{TeamID: unrelated.ID})
+				MakeRequest(t, NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/user/team_invitations/%d/accept", invite.ID), &api.AcceptTeamInviteOptions{}).AddTokenAuth(invitee), status)
+			}
+			// a grant may invite to a team that isn't protected yet, and the team is listed as a reviewer afterwards
+			MakeRequest(t, credentials["OAuth2 grant"](NewRequest(t, "PUT", memberURL(unrelated, "user12"))), http.StatusNoContent)
+			_, err := db.GetEngine(t.Context()).Exec("INSERT INTO action_environment_reviewer (environment_id, user_id, team_id) VALUES (2, 0, ?)", unrelated.ID)
+			require.NoError(t, err)
+			accept(http.StatusForbidden)
+			assert.False(t, unittest.BeanExists(t, &org_model.TeamUser{TeamID: unrelated.ID, UID: 12}))
+
+			// the same invitation from the owner's own session is accepted
+			invite := unittest.AssertExistsAndLoadBean(t, &org_model.TeamInvite{TeamID: unrelated.ID})
+			MakeRequest(t, NewRequestf(t, "DELETE", "/api/v1/teams/%d/invitations/%d", unrelated.ID, invite.ID).AddTokenAuth(ownerToken), http.StatusNoContent)
+			org := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: unrelated.OrgID})
+			loginUser(t, user2.Name).MakeRequest(t, NewRequestWithValues(t, "POST", fmt.Sprintf("/org/%s/teams/%s/action/add", org.Name, url.PathEscape(unrelated.LowerName)),
+				map[string]string{"uname": "user12"}), http.StatusSeeOther)
+			accept(http.StatusNoContent)
+			unittest.AssertExistsAndLoadBean(t, &org_model.TeamUser{TeamID: unrelated.ID, UID: 12})
+			_, err = db.GetEngine(t.Context()).Exec("DELETE FROM action_environment_reviewer WHERE team_id = ?", unrelated.ID)
+			require.NoError(t, err)
+		})
+
+		// login sources find teams and organizations by name, so a new name points their sync at them
+		t.Run("renaming a protected team", func(t *testing.T) {
+			rename := func(team *org_model.Team, name string) *RequestWrapper {
+				return NewRequestWithJSON(t, "PATCH", fmt.Sprintf("/api/v1/teams/%d", team.ID), &api.EditTeamOption{Name: name})
+			}
+			for name, auth := range credentials {
+				MakeRequest(t, auth(rename(reviewers, "contractors")), http.StatusForbidden)
+				assert.Equal(t, reviewers.Name, unittest.AssertExistsAndLoadBean(t, &org_model.Team{ID: reviewers.ID}).Name, name)
+			}
+			grant := credentials["OAuth2 grant"]
+			MakeRequest(t, grant(rename(unrelated, "contractors")), http.StatusOK)
+			MakeRequest(t, grant(rename(unrelated, unrelated.Name)), http.StatusOK)
+			MakeRequest(t, rename(reviewers, "contractors").AddTokenAuth(ownerToken), http.StatusOK)
+			MakeRequest(t, rename(reviewers, reviewers.Name).AddTokenAuth(ownerToken), http.StatusOK)
+		})
+
 		t.Run("creating an organization with a delegated credential", func(t *testing.T) {
 			MakeRequest(t, credentials["OAuth2 grant"](NewRequestWithJSON(t, "POST", "/api/v1/orgs", &api.CreateOrgOption{UserName: "own-act-org"})), http.StatusCreated)
 			org := unittest.AssertExistsAndLoadBean(t, &user_model.User{LowerName: "own-act-org"})
 			team, err := org_model.GetOwnerTeam(t.Context(), org.ID)
 			require.NoError(t, err)
 			unittest.AssertExistsAndLoadBean(t, &org_model.TeamUser{TeamID: team.ID, UID: user2.ID})
+		})
+
+		t.Run("renaming an organization", func(t *testing.T) {
+			rename := func(name string) *RequestWrapper {
+				return NewRequestWithJSON(t, "POST", "/api/v1/orgs/own-act-org/rename", &api.RenameOrgOption{NewName: name})
+			}
+			MakeRequest(t, credentials["OAuth2 grant"](rename("own-act-mapped")), http.StatusForbidden)
+			MakeRequest(t, credentials["sudo"](rename("own-act-mapped")), http.StatusForbidden)
+			unittest.AssertExistsAndLoadBean(t, &user_model.User{LowerName: "own-act-org"})
+			MakeRequest(t, credentials["OAuth2 grant"](rename("Own-Act-Org")), http.StatusNoContent) // only the case
+			MakeRequest(t, rename("own-act-mapped").AddTokenAuth(ownerToken), http.StatusNoContent)
+			unittest.AssertExistsAndLoadBean(t, &user_model.User{LowerName: "own-act-mapped"})
 		})
 	})
 }

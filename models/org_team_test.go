@@ -356,4 +356,18 @@ func TestAddTeamMemberOwnAct(t *testing.T) {
 	// the person's own credential
 	require.NoError(t, AddTeamMemberByCooptation(ownCtx(), reviewers, 10, 2))
 	unittest.CheckConsistencyFor(t, &organization.Team{ID: owners.ID}, &organization.Team{ID: reviewers.ID}, &user_model.User{ID: 3})
+
+	// login sources find teams by name, so renaming a protected team is checked too
+	renamed := *reviewers
+	renamed.Name = "contractors"
+	require.ErrorIs(t, UpdateTeam(grant, &renamed, false, false), audit_model.ErrNotOwnAct)
+	assert.Equal(t, reviewers.Name, unittest.AssertExistsAndLoadBean(t, &organization.Team{ID: reviewers.ID}).Name)
+	renamed.Description = "same name"
+	renamed.Name = strings.ToUpper(reviewers.Name)
+	require.NoError(t, UpdateTeam(grant, &renamed, false, false), "only the case")
+	renamed.Name = "contractors"
+	require.NoError(t, UpdateTeam(ownCtx(), &renamed, false, false))
+	unrelatedRenamed := *unrelated
+	unrelatedRenamed.Name = "renamed"
+	require.NoError(t, UpdateTeam(grant, &unrelatedRenamed, false, false), "another team")
 }

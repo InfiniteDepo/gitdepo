@@ -378,6 +378,12 @@ func UpdateTeam(ctx context.Context, t *organization.Team, authChanged, includeA
 	before := old.AuditFields()
 
 	t.LowerName = strings.ToLower(t.Name)
+	// login sources find teams by name, so a new name points their sync at this team
+	if t.LowerName != old.LowerName {
+		if err := organization.CheckMemberAddIsOwnAct(ctx, old); err != nil {
+			return err
+		}
+	}
 	has, err := db.Exist[organization.Team](ctx, builder.Eq{
 		"org_id":     t.OrgID,
 		"lower_name": t.LowerName,

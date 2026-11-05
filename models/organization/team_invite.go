@@ -108,6 +108,9 @@ type TeamInvite struct {
 	CreatedUnix timeutil.TimeStamp                  `xorm:"INDEX created"`
 	UpdatedUnix timeutil.TimeStamp                  `xorm:"INDEX updated"`
 	ExpiryUnix  optional.Option[timeutil.TimeStamp] `xorm:"expiry_unix"`
+	// OwnAct is whether the inviter acted with a credential of their own; accepting an invitation to a protected team
+	// needs it (CheckInviteIsOwnAct), as the team may have become protected after the invitation
+	OwnAct bool `xorm:"NOT NULL DEFAULT false"`
 }
 
 // CreateTeamInviteByEmail creates a TeamInvite for someone who does not have an account yet.
@@ -173,6 +176,7 @@ func createTeamInviteByEmail(ctx context.Context, doer *user_model.User, team *T
 		TeamID:     team.ID,
 		Email:      email,
 		ExpiryUnix: getInviteExpiry(),
+		OwnAct:     audit_model.IsOwnAct(ctx),
 	}
 
 	return invite, insertInvite(ctx, team, invite)
@@ -242,6 +246,7 @@ func createTeamInviteForUser(ctx context.Context, doer, invited *user_model.User
 		InvitedID:   optional.Some(invited.ID),
 		InvitedUser: invited,
 		ExpiryUnix:  getInviteExpiry(),
+		OwnAct:      audit_model.IsOwnAct(ctx),
 	}
 
 	return invite, insertInvite(ctx, team, invite)

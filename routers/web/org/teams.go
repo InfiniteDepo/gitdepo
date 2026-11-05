@@ -26,6 +26,7 @@ import (
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/templates"
+	"forgejo.org/modules/util"
 	"forgejo.org/modules/validation"
 	"forgejo.org/modules/web"
 	shared_user "forgejo.org/routers/web/shared/user"
@@ -502,6 +503,8 @@ func NewTeamPost(ctx *context.Context) {
 		switch {
 		case org_model.IsErrTeamAlreadyExist(err):
 			ctx.RenderWithErr(ctx.Tr("form.team_name_been_taken"), tplTeamNew, &form)
+		case errors.Is(err, util.ErrPermissionDenied):
+			ctx.RenderWithErr(ctx.Tr("org.teams.rename_not_own_act"), tplTeamNew, &form)
 		default:
 			ctx.ServerError("NewTeam", err)
 		}
