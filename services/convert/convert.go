@@ -248,6 +248,7 @@ func toBranchProtection(ctx context.Context, bp *git_model.ProtectedBranch, read
 		MergeQueueCheckTimeoutMinutes:  bp.MergeQueueCheckTimeoutMinutes,
 		DismissStaleApprovals:          bp.DismissStaleApprovals,
 		IgnoreStaleApprovals:           bp.IgnoreStaleApprovals,
+		IgnorePusherApprovals:          bp.IgnorePusherApprovals,
 		RequireSignedCommits:           bp.RequireSignedCommits,
 		ProtectedFilePatterns:          bp.ProtectedFilePatterns,
 		UnprotectedFilePatterns:        bp.UnprotectedFilePatterns,

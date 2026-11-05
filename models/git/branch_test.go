@@ -134,6 +134,8 @@ func TestRenameBranch(t *testing.T) {
 	}, git_model.WhitelistOptions{}))
 	require.NoError(t, committer.Commit())
 
+	require.NoError(t, git_model.AddBranchPusher(db.DefaultContext, repo1.ID, "master", 4))
+	require.NoError(t, git_model.AddBranchPusher(db.DefaultContext, repo1.ID, "master", 0))
 	require.NoError(t, git_model.RenameBranch(db.DefaultContext, repo1, "master", "main", func(ctx context.Context, isDefault bool) error {
 		_isDefault = isDefault
 		return nil
@@ -142,6 +144,10 @@ func TestRenameBranch(t *testing.T) {
 	assert.True(t, _isDefault)
 	repo1 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
 	assert.Equal(t, "main", repo1.DefaultBranch)
+
+	pushers, err := git_model.FindBranchPusherIDs(db.DefaultContext, repo1.ID, "main")
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []int64{0, 4}, pushers, "the pushers follow the branch")
 
 	pull := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{ID: 1}) // merged
 	assert.Equal(t, "master", pull.BaseBranch)

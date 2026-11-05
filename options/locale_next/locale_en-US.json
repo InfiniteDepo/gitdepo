@@ -1852,8 +1852,28 @@
 	"repo.settings.approval_rule_source_branch_help": "Source branch only limits review requests. One pattern such as feature/*; * does not match /. Empty is any branch.",
 	"repo.settings.approval_rules_invalid": "Invalid approval rule: %s",
 	"repo.pulls.approval_rule_status": "%s: %d/%d",
-	"repo.pulls.approval_rule_uncovered": "(%d changed files are not approved by a code owner)",
+	"repo.pulls.approval_rule_uncovered": {
+		"one": "(%d changed file is not approved by a code owner)",
+		"other": "(%d changed files are not approved by a code owner)"
+	},
 	"repo.pulls.approval_rule_eligible": "Can approve: %s",
+	"repo.pulls.codeowners_error": "<a href=\"%s\">CODEOWNERS on %s</a> has an error on line %d, which blocks the merge. A section header needs the form <code>[Name]</code> or <code>[Name][N]</code>; to write a pattern that starts with <code>[</code>, escape it as <code>\\[</code>.",
+	"repo.pulls.codeowners_error_hidden": "The CODEOWNERS file has an error, which blocks the merge.",
+	"repo.pulls.codeowners_section_short": {
+		"one": "CODEOWNERS section %s needs %d approval, has %d",
+		"other": "CODEOWNERS section %s needs %d approvals, has %d"
+	},
+	"repo.pulls.codeowners_section_unreachable": {
+		"one": "CODEOWNERS section %s needs %d approval, only %d can approve",
+		"other": "CODEOWNERS section %s needs %d approvals, only %d can approve"
+	},
+	"repo.pulls.codeowners_section_hidden": "A CODEOWNERS section needs more approvals",
+	"repo.pulls.approval_pushed": "The approval of %s does not count: they pushed to this pull request.",
+	"repo.pulls.pusher_block_deploy_key": "A push to this pull request has no recorded person, so approvals can't be checked.",
+	"repo.pulls.pusher_block_unchecked": "Who pushed to this pull request can't be checked (too many commits, or they can't be read), so approvals can't be counted.",
+	"repo.pulls.update_branch_pusher_confirm": "Updating the branch counts as a push: your approval will no longer count toward this branch's approval requirements.",
+	"repo.settings.ignore_pusher_approvals": "Ignore approvals of users who pushed to the pull request",
+	"repo.settings.ignore_pusher_approvals_desc": "Do not count approvals of users who pushed to the pull request: its commit authors and committers, and whoever pushed to its head branch, including Update branch and edits in the web editor, which count as pushes. This applies to the required approvals, approval rules and code owners of this rule.",
 	"repo.pulls.approval_rules_error": "Approval rules could not be evaluated",
 	"repo.settings.block_on_incomplete_tasks": "Block merge while tasks are open",
 	"repo.settings.block_on_incomplete_tasks_desc": "Merging will not be possible while a task of the pull request is not done.",

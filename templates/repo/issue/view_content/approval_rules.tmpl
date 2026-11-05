@@ -8,12 +8,33 @@
 	<div class="item">
 		<ul class="tw-list-none tw-m-0 tw-p-0">
 			{{range .ApprovalRules}}
-				<li class="flex-text-block {{if not .Satisfied}}text red{{end}}">
-					{{if .Satisfied}}{{svg "octicon-check"}}{{else}}{{svg "octicon-x"}}{{end}}
-					{{ctx.Locale.Tr "repo.pulls.approval_rule_status" .Name .Granted .Required}}
-					{{if .UncoveredFiles}}{{ctx.Locale.Tr "repo.pulls.approval_rule_uncovered" .UncoveredFiles}}{{end}}
-					{{if $.ApprovalRuleEligible}}{{with index $.ApprovalRuleEligible .Rule.ID}}<span class="text grey">{{ctx.Locale.Tr "repo.pulls.approval_rule_eligible" .}}</span>{{end}}{{end}}
-					{{if .Approvers}}<span class="text grey">({{range $i, $u := .Approvers}}{{if $i}}, {{end}}{{$u.Name}}{{end}})</span>{{end}}
+				<li class="{{if not .Satisfied}}text red{{end}}">
+					<div class="flex-text-block tw-flex-wrap">
+						{{if .Satisfied}}{{svg "octicon-check"}}{{else}}{{svg "octicon-x"}}{{end}}
+						{{ctx.Locale.Tr "repo.pulls.approval_rule_status" .Name .Granted .Required}}
+						{{if .UncoveredFiles}}{{ctx.Locale.TrPluralString .UncoveredFiles "repo.pulls.approval_rule_uncovered" .UncoveredFiles}}{{end}}
+						{{if $.ApprovalRuleEligible}}{{with index $.ApprovalRuleEligible .Rule.ID}}<span class="text grey">{{ctx.Locale.Tr "repo.pulls.approval_rule_eligible" .}}</span>{{end}}{{end}}
+						{{if .Approvers}}<span class="text grey">({{range $i, $u := .Approvers}}{{if $i}}, {{end}}{{$u.Name}}{{end}})</span>{{end}}
+					</div>
+					{{if .CodeOwnersErrorLine}}
+						<div class="codeowners-error tw-ml-6">
+							{{if $.Permission.CanRead $.UnitTypeCode}}
+								{{$link := printf "%s/src/branch/%s/%s#L%d" $.Repository.Link (PathEscapeSegments $.Issue.PullRequest.BaseBranch) (PathEscapeSegments .CodeOwnersFile) .CodeOwnersErrorLine}}
+								{{ctx.Locale.Tr "repo.pulls.codeowners_error" $link $.Issue.PullRequest.BaseBranch .CodeOwnersErrorLine}}
+							{{else}}
+								{{ctx.Locale.Tr "repo.pulls.codeowners_error_hidden"}}
+							{{end}}
+						</div>
+					{{end}}
+					{{range .Shortfalls}}
+						<div class="codeowners-shortfall tw-ml-6">
+							{{if $.Permission.CanRead $.UnitTypeCode}}
+								{{if lt .Eligible .Required}}{{ctx.Locale.TrPluralString .Required "repo.pulls.codeowners_section_unreachable" .Name .Required .Eligible}}{{else}}{{ctx.Locale.TrPluralString .Required "repo.pulls.codeowners_section_short" .Name .Required .Granted}}{{end}}
+							{{else}}
+								{{ctx.Locale.Tr "repo.pulls.codeowners_section_hidden"}}
+							{{end}}
+						</div>
+					{{end}}
 				</li>
 			{{end}}
 		</ul>
