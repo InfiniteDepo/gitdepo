@@ -264,23 +264,6 @@ func (entry *Workflow) Dispatch(ctx context.Context, inputGetter InputValueGette
 // commitIDPattern is a commit ID, full or abbreviated: letters and digits only, so no revision syntax.
 var commitIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{4,64}$`)
 
-// exactRefCommitID returns the object a full ref names, or "" when that exact ref does not exist. Unlike a lookup by
-// name (`cat-file`), `show-ref --verify` never falls back to another ref, such as the branch `refs/tags/v1` for `refs/tags/v1`.
-func exactRefCommitID(gitRepo *git.Repository, ref string) (string, error) {
-	if !strings.HasPrefix(ref, "refs/") || !git.IsValidRefPattern(ref) {
-		return "", nil
-	}
-	stdout, _, err := git.NewCommand(gitRepo.Ctx, "show-ref", "--verify", "--hash").AddDynamicArguments(ref).RunStdString(&git.RunOpts{Dir: gitRepo.Path})
-	if err != nil {
-		// show-ref --verify exits with 128 when the ref is missing; that is not an error here
-		if git.IsErrorExitCode(err, 128) {
-			return "", nil
-		}
-		return "", err
-	}
-	return strings.TrimSpace(stdout), nil
-}
-
 // resolveDispatchRef resolves the name to one existing ref exactly and returns the full ref with the commit it points to.
 // A short name tries a tag, then a branch; a name that is neither must be a commit ID (letters and digits only, so no
 // revision syntax such as `main~1` or `x@{1}`). The ref is kept in the run, where rules of an environment read it as a
@@ -293,11 +276,11 @@ func resolveDispatchRef(gitRepo *git.Repository, name string) (ref, commitID str
 		candidates = []string{git.TagPrefix + name, git.BranchPrefix + name}
 	}
 	for _, candidate := range candidates {
-		id, err := exactRefCommitID(gitRepo, candidate)
+		// one exact call: the commit is the one of this ref, never of another that git would resolve the name to
+		id, ok, err := gitRepo.GetExactRefCommitID(candidate)
 		if err != nil {
 			return "", "", err
-		}
-		if id != "" {
+		} else if ok {
 			return candidate, id, nil
 		}
 	}

@@ -7,12 +7,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 
 	actions_model "forgejo.org/models/actions"
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unit"
 	actions_module "forgejo.org/modules/actions"
+	"forgejo.org/modules/cache"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/timeutil"
@@ -70,6 +72,7 @@ func failPickedJob(ctx context.Context, jobID int64) error {
 }
 
 func pickTask(ctx context.Context, runner *actions_model.ActionRunner, requestKey, handle *string) (*runnerv1.Task, *actions_model.ActionRunJob, error) {
+	ctx = cache.WithCacheContext(ctx)
 	// no new jobs start while maintenance mode is on, running ones finish
 	if setting.GetMaintenance(ctx).ReadOnly() {
 		return nil, nil, actions_model.ErrNoMatchingJobFound
@@ -124,7 +127,12 @@ func pickTask(ctx context.Context, runner *actions_model.ActionRunner, requestKe
 			return fmt.Errorf("GetUnit: %w", err)
 		}
 
-		taskContext, err := generateTaskContext(t, unit.ActionsConfig())
+		environment, err := releasedEnvironmentName(ctx, jobOfTask(t))
+		if err != nil {
+			return fmt.Errorf("releasedEnvironmentName: %w", err)
+		}
+
+		taskContext, err := generateTaskContext(t, unit.ActionsConfig(), environment)
 		if err != nil {
 			return fmt.Errorf("generateTaskContext: %w", err)
 		}
@@ -199,7 +207,15 @@ func RecoverTasks(ctx context.Context, tasks []*actions_model.ActionTask) ([]*ru
 				return fmt.Errorf("GetUnit: %w", err)
 			}
 
-			taskContext, err := generateTaskContext(t, unit.ActionsConfig())
+			environment, err := releasedEnvironmentName(ctx, jobOfTask(t))
+			if errors.Is(err, errEnvironmentNotReleased) {
+				failed = append(failed, t)
+				continue
+			} else if err != nil {
+				return fmt.Errorf("releasedEnvironmentName: %w", err)
+			}
+
+			taskContext, err := generateTaskContext(t, unit.ActionsConfig(), environment)
 			if err != nil {
 				return fmt.Errorf("generateTaskContext: %w", err)
 			}
@@ -228,7 +244,9 @@ func RecoverTasks(ctx context.Context, tasks []*actions_model.ActionTask) ([]*ru
 	return retval, nil
 }
 
-func generateTaskContext(t *actions_model.ActionTask, ac *repo_model.ActionsConfig) (*structpb.Struct, error) {
+// generateTaskContext builds the context of the task for the runner. environment is the name of the environment that
+// released the job ("" for a job without one): the ID token of the job carries it, and it is not part of the context.
+func generateTaskContext(t *actions_model.ActionTask, ac *repo_model.ActionsConfig, environment string) (*structpb.Struct, error) {
 	run := t.Job.Run
 	gitCtx, err := GenerateGiteaContext(run, t.Job)
 	if err != nil {
@@ -243,11 +261,17 @@ func generateTaskContext(t *actions_model.ActionTask, ac *repo_model.ActionsConf
 
 	// Override the setting from the workflow is this is coming from a fork pull request
 	// and this isn't a pull_request_target event.
-	if run.IsForkPullRequest && run.TriggerEvent != actions_module.GithubEventPullRequestTarget {
+	if isForkRun(run) {
 		enableOpenIDConnect = false
 	}
 
-	giteaRuntimeToken, err := CreateAuthorizationToken(t, gitCtx, enableOpenIDConnect, ac)
+	oidcCtx := gitCtx
+	if environment != "" {
+		// the name is the environment row's, never a text of the workflow
+		oidcCtx = maps.Clone(gitCtx)
+		oidcCtx["environment"] = environment
+	}
+	giteaRuntimeToken, err := CreateAuthorizationToken(t, oidcCtx, enableOpenIDConnect, ac)
 	if err != nil {
 		return nil, err
 	}

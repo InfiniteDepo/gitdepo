@@ -6,6 +6,7 @@ package git
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -124,6 +125,22 @@ func (repo *Repository) CatFileBatch(ctx context.Context) (io.Writer, *bufio.Rea
 		func() (*Batch, error) { return repo.newBatch(ctx) })
 }
 
+// errBatchRequest is returned for a request that is not one line of a name or an object ID.
+var errBatchRequest = errors.New("invalid request for the git batch process")
+
+// requestWriter writes the requests of the closures of WithCatFileBatch and WithCatFileBatchCheck to the shared
+// process, one line each: a write that holds a NUL or a line break before its last byte is refused and nothing of it
+// reaches git, because git would answer it as several requests and every later lookup would read the answer of the
+// one before it. The closure's error also tells the pool that the process may be out of step.
+type requestWriter struct{ io.Writer }
+
+func (w requestWriter) Write(p []byte) (int, error) {
+	if bytes.IndexByte(p, 0) >= 0 || bytes.IndexByte(p[:max(len(p)-1, 0)], '\n') >= 0 {
+		return 0, errBatchRequest
+	}
+	return w.Writer.Write(p)
+}
+
 // WithCatFileBatch performs the same work as CatFileBatch, but with a closure-based API which makes error handling a
 // little easier.  It is still necessary to ensure that the entire response from any request sent to the writer is read
 // from the reader, leaving no leftover content in the pipe that the next musage might encounter.
@@ -132,7 +149,7 @@ func (repo *Repository) WithCatFileBatch(ctx context.Context, closure func(io.Wr
 	if err != nil {
 		return err
 	}
-	err = closure(wr, rd)
+	err = closure(requestWriter{wr}, rd)
 	close(err)
 	return err
 }
@@ -161,7 +178,7 @@ func (repo *Repository) WithCatFileBatchCheck(ctx context.Context, closure func(
 	if err != nil {
 		return err
 	}
-	err = closure(wr, rd)
+	err = closure(requestWriter{wr}, rd)
 	close(err)
 	return err
 }

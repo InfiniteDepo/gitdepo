@@ -12,6 +12,7 @@ import (
 	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
+	secret_model "forgejo.org/models/secret"
 	"forgejo.org/modules/json"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/timeutil"
@@ -32,6 +33,7 @@ const (
 	MaxEnvironmentName     = 255
 	MaxRefPatterns         = 50
 	MaxRunnerLabels        = 20
+	MaxAllowedWorkflows    = 20
 	MaxWaitTimerMinutes    = 43200 // 30 days
 )
 
@@ -66,10 +68,15 @@ type ActionEnvironment struct {
 	RefPolicy         int                     `xorm:"NOT NULL DEFAULT 0"`
 	RefPatterns       []EnvironmentRefPattern `xorm:"JSON TEXT"`
 	WaitTimerMinutes  int                     `xorm:"NOT NULL DEFAULT 0"`
-	PreventSelfReview bool                    `xorm:"NOT NULL DEFAULT false"` // used by the approval of required reviewers
+	PreventSelfReview bool                    `xorm:"NOT NULL DEFAULT false"` // the run's triggering user can't review its deployment
 	RunnerLabels      []string                `xorm:"JSON TEXT"`              // appended to the runs-on of the jobs that deploy here
-	Created           timeutil.TimeStamp      `xorm:"created"`
-	Updated           timeutil.TimeStamp      `xorm:"updated"`
+	AllowedWorkflows  []string                `xorm:"JSON TEXT"`              // patterns over the workflow file name, empty = any workflow
+	// ReviewsRequired is the rule that a deployment needs a reviewer's approval. Only an edit of the reviewers sets or
+	// clears it, never the deletion of a listed user or team: an environment whose reviewers all vanished that way
+	// keeps holding its deployments (nobody can approve) until someone edits its rules, which is audited.
+	ReviewsRequired bool               `xorm:"NOT NULL DEFAULT false"`
+	Created         timeutil.TimeStamp `xorm:"created"`
+	Updated         timeutil.TimeStamp `xorm:"updated"`
 }
 
 func init() {
@@ -113,7 +120,8 @@ func (e *ActionEnvironment) Normalize() error {
 	e.Name = strings.Trim(e.Name, " ")
 	lower, ok := lowerName(e.Name)
 	e.LowerName = lower
-	if !ok || len(e.Name) > MaxEnvironmentName {
+	// ":" delimits the environment in the subject of an ID token (`...:environment:<name>`), so neither it nor a space is allowed
+	if !ok || len(e.Name) > MaxEnvironmentName || strings.ContainsAny(e.Name, ": ") {
 		return util.NewInvalidArgumentErrorf("invalid environment name")
 	}
 	if e.RefPolicy < EnvironmentRefAny || e.RefPolicy > EnvironmentRefPatterns {
@@ -150,6 +158,17 @@ func (e *ActionEnvironment) Normalize() error {
 			return util.NewInvalidArgumentErrorf("invalid runner label")
 		}
 	}
+	if len(e.AllowedWorkflows) > MaxAllowedWorkflows {
+		return util.NewInvalidArgumentErrorf("too many allowed workflows")
+	}
+	for _, p := range e.AllowedWorkflows {
+		if _, err := compilePattern(p); err != nil || p == "" || len(p) > 255 || !isPrintableASCII(p) {
+			return util.NewInvalidArgumentErrorf("invalid allowed workflow")
+		}
+	}
+	if e.AllowedWorkflows == nil {
+		e.AllowedWorkflows = []string{}
+	}
 	if e.RefPatterns == nil {
 		e.RefPatterns = []EnvironmentRefPattern{}
 	}
@@ -177,6 +196,15 @@ func (e *ActionEnvironment) AllowsRef(ref string) bool {
 	return false
 }
 
+// AllowsWorkflow reports if a run of the workflow file (its name without the directory, such as "deploy.yml") may
+// deploy to the environment: it has no allowed workflows, or one of its patterns matches ("*" doesn't cross "/").
+func (e *ActionEnvironment) AllowsWorkflow(workflowID string) bool {
+	if len(e.AllowedWorkflows) == 0 {
+		return true
+	}
+	return slices.ContainsFunc(e.AllowedWorkflows, func(p string) bool { return matchPattern(p, workflowID) })
+}
+
 // EnvironmentRefKind splits ref into EnvironmentPatternBranch or EnvironmentPatternTag and its short name; the kind
 // is "" for any other ref.
 func EnvironmentRefKind(ref string) (kind, name string) {
@@ -197,7 +225,8 @@ func (e *ActionEnvironment) auditData() map[string]any {
 	}
 	return map[string]any{
 		"name": e.Name, "ref_policy": e.RefPolicy, "ref_patterns": patterns, "wait_timer_minutes": e.WaitTimerMinutes,
-		"prevent_self_review": e.PreventSelfReview, "runner_labels": e.RunnerLabels,
+		"prevent_self_review": e.PreventSelfReview, "runner_labels": e.RunnerLabels, "allowed_workflows": e.AllowedWorkflows,
+		"reviews_required": e.ReviewsRequired,
 	}
 }
 
@@ -222,12 +251,17 @@ func insertEnvironmentIfAbsent(ctx context.Context, e *ActionEnvironment) (bool,
 	if err != nil {
 		return false, err
 	}
-	insert := "INSERT INTO action_environment (owner_id, repo_id, name, lower_name, ref_policy, ref_patterns, wait_timer_minutes, prevent_self_review, runner_labels, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (owner_id, repo_id, lower_name) DO NOTHING"
-	if setting.Database.Type.IsMySQL() {
-		insert = "INSERT IGNORE INTO action_environment (owner_id, repo_id, name, lower_name, ref_policy, ref_patterns, wait_timer_minutes, prevent_self_review, runner_labels, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+	workflows, err := json.Marshal(e.AllowedWorkflows)
+	if err != nil {
+		return false, err
 	}
+	verb, suffix := "INSERT INTO", " ON CONFLICT (owner_id, repo_id, lower_name) DO NOTHING"
+	if setting.Database.Type.IsMySQL() {
+		verb, suffix = "INSERT IGNORE INTO", ""
+	}
+	insert := verb + " action_environment (owner_id, repo_id, name, lower_name, ref_policy, ref_patterns, wait_timer_minutes, prevent_self_review, runner_labels, allowed_workflows, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)" + suffix
 	now := timeutil.TimeStampNow()
-	res, err := db.GetEngine(ctx).Exec(insert, e.OwnerID, e.RepoID, e.Name, e.LowerName, e.RefPolicy, string(patterns), e.WaitTimerMinutes, e.PreventSelfReview, string(labels), now, now)
+	res, err := db.GetEngine(ctx).Exec(insert, e.OwnerID, e.RepoID, e.Name, e.LowerName, e.RefPolicy, string(patterns), e.WaitTimerMinutes, e.PreventSelfReview, string(labels), string(workflows), now, now)
 	if err != nil {
 		return false, err
 	}
@@ -339,6 +373,9 @@ func UpdateEnvironment(ctx context.Context, e *ActionEnvironment) error {
 		return err
 	}
 	return db.WithTx(ctx, func(ctx context.Context) error {
+		if err := LockEnvironment(ctx, e.RepoID, e.ID); err != nil {
+			return err
+		}
 		stored, err := GetRepoEnvironmentByID(ctx, e.RepoID, e.ID)
 		if err != nil {
 			return err
@@ -352,9 +389,22 @@ func UpdateEnvironment(ctx context.Context, e *ActionEnvironment) error {
 				return err
 			}
 		}
-		_, err = db.GetEngine(ctx).ID(e.ID).Cols("name", "ref_policy", "ref_patterns", "wait_timer_minutes", "prevent_self_review", "runner_labels").Update(e)
+		_, err = db.GetEngine(ctx).ID(e.ID).Cols("name", "ref_policy", "ref_patterns", "wait_timer_minutes", "prevent_self_review", "runner_labels", "allowed_workflows").Update(e)
 		return err
 	})
+}
+
+// LockEnvironment takes the row lock of the environment (a no-op UPDATE: a write lock on SQLite, a row lock elsewhere)
+// and returns ErrEnvironmentNotFound if it is gone. Every insert of a secret or variable of an environment and its delete
+// take it first, so a concurrent delete can't leave rows of a deleted environment behind. Call it inside a transaction.
+func LockEnvironment(ctx context.Context, repoID, id int64) error {
+	if err := secret_model.LockEnvironment(ctx, repoID, id); err != nil {
+		if errors.Is(err, util.ErrNotExist) {
+			return ErrEnvironmentNotFound
+		}
+		return err
+	}
+	return nil
 }
 
 // DeleteEnvironment deletes the environment with its secrets and variables and records it. Its deployments stay as
@@ -365,6 +415,9 @@ func DeleteEnvironment(ctx context.Context, e *ActionEnvironment, failUnpickedJo
 		return errors.New("DeleteEnvironment needs a function that fails the jobs waiting for the environment")
 	}
 	return db.WithTx(ctx, func(ctx context.Context) error {
+		if err := LockEnvironment(ctx, e.RepoID, e.ID); err != nil {
+			return err
+		}
 		if err := failUnpickedJobs(ctx); err != nil {
 			return err
 		}
@@ -372,7 +425,14 @@ func DeleteEnvironment(ctx context.Context, e *ActionEnvironment, failUnpickedJo
 		if err != nil {
 			return err
 		}
+		reviewers, err := FindEnvironmentReviewers(ctx, stored.ID)
+		if err != nil {
+			return err
+		}
 		eng := db.GetEngine(ctx)
+		if _, err := eng.Where("environment_id = ?", stored.ID).Delete(new(ActionEnvironmentReviewer)); err != nil {
+			return err
+		}
 		secrets, err := eng.Table("secret").Where("repo_id = ? AND environment_id = ?", stored.RepoID, stored.ID).Delete()
 		if err != nil {
 			return err
@@ -383,6 +443,7 @@ func DeleteEnvironment(ctx context.Context, e *ActionEnvironment, failUnpickedJo
 		}
 		// the entry keeps the rules that were removed, and how many secrets and variables (never their values)
 		data := stored.auditData()
+		data["reviewers"] = reviewerKeys(reviewers)
 		data["counts"] = map[string]int64{"secrets": secrets, "variables": variables}
 		if err := recordEnvironment(ctx, audit_model.LevelActions{Repo: "repo.actions_env.deleted"}, stored, data); err != nil {
 			return err

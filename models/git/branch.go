@@ -61,6 +61,25 @@ func (err ErrBranchAlreadyExists) Unwrap() error {
 	return util.ErrAlreadyExist
 }
 
+// ErrBranchNameReserved represents an error that the branch name could be read as another ref (see git.IsReservedRefName).
+type ErrBranchNameReserved struct {
+	BranchName string
+}
+
+// IsErrBranchNameReserved checks if an error is an ErrBranchNameReserved.
+func IsErrBranchNameReserved(err error) bool {
+	_, ok := err.(ErrBranchNameReserved)
+	return ok
+}
+
+func (err ErrBranchNameReserved) Error() string {
+	return fmt.Sprintf("branch name is reserved [name: %s]", err.BranchName)
+}
+
+func (err ErrBranchNameReserved) Unwrap() error {
+	return util.ErrInvalidArgument
+}
+
 // ErrBranchNameConflict represents an error that branch name conflicts with other branch.
 type ErrBranchNameConflict struct {
 	BranchName string

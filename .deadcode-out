@@ -18,6 +18,7 @@ forgejo.org/models/actions
 	FindRepoEnvironments
 	UpdateEnvironment
 	DeleteEnvironment
+	ReplaceEnvironmentReviewers
 	InsertEnvironmentVariable
 	DeleteEnvironmentVariable
 
@@ -297,6 +298,8 @@ forgejo.org/routers/web/org
 
 forgejo.org/services/actions
 	DeleteEnvironment
+	SetEnvironmentReviewers
+	emitEnvironmentRuns
 
 forgejo.org/services/auth
 	RegisterInternalIssuerForTesting

@@ -35,6 +35,7 @@ type IDTokenCustomClaims struct {
 	Actor             string `json:"actor"`
 	ActorID           string `json:"actor_id"`
 	BaseRef           string `json:"base_ref"`
+	Environment       string `json:"environment,omitempty"`
 	EventName         string `json:"event_name"`
 	HeadRef           string `json:"head_ref"`
 	NamespacePath     string `json:"namespace_path"`
@@ -138,6 +139,7 @@ func generateOIDCExtra(gitCtx map[string]any) (string, error) {
 		Actor:             ctxVal("actor"),
 		ActorID:           ctxVal("actor_id"),
 		BaseRef:           ctxVal("base_ref"),
+		Environment:       ctxVal("environment"),
 		EventName:         ctxVal("event_name"),
 		HeadRef:           ctxVal("head_ref"),
 		NamespacePath:     ctxVal("namespace_path"),
@@ -167,6 +169,10 @@ func generateOIDCExtra(gitCtx map[string]any) (string, error) {
 func generateOIDCSub(gitCtx map[string]any) string {
 	// the leaf (a name has no "/"), so renaming the project or moving the repository doesn't change the subject
 	repoName := path.Base(gitCtx["repository"].(string))
+	if env, _ := gitCtx["environment"].(string); env != "" {
+		// as on GitHub, the environment replaces the ref or pull_request of the subject
+		return fmt.Sprintf("repo:%s-%s/%s-%s:environment:%s", gitCtx["repository_owner"], gitCtx["repository_owner_id"], repoName, gitCtx["repository_id"], env)
+	}
 	switch gitCtx["event_name"] {
 	case "pull_request":
 		return fmt.Sprintf("repo:%s-%s/%s-%s:pull_request", gitCtx["repository_owner"], gitCtx["repository_owner_id"], repoName, gitCtx["repository_id"])
@@ -176,6 +182,9 @@ func generateOIDCSub(gitCtx map[string]any) string {
 }
 
 func legacyGenerateOIDCSub(gitCtx map[string]any) string {
+	if env, _ := gitCtx["environment"].(string); env != "" {
+		return fmt.Sprintf("repo:%s:environment:%s", gitCtx["repository"], env)
+	}
 	switch gitCtx["event_name"] {
 	case "pull_request":
 		return fmt.Sprintf("repo:%s:pull_request", gitCtx["repository"])

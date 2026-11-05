@@ -113,7 +113,8 @@ func RecordScoped(ctx context.Context, actions audit_model.LevelActions, ownerID
 	ev.Result, ev.OwnerID, ev.GroupID, ev.RepoID = audit_model.ResultSuccess, ownerID, groupID, repoID
 	switch {
 	case repoID != 0:
-		repo, err := GetRepositoryByID(ctx, repoID)
+		// only the scope is needed: a change to an object of a trashed repository is recorded all the same
+		repo, err := GetRepositoryByIDIncludingTrashed(ctx, repoID)
 		if err != nil {
 			return err
 		}
