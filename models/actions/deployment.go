@@ -94,6 +94,8 @@ type ActionDeployment struct {
 	ReviewComment string             `xorm:"TEXT"` // plain text, never rendered as HTML
 	Created       timeutil.TimeStamp `xorm:"created"`
 	Updated       timeutil.TimeStamp `xorm:"updated"`
+	// the last time the due-deployments task queued, or failed to queue, a pass of the gate for it (0: never)
+	CheckedUnix timeutil.TimeStamp `xorm:"NOT NULL DEFAULT 0"`
 }
 
 func init() {
@@ -137,11 +139,12 @@ func ReviewDeployment(ctx context.Context, d *ActionDeployment, cutoff timeutil.
 }
 
 // RevokeDeploymentApproval puts an approved deployment that still waits for its timer back to waiting for a review,
-// with the review cleared, and reports if it was still approved by the same reviewer (another pass may have moved it).
+// with the review cleared and the release time of d, and reports if it was still approved by the same reviewer (another
+// pass may have moved it).
 func RevokeDeploymentApproval(ctx context.Context, d *ActionDeployment) (bool, error) {
 	n, err := db.GetEngine(ctx).Where("id = ? AND status = ? AND reviewed_by = ?", d.ID, DeploymentWaitingTimer, d.ReviewedBy).
-		Cols("status", "reviewed_by", "reviewed_unix", "review_comment").
-		Update(&ActionDeployment{Status: DeploymentWaitingReview})
+		Cols("status", "release_after_unix", "reviewed_by", "reviewed_unix", "review_comment").
+		Update(&ActionDeployment{Status: DeploymentWaitingReview, ReleaseAfterUnix: d.ReleaseAfterUnix})
 	return n == 1, err
 }
 
@@ -159,26 +162,57 @@ func TouchDeployment(ctx context.Context, id int64, now timeutil.TimeStamp) erro
 	return err
 }
 
-// FindDueDeploymentRunIDs returns the runs, at most limit, with a blocked job whose deployment waits for a wait timer
-// that ended, or was rejected or expired and whose job the gate has not failed yet, the ones looked at longest ago first (TouchDueDeployments moves a run whose pass failed to the back, so
-// runs that always fail can't starve the others).
+// staleDeployment is true for a deployment that waits (for its timer or a review) whose environment changed after the
+// deployment last did: an edit of the rules whose own pass of the gate (emitEnvironmentRuns) failed, or didn't decide
+// it yet. Times have second resolution, so an edit in the same second as the deployment's last change isn't seen here;
+// that edit's own pass decides it.
+const staleDeployment = "(action_deployment.status IN (?, ?) AND EXISTS (SELECT 1 FROM action_environment " +
+	"WHERE action_environment.id = action_deployment.environment_id AND action_environment.repo_id = action_deployment.repo_id " +
+	"AND action_environment.updated > action_deployment.updated))"
+
+// MaxDueRunsPerRepo is how many runs of one repository one tick of the due-deployments task takes, so that one
+// repository with many runs (an edit of its rules makes every waiting one stale) can't hold back the others.
+const MaxDueRunsPerRepo = 10
+
+// FindDueDeploymentRunIDs returns the runs, at most limit and MaxDueRunsPerRepo of each repository, with a blocked job
+// whose deployment waits for a wait timer that ended, was rejected or expired and whose job the gate has not failed
+// yet, or waits under rules that changed since (staleDeployment). The runs the task looked at least recently come
+// first (TouchDueDeployments), then the ones that wait longest, so runs whose pass always fails, however many, can't
+// starve the others.
 func FindDueDeploymentRunIDs(ctx context.Context, now timeutil.TimeStamp, limit int) ([]int64, error) {
+	cond, args, err := builder.ToSQL(builder.And(builder.Eq{"action_run_job.status": StatusBlocked}, builder.Or(
+		builder.And(builder.Eq{"action_deployment.status": DeploymentWaitingTimer}, builder.Lte{"action_deployment.release_after_unix": now}),
+		builder.In("action_deployment.status", DeploymentRejected, DeploymentExpired),
+		builder.Expr(staleDeployment, DeploymentWaitingTimer, DeploymentWaitingReview),
+	)))
+	if err != nil {
+		return nil, err
+	}
+	order := "MAX(action_deployment.checked_unix), MIN(action_deployment.updated), action_deployment.run_id"
 	var ids []int64
-	return ids, db.GetEngine(ctx).Table("action_deployment").
-		Join("INNER", "action_run_job", "action_run_job.id = action_deployment.job_id AND action_run_job.attempt = action_deployment.attempt").
-		Where("action_run_job.status = ?", StatusBlocked).
-		And(builder.Or(
-			builder.And(builder.Eq{"action_deployment.status": DeploymentWaitingTimer}, builder.Lte{"action_deployment.release_after_unix": now}),
-			builder.In("action_deployment.status", DeploymentRejected, DeploymentExpired),
-		)).
-		Select("action_deployment.run_id").GroupBy("action_deployment.run_id").
-		OrderBy("MIN(action_deployment.updated), action_deployment.run_id").Limit(limit).Find(&ids)
+	return ids, db.GetEngine(ctx).SQL("SELECT run_id FROM (SELECT action_deployment.run_id AS run_id, "+
+		"MAX(action_deployment.checked_unix) AS checked, MIN(action_deployment.updated) AS waited, "+
+		"ROW_NUMBER() OVER (PARTITION BY action_deployment.repo_id ORDER BY "+order+") AS n "+
+		"FROM action_deployment INNER JOIN action_run_job ON action_run_job.id = action_deployment.job_id AND action_run_job.attempt = action_deployment.attempt "+
+		"WHERE "+cond+" GROUP BY action_deployment.repo_id, action_deployment.run_id) due "+
+		"WHERE n <= ? ORDER BY checked, waited, run_id LIMIT ?", append(args, MaxDueRunsPerRepo, limit)...).Find(&ids)
 }
 
-// TouchDueDeployments sets the update time of the run's deployments that wait for a timer to now.
+// TouchDueDeployments records that the task looked at the run now, whether its pass was queued or not: the run goes
+// to the back of the line. It changes no update time, so a stale deployment stays stale until TouchStaleDeployments.
 func TouchDueDeployments(ctx context.Context, runID int64, now timeutil.TimeStamp) error {
-	_, err := db.GetEngine(ctx).Table("action_deployment").Where("run_id = ?", runID).And(builder.In("status", DeploymentWaitingTimer, DeploymentRejected, DeploymentExpired)).
-		Update(map[string]any{"updated": now})
+	_, err := db.GetEngine(ctx).Table("action_deployment").Where("run_id = ?", runID).
+		And(builder.In("status", DeploymentWaitingTimer, DeploymentWaitingReview, DeploymentRejected, DeploymentExpired)).
+		Update(map[string]any{"checked_unix": now})
+	return err
+}
+
+// TouchStaleDeployments marks the run's stale deployments (staleDeployment) as seen once the gate was queued for the
+// run: their update time becomes their environment's, so they are no longer stale until the rules change again.
+func TouchStaleDeployments(ctx context.Context, runID int64) error {
+	_, err := db.GetEngine(ctx).Exec("UPDATE action_deployment SET updated = (SELECT action_environment.updated FROM action_environment "+
+		"WHERE action_environment.id = action_deployment.environment_id) WHERE action_deployment.run_id = ? AND "+staleDeployment,
+		runID, DeploymentWaitingTimer, DeploymentWaitingReview)
 	return err
 }
 
@@ -217,4 +251,34 @@ func FindReviewableDeployments(ctx context.Context, runID int64, cutoff timeutil
 func FindRunDeployments(ctx context.Context, runID int64) ([]*ActionDeployment, error) {
 	var ds []*ActionDeployment
 	return ds, db.GetEngine(ctx).Where("run_id = ?", runID).OrderBy("job_id, attempt").Find(&ds)
+}
+
+// FindLastDeployments returns the newest deployment of each of the environments of the repository that has one.
+func FindLastDeployments(ctx context.Context, repoID int64, environmentIDs []int64) (map[int64]*ActionDeployment, error) {
+	var ids []int64
+	if err := db.GetEngine(ctx).Table("action_deployment").Select("MAX(id)").Where("repo_id = ?", repoID).
+		In("environment_id", environmentIDs).GroupBy("environment_id").Find(&ids); err != nil {
+		return nil, err
+	}
+	var ds []*ActionDeployment
+	if err := db.GetEngine(ctx).In("id", ids).Find(&ds); err != nil {
+		return nil, err
+	}
+	out := make(map[int64]*ActionDeployment, len(ds))
+	for _, d := range ds {
+		out[d.EnvironmentID] = d
+	}
+	return out, nil
+}
+
+// FindRepoDeployments returns a page of the deployments of the repository, newest first, of one environment
+// (environmentID 0: of every environment), and how many there are.
+func FindRepoDeployments(ctx context.Context, repoID, environmentID int64, opts db.ListOptions) ([]*ActionDeployment, int64, error) {
+	sess := db.GetEngine(ctx).Where("repo_id = ?", repoID)
+	if environmentID != 0 {
+		sess = sess.And("environment_id = ?", environmentID)
+	}
+	var ds []*ActionDeployment
+	count, err := db.SetSessionPagination(sess, &opts).OrderBy("id DESC").FindAndCount(&ds)
+	return ds, count, err
 }

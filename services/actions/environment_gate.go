@@ -29,7 +29,7 @@ import (
 )
 
 // maxDueDeploymentRuns is how many runs one tick of the wait timer task looks at.
-const maxDueDeploymentRuns = 100
+var maxDueDeploymentRuns = 100
 
 // errEnvironmentNotReleased is what a job gets when no released deployment of an existing environment stands behind it, for
 // example because the environment was deleted after its release: such a job fails, it is never retried.
@@ -202,6 +202,9 @@ func nextDeploymentStatus(d *actions_model.ActionDeployment, env *actions_model.
 		return
 	}
 	timer := now + timeutil.TimeStamp(env.WaitTimerMinutes)*60
+	if d.Status.IsWaiting() {
+		d.ReleaseAfterUnix = waitingRelease(d, env)
+	}
 	timerRuns := d.ReleaseAfterUnix > now
 	switch prior := d.Status; {
 	case prior == 0 && env.ReviewsRequired:
@@ -223,6 +226,16 @@ func nextDeploymentStatus(d *actions_model.ActionDeployment, env *actions_model.
 	default:
 		d.Status = actions_model.DeploymentReleased
 	}
+}
+
+// waitingRelease is the release time of a waiting deployment: always its ready time plus the environment's current
+// timer, recomputed on every pass, so raising the timer holds the job and lowering or removing it releases it at once
+// (editing the rules is the break-glass). The stored value is only this result; 0 means no timer.
+func waitingRelease(d *actions_model.ActionDeployment, env *actions_model.ActionEnvironment) timeutil.TimeStamp {
+	if env.WaitTimerMinutes <= 0 {
+		return 0
+	}
+	return d.Created + timeutil.TimeStamp(env.WaitTimerMinutes)*60
 }
 
 // gateEnvironment is the one place that lets a job with an environment through, called when the job would run. It
@@ -289,18 +302,18 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 		}
 	}
 
-	prior := d.Status
+	prior, priorRelease := d.Status, d.ReleaseAfterUnix
 	now := timeutil.TimeStampNow()
-	if reason == "" && !isNew && prior == actions_model.DeploymentWaitingTimer && d.ReviewedBy != 0 && env != nil && env.ReviewsRequired && d.ReleaseAfterUnix <= now {
+	if reason == "" && !isNew && prior == actions_model.DeploymentWaitingTimer && d.ReviewedBy != 0 && env != nil && env.ReviewsRequired && waitingRelease(d, env) <= now {
 		// about to be released on an approval: the approver must still be one who may review
 		if revoked, err := revokeApprovalIfIneligible(ctx, run, env, d); err != nil {
 			return behaviourError, err
 		} else if revoked {
-			return behaviourHoldJob, nil
+			return behaviourHoldJob, nil // RevokeDeploymentApproval stored the current release time
 		}
 	}
 	nextDeploymentStatus(d, env, reason, now)
-	if err := saveDeployment(ctx, d, isNew, prior); err != nil {
+	if err := saveDeployment(ctx, d, isNew, prior, priorRelease); err != nil {
 		return behaviourError, err
 	}
 
@@ -349,6 +362,7 @@ func revokeApprovalIfIneligible(ctx context.Context, run *actions_model.ActionRu
 	// on the caller's transaction (the emitter's): a nested one that fails would roll it back and leave the rest of the
 	// pass outside it. A lost race is an error, so the pass is repeated, as in saveDeployment.
 	revokedBy := d.ReviewedBy
+	d.ReleaseAfterUnix = waitingRelease(d, env)
 	if moved, err := actions_model.RevokeDeploymentApproval(ctx, d); err != nil {
 		return false, err
 	} else if !moved {
@@ -360,13 +374,13 @@ func revokeApprovalIfIneligible(ctx context.Context, run *actions_model.ActionRu
 	}, 0)
 }
 
-// saveDeployment inserts a new deployment, or moves an existing one from prior to its status; a deployment that
+// saveDeployment inserts a new deployment, or moves an existing one from prior to its status and release time; one that
 // another server moved meanwhile is an error, so that the pass of the emitter is repeated.
-func saveDeployment(ctx context.Context, d *actions_model.ActionDeployment, isNew bool, prior actions_model.DeploymentStatus) error {
+func saveDeployment(ctx context.Context, d *actions_model.ActionDeployment, isNew bool, prior actions_model.DeploymentStatus, priorRelease timeutil.TimeStamp) error {
 	if isNew {
 		return db.Insert(ctx, d)
 	}
-	if d.Status == prior {
+	if d.Status == prior && d.ReleaseAfterUnix == priorRelease {
 		return nil
 	}
 	if moved, err := actions_model.SetDeploymentStatus(ctx, d, prior); err != nil {
@@ -475,8 +489,10 @@ func getVariablesOfJob(ctx context.Context, job *actions_model.ActionRunJob) (ma
 	return vars, nil
 }
 
-// StartDueDeployments runs the emitter for the runs with a job whose wait timer ended, which releases the job. It
-// holds nothing between runs: the gate moves a deployment with a conditional update, so two servers can run it.
+// StartDueDeployments runs the emitter for the runs with a job whose wait timer ended, which releases the job, and for
+// the runs with a deployment that waits under rules changed since it last did, which the gate decides again: a change
+// of rules whose own pass failed (emitEnvironmentRuns) takes effect here, a tick later. It holds nothing between runs:
+// the gate moves a deployment with a conditional update, so two servers can run it.
 func StartDueDeployments(ctx context.Context) error {
 	runIDs, err := actions_model.FindDueDeploymentRunIDs(ctx, timeutil.TimeStampNow(), maxDueDeploymentRuns)
 	if err != nil {
@@ -484,11 +500,13 @@ func StartDueDeployments(ctx context.Context) error {
 	}
 	for _, runID := range runIDs {
 		if err := EmitJobsIfReady(runID); err != nil {
-			log.Error("EmitJobsIfReady for run %d after a wait timer: %v", runID, err)
-			// to the back of the line, so that a run that always fails doesn't starve the others
-			if err := actions_model.TouchDueDeployments(ctx, runID, timeutil.TimeStampNow()); err != nil {
-				log.Error("TouchDueDeployments for run %d: %v", runID, err)
-			}
+			log.Error("EmitJobsIfReady for run %d after a wait timer or a change of rules: %v", runID, err)
+		} else if err := actions_model.TouchStaleDeployments(ctx, runID); err != nil {
+			log.Error("TouchStaleDeployments for run %d: %v", runID, err)
+		}
+		// to the back of the line, so that runs that always fail don't starve the others
+		if err := actions_model.TouchDueDeployments(ctx, runID, timeutil.TimeStampNow()); err != nil {
+			log.Error("TouchDueDeployments for run %d: %v", runID, err)
 		}
 	}
 	return nil
@@ -554,7 +572,8 @@ func notifyFailedJobs(ctx context.Context, failures []*jobFailure) {
 
 // DeleteEnvironment deletes the environment (see actions_model.DeleteEnvironment) and, in the same transaction, fails
 // the jobs of it that no runner took yet, whether their deployment waits or was released: the environment can't
-// release them any more, and a job never runs without its gate.
+// release them any more, and a job never runs without its gate. Like a change of its rules, only the doer's own act
+// deletes it (audit_model.ErrNotOwnAct otherwise).
 func DeleteEnvironment(ctx context.Context, e *actions_model.ActionEnvironment) error {
 	var failures []*jobFailure
 	if err := actions_model.DeleteEnvironment(ctx, e, func(ctx context.Context) error {

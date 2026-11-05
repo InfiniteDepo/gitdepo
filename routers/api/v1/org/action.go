@@ -115,7 +115,7 @@ func (Action) CreateOrUpdateSecret(ctx *context.APIContext) {
 func createOrUpdateSecret(ctx *context.APIContext, groupID int64) {
 	opt := web.GetForm(ctx).(*api.CreateOrUpdateSecretOption)
 
-	_, created, err := secrets_service.CreateOrUpdateSecret(ctx, ctx.Org().Organization.ID, groupID, 0, ctx.Params("secretname"), opt.Data)
+	_, created, err := secrets_service.CreateOrUpdateSecret(ctx, ctx.Org().Organization.ID, groupID, 0, 0, ctx.Params("secretname"), opt.Data)
 	if err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusBadRequest, "CreateOrUpdateSecret", err)
@@ -166,7 +166,7 @@ func (Action) DeleteSecret(ctx *context.APIContext) {
 }
 
 func deleteSecret(ctx *context.APIContext, groupID int64) {
-	err := secrets_service.DeleteSecretByName(ctx, ctx.Org().Organization.ID, groupID, 0, ctx.Params("secretname"))
+	err := secrets_service.DeleteSecretByName(ctx, ctx.Org().Organization.ID, groupID, 0, 0, ctx.Params("secretname"))
 	if err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusBadRequest, "DeleteSecret", err)
@@ -500,7 +500,7 @@ func (Action) DeleteVariable(ctx *context.APIContext) {
 }
 
 func deleteVariable(ctx *context.APIContext, groupID int64) {
-	if err := actions_service.DeleteVariableByName(ctx, ctx.Org().Organization.ID, groupID, 0, ctx.Params("variablename")); err != nil {
+	if err := actions_service.DeleteVariableByName(ctx, ctx.Org().Organization.ID, groupID, 0, 0, ctx.Params("variablename")); err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusBadRequest, "DeleteVariableByName", err)
 		} else if errors.Is(err, util.ErrNotExist) {
@@ -571,7 +571,7 @@ func createVariable(ctx *context.APIContext, groupID int64) {
 		return
 	}
 
-	if _, err := actions_service.CreateVariable(ctx, ownerID, groupID, 0, variableName, opt.Value); err != nil {
+	if _, err := actions_service.CreateVariable(ctx, ownerID, groupID, 0, 0, variableName, opt.Value); err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusBadRequest, "CreateVariable", err)
 		} else {
@@ -616,6 +616,8 @@ func (Action) UpdateVariable(ctx *context.APIContext) {
 	//     "$ref": "#/responses/error"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
+	//   "409":
+	//     description: a variable of the new name exists
 
 	updateVariable(ctx, 0)
 }
@@ -640,9 +642,11 @@ func updateVariable(ctx *context.APIContext, groupID int64) {
 	if opt.Name == "" {
 		opt.Name = ctx.Params("variablename")
 	}
-	if _, err := actions_service.UpdateVariable(ctx, v.ID, ctx.Org().Organization.ID, groupID, 0, opt.Name, opt.Value); err != nil {
+	if _, err := actions_service.UpdateVariable(ctx, v.ID, ctx.Org().Organization.ID, groupID, 0, 0, opt.Name, opt.Value); err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusBadRequest, "UpdateVariable", err)
+		} else if errors.Is(err, util.ErrAlreadyExist) {
+			ctx.Error(http.StatusConflict, "UpdateVariable", err)
 		} else {
 			ctx.Error(http.StatusInternalServerError, "UpdateVariable", err)
 		}

@@ -281,8 +281,9 @@ type ActionDeployment struct {
 	// for its wait timer as waiting_timer, with reviewed_by set
 	Status string `json:"status"`
 	// the short code why the deployment was refused
-	Reason    string                     `json:"reason,omitempty"`
-	Reviewers *ActionDeploymentReviewers `json:"reviewers"`
+	Reason string `json:"reason,omitempty"`
+	// the reviewers of the environment and whether the user may review; only in the list of a run
+	Reviewers *ActionDeploymentReviewers `json:"reviewers,omitempty"`
 	// when the wait timer ends
 	// swagger:strfmt date-time
 	ReleaseAfter *time.Time `json:"release_after,omitempty"`
@@ -292,6 +293,95 @@ type ActionDeployment struct {
 	ReviewedAt *time.Time `json:"reviewed_at,omitempty"`
 	// plain text, never HTML
 	ReviewComment string `json:"review_comment,omitempty"`
+	// the run and its page
+	RunID  int64  `json:"run_id"`
+	RunURL string `json:"run_url"`
+	// the ref and commit that the run deploys
+	Ref       string `json:"ref"`
+	CommitSHA string `json:"commit_sha"`
+	// the URL the workflow gave for the environment
+	EnvironmentURL string `json:"environment_url,omitempty"`
+	// who started this attempt of the job
+	TriggeredBy *User `json:"triggered_by,omitempty"`
 	// swagger:strfmt date-time
 	Created time.Time `json:"created_at"`
+}
+
+// ActionEnvironmentRefPattern is a pattern of the refs that may deploy to an environment
+// swagger:model
+type ActionEnvironmentRefPattern struct {
+	// branch or tag
+	// enum: branch,tag
+	Type string `json:"type"`
+	// matched against the branch or tag name (without refs/heads/ or refs/tags/); `*` stays within one path
+	// segment, `**` crosses `/`
+	Pattern string `json:"pattern"`
+}
+
+// ActionEnvironmentReviewer is a required reviewer of an environment
+// swagger:model
+type ActionEnvironmentReviewer struct {
+	// user or team; a team belongs to the organization that owns the repository
+	// enum: user,team
+	Type string `json:"type"`
+	ID   int64  `json:"id"`
+	// the login of the user or the name of the team, ignored in a request
+	Name string `json:"name,omitempty"`
+}
+
+// ActionEnvironment is a deployment environment of a repository and its protection rules
+// swagger:model
+type ActionEnvironment struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	// which refs may deploy: any, protected_branches or patterns
+	// enum: any,protected_branches,patterns
+	RefPolicy   string                         `json:"ref_policy"`
+	RefPatterns []*ActionEnvironmentRefPattern `json:"ref_patterns"`
+	// minutes a job waits before it starts, counted from when it is ready, at the same time as the review
+	WaitTimer int `json:"wait_timer"`
+	// the user who triggered the run can't approve its deployment
+	PreventSelfReview bool                         `json:"prevent_self_review"`
+	Reviewers         []*ActionEnvironmentReviewer `json:"reviewers"`
+	// whether a deployment needs an approval; it stays true when every listed reviewer was deleted, until the
+	// reviewers are edited
+	ReviewsRequired bool `json:"reviews_required"`
+	// labels a runner needs to run a job of the environment
+	RunnerLabels []string `json:"runner_labels"`
+	// patterns of the workflow files (such as deploy-*.yml) whose runs may deploy; empty means every workflow
+	AllowedWorkflows []string `json:"allowed_workflows"`
+	// a workflow named the environment before it existed and it was created without rules
+	CreatedByWorkflow bool  `json:"created_by_workflow"`
+	SecretsCount      int64 `json:"secrets_count"`
+	VariablesCount    int64 `json:"variables_count"`
+	// the newest deployment to the environment
+	LastDeployment *ActionDeployment `json:"last_deployment,omitempty"`
+	// swagger:strfmt date-time
+	Created time.Time `json:"created_at"`
+	// swagger:strfmt date-time
+	Updated time.Time `json:"updated_at"`
+}
+
+// CreateOrUpdateEnvironmentOption is the whole set of rules of an environment. Every field is required, so a client
+// that doesn't know a rule can't remove it by leaving it out: an empty list, 0 or false sets no rule explicitly.
+// swagger:model
+type CreateOrUpdateEnvironmentOption struct {
+	// any, protected_branches or patterns
+	// enum: any,protected_branches,patterns
+	// required: true
+	RefPolicy string `json:"ref_policy"`
+	// required: true
+	RefPatterns []*ActionEnvironmentRefPattern `json:"ref_patterns"`
+	// minutes, at most 43200
+	// required: true
+	WaitTimer *int `json:"wait_timer"`
+	// required: true
+	PreventSelfReview *bool `json:"prevent_self_review"`
+	// at most 6 users and teams together, each named by type and id; an empty list means no review is required
+	// required: true
+	Reviewers []*ActionEnvironmentReviewer `json:"reviewers"`
+	// required: true
+	RunnerLabels []string `json:"runner_labels"`
+	// required: true
+	AllowedWorkflows []string `json:"allowed_workflows"`
 }

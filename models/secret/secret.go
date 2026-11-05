@@ -93,6 +93,9 @@ func insertEncryptedSecret(ctx context.Context, ownerID, groupID, repoID, enviro
 	if err := ValidateName(name); err != nil {
 		return nil, err
 	}
+	if err := ValidateValue(data); err != nil {
+		return nil, err
+	}
 
 	secret := &Secret{
 		OwnerID:       ownerID,
@@ -103,13 +106,11 @@ func insertEncryptedSecret(ctx context.Context, ownerID, groupID, repoID, enviro
 	}
 
 	return secret, db.WithTx(ctx, func(ctx context.Context) error {
-		if err := LockGroup(ctx, ownerID, groupID); err != nil {
+		if err := LockLevel(ctx, secret.OwnerID, secret.GroupID, secret.RepoID, secret.EnvironmentID); err != nil {
 			return err
 		}
-		if environmentID != 0 {
-			if err := LockEnvironment(ctx, repoID, environmentID); err != nil {
-				return err
-			}
+		if err := CheckEnvironmentCount(ctx, "secret", repoID, environmentID); err != nil {
+			return err
 		}
 		if err := db.Insert(ctx, secret); err != nil {
 			return err
@@ -126,8 +127,11 @@ func insertEncryptedSecret(ctx context.Context, ownerID, groupID, repoID, enviro
 	})
 }
 
+// ErrEnvironmentNotFound is the environment of a secret or variable that is gone (actions_model.ErrEnvironmentNotFound).
+var ErrEnvironmentNotFound = util.NewNotExistErrorf("environment does not exist")
+
 // LockEnvironment takes the row lock of the environment (a no-op UPDATE: a write lock on SQLite, a row lock elsewhere)
-// and returns an error wrapping util.ErrNotExist if it is gone. It is the one lock of an environment: every write of
+// and returns ErrEnvironmentNotFound if it is gone. It is the one lock of an environment: every write of
 // its secrets, variables, reviewers and rules and its delete take it first, so none can leave rows behind or merge
 // with another. Call it inside a transaction.
 func LockEnvironment(ctx context.Context, repoID, id int64) error {
@@ -137,7 +141,7 @@ func LockEnvironment(ctx context.Context, repoID, id int64) error {
 	if ok, err := db.GetEngine(ctx).Table("action_environment").Where("repo_id = ? AND id = ?", repoID, id).Exist(); err != nil {
 		return err
 	} else if !ok {
-		return fmt.Errorf("%w: environment %d", util.ErrNotExist, id)
+		return ErrEnvironmentNotFound
 	}
 	return nil
 }
@@ -159,7 +163,7 @@ func recordSecret(ctx context.Context, actions audit_model.LevelActions, s *Secr
 // DeleteSecret deletes s and records actions_secret.deleted.
 func DeleteSecret(ctx context.Context, s *Secret) error {
 	return db.WithTx(ctx, func(ctx context.Context) error {
-		if err := LockGroup(ctx, s.OwnerID, s.GroupID); err != nil {
+		if err := LockLevel(ctx, s.OwnerID, s.GroupID, s.RepoID, s.EnvironmentID); err != nil {
 			return err
 		}
 		actions := audit_model.LevelActions{Repo: "repo.actions_secret.deleted", Org: "org.actions_secret.deleted", Account: "account.actions_secret.deleted"}
@@ -172,6 +176,19 @@ func DeleteSecret(ctx context.Context, s *Secret) error {
 		_, err := db.DeleteByID[Secret](ctx, s.ID)
 		return err
 	})
+}
+
+// LockLevel takes the lock of the project or the environment that a secret or variable belongs to, if any: every
+// write of one takes it.
+func LockLevel(ctx context.Context, ownerID, groupID, repoID, environmentID int64) error {
+	if environmentID != 0 {
+		// an environment's secrets and variables are part of its deployment protection, like its rules
+		if err := audit_model.CheckOwnAct(ctx); err != nil {
+			return err
+		}
+		return LockEnvironment(ctx, repoID, environmentID)
+	}
+	return LockGroup(ctx, ownerID, groupID)
 }
 
 // LockGroup locks the project row (nothing for groupID 0), so that deleting the project (which deletes its secrets)
@@ -285,7 +302,7 @@ func UpdateSecret(ctx context.Context, secret *Secret, valueChanged bool, column
 	secret.Name = strings.ToUpper(secret.Name)
 
 	return db.WithTx(ctx, func(ctx context.Context) error {
-		if err := LockGroup(ctx, secret.OwnerID, secret.GroupID); err != nil {
+		if err := LockLevel(ctx, secret.OwnerID, secret.GroupID, secret.RepoID, secret.EnvironmentID); err != nil {
 			return err
 		}
 		e := db.GetEngine(ctx)
@@ -370,6 +387,35 @@ func FetchEnvironmentSecrets(ctx context.Context, repoID, environmentID int64) (
 		secrets[secret.Name] = decryptedData
 	}
 	return secrets, nil
+}
+
+// MaxValueSize is the largest value of a secret or a variable, at every level (GitHub's limit for a secret), and
+// MaxPerEnvironment the most secrets, and the most variables, one deployment environment holds.
+const (
+	MaxValueSize      = 64 << 10
+	MaxPerEnvironment = 100
+)
+
+// ValidateValue refuses a value of a secret or variable larger than MaxValueSize.
+func ValidateValue(data string) error {
+	if len(data) > MaxValueSize {
+		return util.NewInvalidArgumentErrorf("the value is larger than 64 KiB")
+	}
+	return nil
+}
+
+// CheckEnvironmentCount refuses one more row of table (secret or action_variable) in an environment that holds
+// MaxPerEnvironment; call it under the environment's lock.
+func CheckEnvironmentCount(ctx context.Context, table string, repoID, environmentID int64) error {
+	if environmentID == 0 {
+		return nil
+	}
+	if n, err := db.GetEngine(ctx).Table(table).Where("repo_id = ? AND environment_id = ?", repoID, environmentID).Count(); err != nil {
+		return err
+	} else if n >= MaxPerEnvironment {
+		return util.NewInvalidArgumentErrorf("an environment holds at most %d secrets and %d variables", MaxPerEnvironment, MaxPerEnvironment)
+	}
+	return nil
 }
 
 func ValidateName(name string) error {

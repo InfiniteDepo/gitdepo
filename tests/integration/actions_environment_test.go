@@ -105,7 +105,7 @@ jobs:
 			if mutate != nil {
 				mutate(e)
 			}
-			require.NoError(t, actions_model.CreateEnvironment(ctx, e))
+			require.NoError(t, actions_model.CreateEnvironment(ctx, e, nil))
 			return e
 		}
 
@@ -205,7 +205,7 @@ jobs:
 			assert.Equal(t, actions_model.StatusBlocked, reload(jobs[0]).Status)
 			assert.Nil(t, runner.maybeFetchTask(t))
 
-			_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET release_after_unix = 1 WHERE id = ?", d.ID)
+			_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET release_after_unix = 1, created = created - 86400 WHERE id = ?", d.ID)
 			require.NoError(t, err)
 			require.NoError(t, actions_service.StartDueDeployments(t.Context()))
 			assert.Equal(t, actions_model.DeploymentReleased, deployment(jobs[0], 1).Status)
@@ -242,7 +242,7 @@ jobs:
 			newEnv("rerun-env", func(e *actions_model.ActionEnvironment) { e.WaitTimerMinutes = 10 })
 			jobs := push("env-h", "environment: rerun-env")
 			d1 := deployment(jobs[0], 1)
-			_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET release_after_unix = 1 WHERE id = ?", d1.ID)
+			_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET release_after_unix = 1, created = created - 86400 WHERE id = ?", d1.ID)
 			require.NoError(t, err)
 			require.NoError(t, actions_service.StartDueDeployments(t.Context()))
 			task := runner.fetchTask(t)
@@ -333,7 +333,7 @@ jobs:
 			assert.Equal(t, e.ID, d.EnvironmentID)
 			assert.Nil(t, runner.maybeFetchTask(t))
 
-			_, err = db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET release_after_unix = 1 WHERE id = ?", d.ID)
+			_, err = db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET release_after_unix = 1, created = created - 86400 WHERE id = ?", d.ID)
 			require.NoError(t, err)
 			require.NoError(t, actions_service.StartDueDeployments(t.Context()))
 			task := runner.fetchTask(t)
@@ -663,7 +663,7 @@ jobs:
 			assert.Equal(t, []string{"env-b", "env-a"}, reload(jobs[0]).RunsOn)
 
 			e.RunnerLabels = []string{"env-c"}
-			require.NoError(t, actions_model.UpdateEnvironment(ctx, e))
+			require.NoError(t, actions_model.UpdateEnvironment(ctx, e, nil))
 			run, err := actions_model.GetRunByID(t.Context(), jobs[0].RunID)
 			require.NoError(t, err)
 			_, err = actions_service.RerunAllJobs(t.Context(), nil, run)

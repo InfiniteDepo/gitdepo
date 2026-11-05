@@ -10,23 +10,35 @@ import (
 	secret_model "forgejo.org/models/secret"
 )
 
-func CreateOrUpdateSecret(ctx context.Context, ownerID, groupID, repoID int64, name, data string) (*secret_model.Secret, bool, error) {
+// CreateOrUpdateSecret creates or updates a secret of an owner, a project, a repository, or (environmentID not 0) an
+// environment of the repository; the secret of an environment only by the doer's own act (checked by secret_model.LockLevel).
+func CreateOrUpdateSecret(ctx context.Context, ownerID, groupID, repoID, environmentID int64, name, data string) (*secret_model.Secret, bool, error) {
 	if err := secret_model.ValidateName(name); err != nil {
+		return nil, false, err
+	}
+	if err := secret_model.ValidateValue(data); err != nil {
 		return nil, false, err
 	}
 
 	s, exists, err := db.Get[secret_model.Secret](ctx, secret_model.FindSecretsOptions{
-		OwnerID: ownerID,
-		GroupID: groupID,
-		RepoID:  repoID,
-		Name:    name,
+		OwnerID:       ownerID,
+		GroupID:       groupID,
+		RepoID:        repoID,
+		EnvironmentID: environmentID,
+		Name:          name,
 	}.ToConds())
 	if err != nil {
 		return nil, false, err
 	}
 
 	if !exists {
-		s, err := secret_model.InsertEncryptedSecret(ctx, ownerID, groupID, repoID, name, data)
+		insert := func() (*secret_model.Secret, error) {
+			if environmentID != 0 {
+				return secret_model.InsertEncryptedEnvironmentSecret(ctx, repoID, environmentID, name, data)
+			}
+			return secret_model.InsertEncryptedSecret(ctx, ownerID, groupID, repoID, name, data)
+		}
+		s, err := insert()
 		if err != nil {
 			return nil, false, err
 		}
@@ -57,12 +69,13 @@ func DeleteSecretByID(ctx context.Context, ownerID, groupID, repoID, secretID in
 	return deleteSecret(ctx, s[0])
 }
 
-func DeleteSecretByName(ctx context.Context, ownerID, groupID, repoID int64, name string) error {
+func DeleteSecretByName(ctx context.Context, ownerID, groupID, repoID, environmentID int64, name string) error {
 	s, err := db.Find[secret_model.Secret](ctx, secret_model.FindSecretsOptions{
-		OwnerID: ownerID,
-		GroupID: groupID,
-		RepoID:  repoID,
-		Name:    name,
+		OwnerID:       ownerID,
+		GroupID:       groupID,
+		RepoID:        repoID,
+		EnvironmentID: environmentID,
+		Name:          name,
 	})
 	if err != nil {
 		return err

@@ -4,11 +4,13 @@
 package audit_test
 
 import (
+	"context"
 	"testing"
 
 	audit_model "forgejo.org/models/audit"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSetSudoSelf(t *testing.T) {
@@ -34,4 +36,19 @@ func TestCredentialClaim(t *testing.T) {
 	for _, s := range []string{"", "x", "access_token", "access_token:0", "access_token:-1", "access_token:x", "ssh_key:1:2", "session:1", "system:1", "cli:1", "reverse_proxy:1", "unknown:1", "runner:1", "bogus:1"} {
 		assert.Equal(t, audit_model.CredentialUnknown, audit_model.CredentialFromClaim(s, 3).Type, s)
 	}
+}
+
+func TestIsOwnAct(t *testing.T) {
+	user := func(credential string, sudoBy int64) context.Context {
+		return audit_model.WithActor(t.Context(), &audit_model.Actor{Type: audit_model.ActorUser, ID: 2, SudoByID: sudoBy, Credential: audit_model.Credential{Type: credential, ID: 1}})
+	}
+	assert.False(t, audit_model.IsOwnAct(t.Context()), "no actor")
+	assert.False(t, audit_model.IsOwnAct(user(audit_model.CredentialAccessToken, 1)), "sudo")
+	assert.False(t, audit_model.IsOwnAct(user(audit_model.CredentialOAuth2Grant, 0)))
+	assert.False(t, audit_model.IsOwnAct(user(audit_model.CredentialAuthorizedIntegration, 0)))
+	assert.True(t, audit_model.IsOwnAct(user(audit_model.CredentialAccessToken, 0)))
+	assert.True(t, audit_model.IsOwnAct(user(audit_model.CredentialSession, 0)))
+	assert.True(t, audit_model.IsOwnAct(audit_model.WithSystem(t.Context(), "test")))
+	require.ErrorIs(t, audit_model.CheckOwnAct(t.Context()), audit_model.ErrNotOwnAct)
+	require.NoError(t, audit_model.CheckOwnAct(user(audit_model.CredentialAccessToken, 0)))
 }
