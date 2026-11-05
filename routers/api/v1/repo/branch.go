@@ -888,6 +888,7 @@ func BranchProtectionFromCreateOption(ctx *context.APIContext, owner *user_model
 		BlockOnOfficialReviewRequests:  form.BlockOnOfficialReviewRequests,
 		DismissStaleApprovals:          form.DismissStaleApprovals,
 		IgnoreStaleApprovals:           form.IgnoreStaleApprovals,
+		IgnorePusherApprovals:          form.IgnorePusherApprovals,
 		RequireSignedCommits:           form.RequireSignedCommits,
 		ProtectedFilePatterns:          form.ProtectedFilePatterns,
 		UnprotectedFilePatterns:        form.UnprotectedFilePatterns,
@@ -952,6 +953,7 @@ func ApplyEditBranchProtectionOption(ctx *context.APIContext, owner *user_model.
 	setIfNotNil(&protectBranch.BlockOnOfficialReviewRequests, form.BlockOnOfficialReviewRequests)
 	setIfNotNil(&protectBranch.DismissStaleApprovals, form.DismissStaleApprovals)
 	setIfNotNil(&protectBranch.IgnoreStaleApprovals, form.IgnoreStaleApprovals)
+	setIfNotNil(&protectBranch.IgnorePusherApprovals, form.IgnorePusherApprovals)
 	setIfNotNil(&protectBranch.RequireSignedCommits, form.RequireSignedCommits)
 	if form.ProtectedFilePatterns != nil {
 		protectBranch.ProtectedFilePatterns = *form.ProtectedFilePatterns

@@ -319,6 +319,7 @@ func ProtectBranchFromForm(ctx *context.Context, f *forms.ProtectBranchForm, pro
 	protectBranch.BlockOnOfficialReviewRequests = f.BlockOnOfficialReviewRequests
 	protectBranch.DismissStaleApprovals = f.DismissStaleApprovals
 	protectBranch.IgnoreStaleApprovals = f.IgnoreStaleApprovals
+	protectBranch.IgnorePusherApprovals = f.IgnorePusherApprovals
 	protectBranch.RequireSignedCommits = f.RequireSignedCommits
 	protectBranch.ProtectedFilePatterns = f.ProtectedFilePatterns
 	protectBranch.UnprotectedFilePatterns = f.UnprotectedFilePatterns

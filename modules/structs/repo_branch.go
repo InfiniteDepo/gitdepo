@@ -69,6 +69,9 @@ type BranchProtection struct {
 	UnprotectedFilePatterns       string   `json:"unprotected_file_patterns"`
 	ApplyToAdmins                 bool     `json:"apply_to_admins"`
 
+	// Do not count approvals of users who pushed to the pull request: commit authors and committers, and whoever pushed to its head branch (Update branch and web edits included). Applies to required approvals, approval rules and code owners.
+	IgnorePusherApprovals bool `json:"ignore_pusher_approvals"`
+
 	// Block merging while code review conversations are unresolved, optionally not counting outdated ones.
 	BlockOnUnresolvedConversations bool `json:"block_on_unresolved_conversations"`
 	IgnoreOutdatedConversations    bool `json:"ignore_outdated_conversations"`
@@ -142,6 +145,9 @@ type CreateBranchProtectionOption struct {
 	UnprotectedFilePatterns       string   `json:"unprotected_file_patterns"`
 	ApplyToAdmins                 bool     `json:"apply_to_admins"`
 
+	// Do not count approvals of users who pushed to the pull request: commit authors and committers, and whoever pushed to its head branch (Update branch and web edits included). Applies to required approvals, approval rules and code owners.
+	IgnorePusherApprovals bool `json:"ignore_pusher_approvals"`
+
 	// Block merging while code review conversations are unresolved, optionally not counting outdated ones.
 	BlockOnUnresolvedConversations bool `json:"block_on_unresolved_conversations"`
 	IgnoreOutdatedConversations    bool `json:"ignore_outdated_conversations"`
@@ -203,6 +209,7 @@ type EditBranchProtectionOption struct {
 	BlockOnOutdatedBranch         *bool    `json:"block_on_outdated_branch"`
 	DismissStaleApprovals         *bool    `json:"dismiss_stale_approvals"`
 	IgnoreStaleApprovals          *bool    `json:"ignore_stale_approvals"`
+	IgnorePusherApprovals         *bool    `json:"ignore_pusher_approvals"`
 	RequireSignedCommits          *bool    `json:"require_signed_commits"`
 	ProtectedFilePatterns         *string  `json:"protected_file_patterns"`
 	UnprotectedFilePatterns       *string  `json:"unprotected_file_patterns"`

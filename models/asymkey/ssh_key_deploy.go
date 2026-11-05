@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	"forgejo.org/models/perm"
 	"forgejo.org/modules/timeutil"
@@ -35,6 +36,7 @@ type DeployKey struct {
 
 	Mode        perm.AccessMode    `xorm:"NOT NULL DEFAULT 1"`
 	ExpiresUnix timeutil.TimeStamp `xorm:"NOT NULL DEFAULT 0"` // 0 = never; per repo, the shared PublicKey row has none
+	CreatorID   int64              `xorm:"NOT NULL DEFAULT 0"` // the user who added the key, 0 = not recorded
 
 	CreatedUnix       timeutil.TimeStamp `xorm:"created"`
 	UpdatedUnix       timeutil.TimeStamp `xorm:"updated"`
@@ -108,6 +110,7 @@ func addDeployKey(ctx context.Context, keyID, repoID int64, name, fingerprint st
 		Fingerprint: fingerprint,
 		Mode:        mode,
 		ExpiresUnix: expires,
+		CreatorID:   keyCreatorID(ctx),
 	}
 	return key, db.Insert(ctx, key)
 }
@@ -224,4 +227,24 @@ func (opt ListDeployKeysOptions) ToConds() builder.Cond {
 		cond = cond.And(builder.Eq{"fingerprint": opt.Fingerprint})
 	}
 	return cond
+}
+
+type keyCreatorKey struct{}
+
+// WithKeyCreator names the user a deploy key added with ctx is recorded for, when the request actor is not that user
+// (the Bitbucket import runs as the importing admin on the command line).
+func WithKeyCreator(ctx context.Context, userID int64) context.Context {
+	return context.WithValue(ctx, keyCreatorKey{}, userID)
+}
+
+// keyCreatorID is the user who adds a deploy key: the one named by WithKeyCreator, else the user acting in the
+// request; 0 when there is none (a push with such a key can't be attributed, see PullPushers).
+func keyCreatorID(ctx context.Context) int64 {
+	if id, ok := ctx.Value(keyCreatorKey{}).(int64); ok {
+		return id
+	}
+	if a := audit_model.ActorFromContext(ctx); a != nil && a.Type == audit_model.ActorUser && a.ID > 0 {
+		return a.ID
+	}
+	return 0
 }

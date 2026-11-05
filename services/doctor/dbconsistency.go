@@ -263,6 +263,9 @@ func checkDBConsistency(ctx context.Context, logger log.Logger, autofix bool) er
 		// find branches without existing repository
 		genericOrphanCheck("Branches without existing repository",
 			"branch", "repository", "branch.repo_id=repository.id"),
+		// find branch pushers (who pushed to a branch) without existing repository
+		genericOrphanCheck("Branch pushers without existing repository",
+			"branch_pusher", "repository", "branch_pusher.repo_id=repository.id"),
 		// find LFS locks without existing repository
 		genericOrphanCheck("LFS locks without existing repository",
 			"lfs_lock", "repository", "lfs_lock.repo_id=repository.id"),

@@ -2055,7 +2055,9 @@ func ViewIssue(ctx *context.Context) {
 				}
 				approvalRules = append(approvalRules, rules...)
 			}
-			ctx.Data["GrantedApprovals"] = issues_model.GetGrantedApprovalsCount(ctx, ctx.Data["ProtectedBranch"].(*git_model.ProtectedBranch), pull)
+			if shown := ctx.Data["ProtectedBranch"].(*git_model.ProtectedBranch); shown.RequiredApprovals > 0 {
+				ctx.Data["GrantedApprovals"] = issues_model.GetGrantedApprovalsCount(ctx, shown, pull)
+			}
 			// an approval by a token of an organization, a project or a repository is shown, and said not to count
 			approverIDs, err := issues_model.FindTokenApproverIDs(ctx, issue.ID)
 			if err != nil {
@@ -2068,6 +2070,42 @@ func ViewIssue(ctx *context.Context) {
 				return
 			}
 			ctx.Data["UncountedApprovals"] = uncounted
+			// approvals of users who pushed to the pull request, where a rule ignores them; updating the branch is a push
+			var pushedApprovers []*user_model.User
+			var flagged *git_model.ProtectedBranch
+			for _, pb := range pbs {
+				if !pb.IgnorePusherApprovals {
+					continue
+				}
+				if flagged == nil {
+					flagged = pb
+				}
+				if block, err := pull_service.PusherBlock(ctx, pb, pull); err != nil {
+					log.Error("PusherBlock for %-v: %v", pull, err)
+				} else if block != "" && ctx.Data["PusherBlock"] == nil {
+					ctx.Data["PusherBlock"] = block
+				}
+				pushed, err := pull_service.PusherApprovers(ctx, pb, pull)
+				if err != nil {
+					log.Error("PusherApprovers for %-v: %v", pull, err)
+					continue
+				}
+				for _, u := range pushed {
+					if !slices.ContainsFunc(pushedApprovers, func(o *user_model.User) bool { return o.ID == u.ID }) {
+						pushedApprovers = append(pushedApprovers, u)
+					}
+				}
+			}
+			ctx.Data["PusherApprovals"] = pushedApprovers
+			if ctx.Doer != nil && flagged != nil && !slices.ContainsFunc(pushedApprovers, func(u *user_model.User) bool { return u.ID == ctx.Doer.ID }) {
+				// whose approval counts now, with the rest of the rule as it is: updating the branch would make them a pusher
+				approvers, err := pull_service.ApproversIgnoringPushers(ctx, flagged, pull)
+				if err != nil {
+					ctx.ServerError("ApproversIgnoringPushers", err)
+					return
+				}
+				ctx.Data["UpdateBranchConfirm"] = slices.ContainsFunc(approvers, func(u *user_model.User) bool { return u.ID == ctx.Doer.ID })
+			}
 			if len(approvalRules) > 0 {
 				ctx.Data["ApprovalRules"] = approvalRules
 				if ctx.Repo.IsAdmin() {

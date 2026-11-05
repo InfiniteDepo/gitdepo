@@ -1,0 +1,12 @@
+{{with .PusherBlock}}
+	<div class="item text red pusher-block">
+		{{svg "octicon-x"}}
+		{{if eq . "deploy_key"}}{{ctx.Locale.Tr "repo.pulls.pusher_block_deploy_key"}}{{else}}{{ctx.Locale.Tr "repo.pulls.pusher_block_unchecked"}}{{end}}
+	</div>
+{{end}}
+{{range .PusherApprovals}}
+	<div class="item text grey pusher-approval">
+		{{svg "octicon-info"}}
+		{{ctx.Locale.Tr "repo.pulls.approval_pushed" .Name}}
+	</div>
+{{end}}
