@@ -4,11 +4,14 @@
 package integration
 
 import (
+	"encoding/base64"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
+	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
 	repo_model "forgejo.org/models/repo"
@@ -126,6 +129,59 @@ func TestStaleOwnersProject(t *testing.T) {
 		session := loginUser(t, "user2")
 		resp := session.MakeRequest(t, NewRequest(t, "GET", priv.Link()+"/settings/branches/edit?rule_name=main"), http.StatusOK)
 		assert.Contains(t, text(NewHTMLParser(t, resp.Body), ".rule-warnings"), "Approval rule Leads needs 1 approvals, but only 0 people can approve")
+	})
+}
+
+// The warning about an approval rule that has too few approvers also shows on the organization and project rule pages.
+func TestStaleOwnersOrgRulePages(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		f, _ := prepareRepoGroupGit(t)
+		group, err := repo_model.GetRepoGroupByName(db.DefaultContext, f.org.ID, "proj")
+		require.NoError(t, err)
+		setUserCols(t, 4, func(u *user_model.User) { u.IsActive = false }, "is_active")
+		session := loginUser(t, "user2")
+
+		// the organization's rule and the project's rule each list user4, who is inactive, and count on 1 approval
+		for _, c := range []struct {
+			groupID int64
+			page    string
+		}{
+			{0, "/org/" + f.org.Name + "/settings/branches/edit?rule_name=main"},
+			{group.ID, "/org/" + f.org.Name + "/groups/" + strconv.FormatInt(group.ID, 10) + "/settings/branches/edit?rule_name=main"},
+		} {
+			rule := &git_model.ProtectedBranch{RuleName: "main"}
+			require.NoError(t, git_model.UpdateOrgProtectBranch(db.DefaultContext, f.org.ID, c.groupID, rule, git_model.WhitelistOptions{}, nil))
+			require.NoError(t, db.Insert(db.DefaultContext, &git_model.ApprovalRule{ProtectedBranchID: rule.ID, Name: "Leads", RequiredCount: 1, UserIDs: []int64{4}}))
+			resp := session.MakeRequest(t, NewRequest(t, "GET", c.page), http.StatusOK)
+			assert.Contains(t, text(NewHTMLParser(t, resp.Body), ".rule-warnings"), "Approval rule Leads needs 1 approvals, but only 0 people can approve", c.page)
+		}
+	})
+}
+
+// A code owner who the organization's two-factor requirement keeps out is named with that reason.
+func TestStaleOwnersTwoFactor(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		f, pub := prepareRepoGroupGit(t)
+		admin := loginUser(t, "user1")
+		token := getTokenForLoggedInUser(t, admin, auth_model.AccessTokenScopeWriteRepository)
+		call := func(method, path string, body any, status int) {
+			MakeRequest(t, NewRequestWithJSON(t, method, "/api/v1/repos/"+f.org.Name+"/pub"+path, body).AddTokenAuth(token), status)
+		}
+		call("PUT", "/collaborators/user4", &api.AddCollaboratorOption{Permission: new("write")}, http.StatusNoContent)
+		call("POST", "/contents/CODEOWNERS", &api.CreateFileOptions{ContentBase64: base64.StdEncoding.EncodeToString([]byte("a/.* @user4\n"))}, http.StatusCreated)
+		view := func() string {
+			resp := admin.MakeRequest(t, NewRequest(t, "GET", pub.Link()+"/src/branch/main/CODEOWNERS"), http.StatusOK)
+			return text(NewHTMLParser(t, resp.Body), ".codeowners-ineligible")
+		}
+		assert.Empty(t, view(), "user4 can write")
+
+		_, err := db.GetEngine(t.Context()).Exec("UPDATE `user` SET require_two_factor = ? WHERE id = ?", true, f.org.ID)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_, err := db.GetEngine(db.DefaultContext).Exec("UPDATE `user` SET require_two_factor = ? WHERE id = ?", false, f.org.ID)
+			require.NoError(t, err)
+		})
+		assert.Contains(t, view(), "Line 1: user4 can't approve (blocked by the organization's two-factor requirement)")
 	})
 }
 

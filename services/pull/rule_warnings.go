@@ -10,6 +10,7 @@ import (
 	issues_model "forgejo.org/models/issues"
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/modules/gitrepo"
+	"forgejo.org/services/approvers"
 	issue_service "forgejo.org/services/issue"
 )
 
@@ -37,34 +38,27 @@ type RuleWarning struct {
 // file of the branch must have owners who can approve. A rule can't be met by the code owners of a line a rule's
 // path patterns don't reach, but the patterns (globs) and the lines (regular expressions) can't be intersected, so
 // every line counts. CODEOWNERS is read only when the rule names one branch: a glob has no single branch to read.
-// Organization and project rules have no repository here and are not checked.
+// With a nil repository (an organization or project rule) only the approval rules are checked; a user counts there
+// who can write at least one repository the rule covers.
 func BranchRuleWarnings(ctx context.Context, repo *repo_model.Repository, pb *git_model.ProtectedBranch) ([]RuleWarning, error) {
 	rules, err := git_model.GetApprovalRules(ctx, pb.ID)
 	if err != nil || len(rules) == 0 {
 		return nil, err
 	}
+	checked, err := approvers.Check(ctx, rules, nil)
+	if err != nil {
+		return nil, err
+	}
 	var warnings []RuleWarning
-	var withApprovers []*git_model.ApprovalRule
-	var sets []OwnerSet
 	needOwners := false
 	for _, r := range rules {
 		needOwners = needOwners || r.RequireCodeOwners
-		if r.HasApprovers() {
-			withApprovers, sets = append(withApprovers, r), append(sets, OwnerSet{UserIDs: r.UserIDs, TeamIDs: r.TeamIDs})
+		if res := checked.Results[r.ID]; r.HasApprovers() && res != nil && res.Remaining < r.RequiredCount {
+			warnings = append(warnings, RuleWarning{Kind: WarnApproversShort, Name: r.Name, Required: int(r.RequiredCount), Eligible: int(res.Remaining)})
 		}
 	}
-	if len(sets) > 0 {
-		checks, err := IneligibleOwners(ctx, repo, sets)
-		if err != nil {
-			return nil, err
-		}
-		for i, r := range withApprovers {
-			if int64(len(checks[i].Eligible)) < r.RequiredCount {
-				warnings = append(warnings, RuleWarning{Kind: WarnApproversShort, Name: r.Name, Required: int(r.RequiredCount), Eligible: len(checks[i].Eligible)})
-			}
-		}
-	}
-	if needOwners && !git_model.IsRuleNameSpecial(pb.RuleName) {
+	// organization and project rules have no single repository and branch to read CODEOWNERS from
+	if repo != nil && needOwners && !git_model.IsRuleNameSpecial(pb.RuleName) {
 		more, err := codeOwnerWarnings(ctx, repo, pb.RuleName)
 		if err != nil {
 			return nil, err

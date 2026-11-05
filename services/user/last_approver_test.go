@@ -11,6 +11,9 @@ import (
 
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
+	"forgejo.org/models/perm"
+	access_model "forgejo.org/models/perm/access"
+	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
 
@@ -26,6 +29,13 @@ func (h *countHook) BeforeProcess(c *contexts.ContextHook) (context.Context, err
 	return db.TracingHook{}.BeforeProcess(c)
 }
 func (*countHook) AfterProcess(*contexts.ContextHook) error { return nil }
+
+// grantWrite makes the user a collaborator with write access to repository 1.
+func grantWrite(t *testing.T, uid int64) {
+	t.Helper()
+	require.NoError(t, db.Insert(t.Context(), &repo_model.Collaboration{RepoID: 1, UserID: uid, Mode: perm.AccessModeWrite}))
+	require.NoError(t, db.Insert(t.Context(), &access_model.Access{RepoID: 1, UserID: uid, Mode: perm.AccessModeWrite}))
+}
 
 func addRule(t *testing.T, pb *git_model.ProtectedBranch, rule *git_model.ApprovalRule) {
 	t.Helper()
@@ -48,6 +58,10 @@ func TestLastApproverWarnings(t *testing.T) {
 		return got
 	}
 
+	// users 4 and 5 can write repository 1
+	for _, uid := range []int64{4, 5} {
+		grantWrite(t, uid)
+	}
 	// a repository rule listing user 4 only, an organization rule listing team 2 (users 2 and 4) with 2 approvals,
 	// and a repository rule that user 4 shares with user 5
 	addRule(t, &git_model.ProtectedBranch{RepoID: 1, RuleName: "main"}, &git_model.ApprovalRule{Name: "Lead", RequiredCount: 1, UserIDs: []int64{4}})
@@ -59,6 +73,15 @@ func TestLastApproverWarnings(t *testing.T) {
 		"user2/repo1 main: Lead": "repository_approval_rule /user2/repo1/settings/branches/edit?rule_name=main",
 		"org3 release: Team":     "organization_approval_rule /org/org3/settings/branches/edit?rule_name=release",
 	}, got, "the shared rule keeps user 5, so it is no warning")
+
+	// user 5 loses write access to the repository: they no longer count as remaining approver of the pair
+	_, err := db.GetEngine(ctx).Where("repo_id = 1 AND user_id = 5").Delete(&repo_model.Collaboration{})
+	require.NoError(t, err)
+	_, err = db.GetEngine(ctx).Where("repo_id = 1 AND user_id = 5").Delete(&access_model.Access{})
+	require.NoError(t, err)
+	assert.Contains(t, kinds(4), "user2/repo1 dev: Pair")
+	grantWrite(t, 5)
+	assert.NotContains(t, kinds(4), "user2/repo1 dev: Pair")
 
 	// via team: user 2 is in team 2 as well
 	assert.Equal(t, []string{"org3 release: Team"}, keysOf(kinds(2)))

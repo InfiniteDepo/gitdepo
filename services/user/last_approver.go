@@ -16,6 +16,7 @@ import (
 	repo_model "forgejo.org/models/repo"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/setting"
+	"forgejo.org/services/approvers"
 )
 
 // LastApproverWarning says that deactivating a user, or prohibiting their login, would leave something that
@@ -63,10 +64,10 @@ const (
 func init() { RegisterLastApproverCheck(approvalRuleWarnings) }
 
 // approvalRuleWarnings finds the approval rules, of repositories, projects and organizations, that list one of the
-// users or a team of theirs and would have fewer eligible approvers than their count without them. Eligible here is
-// active and able to sign in: write access is not checked (that needs the repositories' access, one load per
-// repository, and the rule pages warn about it), so a listed user who can't write still counts. The queries don't
-// depend on the number of rules. CODEOWNERS is not checked: it needs a git read per repository.
+// users or a team of theirs and would have fewer eligible approvers than their count without them. Eligible means
+// active, able to sign in and with write access to the code (approvers.Check: a project or organization rule counts
+// a user who can write at least one repository it covers). The queries don't depend on the number of rules.
+// CODEOWNERS is not checked: it needs a git read per repository.
 func approvalRuleWarnings(ctx context.Context, userIDs []int64) ([]LastApproverWarning, error) {
 	teamIDs, err := organization.GetTeamIDsOfUsers(ctx, userIDs)
 	if err != nil {
@@ -76,31 +77,12 @@ func approvalRuleWarnings(ctx context.Context, userIDs []int64) ([]LastApproverW
 	if err != nil || len(rules) == 0 {
 		return nil, err
 	}
-	var pbIDs, ruleTeams, ids []int64
-	for _, r := range rules {
-		pbIDs, ruleTeams, ids = append(pbIDs, r.ProtectedBranchID), append(ruleTeams, r.TeamIDs...), append(ids, r.UserIDs...)
-	}
-	members, err := organization.GetTeamsMemberIDs(ctx, ruleTeams)
-	if err != nil {
-		return nil, err
-	}
-	for _, m := range members {
-		ids = append(ids, m...)
-	}
-	users, err := user_model.GetUserByIDs(ctx, ids)
-	if err != nil {
-		return nil, err
-	}
-	byID := make(map[int64]*user_model.User, len(users))
-	for _, u := range users {
-		byID[u.ID] = u
-	}
-	pbs, err := db.GetByIDs(ctx, "id", pbIDs, &git_model.ProtectedBranch{})
+	checked, err := approvers.Check(ctx, rules, userIDs)
 	if err != nil {
 		return nil, err
 	}
 	var repoIDs, ownerIDs []int64
-	for _, pb := range pbs {
+	for _, pb := range checked.Branches {
 		if pb.RepoID != 0 {
 			repoIDs = append(repoIDs, pb.RepoID)
 		} else {
@@ -118,32 +100,12 @@ func approvalRuleWarnings(ctx context.Context, userIDs []int64) ([]LastApproverW
 
 	var warnings []LastApproverWarning
 	for _, r := range rules {
-		pb := pbs[r.ProtectedBranchID]
-		if pb == nil {
+		pb, res := checked.Branches[r.ProtectedBranchID], checked.Results[r.ID]
+		// nothing changes for a rule none of the users counts in now
+		if pb == nil || res == nil || res.Leaving == 0 || res.Remaining >= r.RequiredCount {
 			continue
 		}
-		candidates := slices.Clone(r.UserIDs)
-		for _, t := range r.TeamIDs {
-			candidates = append(candidates, members[t]...)
-		}
-		slices.Sort(candidates)
-		remaining, affected := int64(0), int64(0)
-		for _, id := range slices.Compact(candidates) {
-			u := byID[id]
-			if u == nil || !u.IsActive || u.ProhibitLogin {
-				continue
-			}
-			if slices.Contains(userIDs, id) {
-				affected = id
-			} else {
-				remaining++
-			}
-		}
-		// nothing changes for a rule whose listed users are all unusable already
-		if affected == 0 || remaining >= r.RequiredCount {
-			continue
-		}
-		w := LastApproverWarning{UserID: affected, Name: pb.RuleName + ": " + r.Name}
+		w := LastApproverWarning{UserID: res.Leaving, Name: pb.RuleName + ": " + r.Name}
 		edit := "/settings/branches/edit?rule_name=" + url.QueryEscape(pb.RuleName)
 		switch {
 		case pb.RepoID != 0:
