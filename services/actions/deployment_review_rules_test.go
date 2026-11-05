@@ -269,7 +269,7 @@ func TestReviewIdentity(t *testing.T) {
 		actor := &audit_model.Actor{Type: "user", ID: 1, Name: "admin"}
 		actor.SetSudo(2, "user2")
 		doer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
-		_, err := ReviewDeployments(audit_model.WithActor(t.Context(), actor), doer, f.run, nil, true, "")
+		_, err := ReviewDeployments(audit_model.WithActor(t.Context(), actor), doer, f.run, []int64{f.job.ID}, true, "")
 		require.ErrorIs(t, err, ErrReviewForbidden)
 		assert.Equal(t, actions_model.DeploymentWaitingReview, f.status(t))
 	})
@@ -404,4 +404,77 @@ func TestApprovalRevokedWhenApproverIsNoLongerEligible(t *testing.T) {
 			assert.EqualValues(t, 2, f.deployment(t).ReviewedBy)
 		})
 	}
+}
+
+// A revocation that loses its race is an error of the caller's transaction, which is the emitter's: its earlier writes
+// are neither lost while the rest of the pass goes on outside it, nor half kept.
+func TestRevokeApprovalLostRace(t *testing.T) {
+	defer unittest.OverrideFixtures("services/actions/TestGetSecretsOfJob")()
+	f := newReviewFixture(t, &actions_model.ActionEnvironment{WaitTimerMinutes: 60}, []int64{2, 4}, nil)
+	grantActionsRead(t, 4)
+	_, err := f.review(t, 4, true, "")
+	require.NoError(t, err)
+	require.NoError(t, SetEnvironmentReviewers(f.ctx, f.env, []int64{2}, nil)) // the approver is no reviewer any more
+	stale := f.deployment(t)                                                   // read before the race
+	_, err = db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET reviewed_by = 2 WHERE id = ?", stale.ID)
+	require.NoError(t, err) // somebody else approved meanwhile
+	env, err := actions_model.GetRepoEnvironmentByID(f.ctx, 63, f.env.ID)
+	require.NoError(t, err)
+	title := func() string {
+		return unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRun{ID: f.run.ID}).Title
+	}
+	before := title()
+	since := auditSince(t)
+
+	// the error reaches the caller, and the transaction rolls back as a whole
+	err = db.WithTx(f.ctx, func(ctx context.Context) error {
+		_, err := db.GetEngine(ctx).Exec("UPDATE action_run SET title = 'marker' WHERE id = ?", f.run.ID)
+		require.NoError(t, err)
+		revoked, err := revokeApprovalIfIneligible(ctx, f.run, env, stale)
+		assert.False(t, revoked)
+		return err
+	})
+	require.Error(t, err)
+	assert.Equal(t, before, title(), "rolled back as a whole")
+	assert.Empty(t, auditActions(t, since, "repo.actions_deployment.approval_revoked"))
+
+	// even when the caller goes on, the transaction is still the one it had: nothing is autocommitted halfway
+	err = db.WithTx(f.ctx, func(ctx context.Context) error {
+		_, err := db.GetEngine(ctx).Exec("UPDATE action_run SET title = 'marker' WHERE id = ?", f.run.ID)
+		require.NoError(t, err)
+		_, _ = revokeApprovalIfIneligible(ctx, f.run, env, stale)
+		_, err = db.GetEngine(ctx).Exec("UPDATE action_run SET title = 'marker two' WHERE id = ?", f.run.ID)
+		return err
+	})
+	if err == nil {
+		assert.Equal(t, "marker two", title(), "committed together")
+	} else {
+		assert.Equal(t, before, title(), "rolled back together")
+	}
+	assert.Equal(t, actions_model.DeploymentWaitingTimer, f.status(t), "the other approval stands")
+}
+
+func TestReviewRefusesEmptyJobsAndNoActor(t *testing.T) {
+	defer unittest.OverrideFixtures("services/actions/TestGetSecretsOfJob")()
+	f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{2}, nil)
+	doer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+
+	for _, jobs := range [][]int64{nil, {}} {
+		_, err := ReviewDeployments(f.ctx, doer, f.run, jobs, true, "")
+		require.ErrorIs(t, err, util.ErrInvalidArgument, "the jobs must be named")
+	}
+	assert.Equal(t, actions_model.DeploymentWaitingReview, f.status(t))
+
+	// without an actor on the request nothing can be told about who acts: refused, and can_review is false
+	_, err := ReviewDeployments(t.Context(), doer, f.run, []int64{f.job.ID}, true, "")
+	require.ErrorIs(t, err, ErrReviewForbidden)
+	checker, err := NewReviewChecker(t.Context(), doer, f.run)
+	require.NoError(t, err)
+	ok, err := checker.May(t.Context(), f.deployment(t))
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Equal(t, actions_model.DeploymentWaitingReview, f.status(t))
+
+	_, err = ReviewDeployments(f.ctx, doer, f.run, []int64{f.job.ID}, true, "")
+	require.NoError(t, err)
 }

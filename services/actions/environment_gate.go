@@ -346,25 +346,19 @@ func revokeApprovalIfIneligible(ctx context.Context, run *actions_model.ActionRu
 			return false, err
 		}
 	}
+	// on the caller's transaction (the emitter's): a nested one that fails would roll it back and leave the rest of the
+	// pass outside it. A lost race is an error, so the pass is repeated, as in saveDeployment.
 	revokedBy := d.ReviewedBy
-	err = db.WithTx(ctx, func(ctx context.Context) error {
-		if moved, err := actions_model.RevokeDeploymentApproval(ctx, d); err != nil {
-			return err
-		} else if !moved {
-			return errApprovalMoved
-		}
-		return recordDeploymentReview(ctx, run.Repo, env, d, audit_model.Event{
-			Action: "repo.actions_deployment.approval_revoked", Result: audit_model.ResultSuccess,
-			Data: map[string]any{"revoked_reviewer_id": revokedBy},
-		}, 0)
-	})
-	if errors.Is(err, errApprovalMoved) {
-		return false, nil // another pass decided first; this one looks again next time
+	if moved, err := actions_model.RevokeDeploymentApproval(ctx, d); err != nil {
+		return false, err
+	} else if !moved {
+		return false, fmt.Errorf("deployment %d was changed by another request", d.ID)
 	}
-	return err == nil, err
+	return true, recordDeploymentReview(ctx, run.Repo, env, d, audit_model.Event{
+		Action: "repo.actions_deployment.approval_revoked", Result: audit_model.ResultSuccess,
+		Data: map[string]any{"revoked_reviewer_id": revokedBy},
+	}, 0)
 }
-
-var errApprovalMoved = errors.New("the approval changed meanwhile")
 
 // saveDeployment inserts a new deployment, or moves an existing one from prior to its status; a deployment that
 // another server moved meanwhile is an error, so that the pass of the emitter is repeated.

@@ -168,7 +168,7 @@ func TestActionsEnvironmentReviewAttacks(t *testing.T) {
 				{"a stranger", user5},
 			}
 			for _, c := range cases {
-				_, err := actions_service.ReviewDeployments(sctx, c.doer, freshRun(run), nil, true, "approve")
+				_, err := actions_service.ReviewDeployments(sctx, c.doer, freshRun(run), []int64{job.ID}, true, "approve")
 				require.ErrorIs(t, err, actions_service.ErrReviewForbidden, c.name)
 				assert.Equal(t, actions_model.DeploymentWaitingReview, depStatus(job, 1), c.name)
 			}
@@ -177,20 +177,20 @@ func TestActionsEnvironmentReviewAttacks(t *testing.T) {
 			actor := &audit_model.Actor{Type: audit_model.ActorUser, ID: user1.ID, Name: user1.Name}
 			actor.SetSudo(user4.ID, user4.Name)
 			sudoCtx := audit_model.WithActor(audit_model.WithSystem(t.Context(), "test"), actor)
-			_, err := actions_service.ReviewDeployments(sudoCtx, user4, freshRun(run), nil, true, "sudo approve")
+			_, err := actions_service.ReviewDeployments(sudoCtx, user4, freshRun(run), []int64{job.ID}, true, "sudo approve")
 			require.ErrorIs(t, err, actions_service.ErrReviewForbidden, "sudo review refused")
 			assert.Equal(t, actions_model.DeploymentWaitingReview, depStatus(job, 1))
 
 			// a reviewer who lost Actions read (removed from the repo) can no longer approve
 			collab("DELETE", http.StatusNoContent)
 			freshUser4 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: user4.ID})
-			_, err = actions_service.ReviewDeployments(sctx, freshUser4, freshRun(run), nil, true, "no access")
+			_, err = actions_service.ReviewDeployments(sctx, freshUser4, freshRun(run), []int64{job.ID}, true, "no access")
 			require.ErrorIs(t, err, actions_service.ErrReviewForbidden, "lost Actions read")
 			assert.Equal(t, actions_model.DeploymentWaitingReview, depStatus(job, 1))
 			collab("PUT", http.StatusNoContent)
 
 			// positive control: the real listed reviewer releases it
-			out, err := actions_service.ReviewDeployments(sctx, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: user4.ID}), freshRun(run), nil, true, "ship")
+			out, err := actions_service.ReviewDeployments(sctx, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: user4.ID}), freshRun(run), []int64{job.ID}, true, "ship")
 			require.NoError(t, err)
 			require.Len(t, out, 1)
 			assert.Equal(t, actions_model.DeploymentReleased, getDeployment(job, 1).Status)
@@ -217,7 +217,7 @@ func TestActionsEnvironmentReviewAttacks(t *testing.T) {
 			future := time.Now().Add(setting.Actions.DeploymentApprovalTimeout + time.Hour)
 			timeutil.MockSet(future)
 			defer timeutil.MockUnset()
-			_, err := actions_service.ReviewDeployments(sctx, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: user4.ID}), freshRun(run2), nil, true, "too late")
+			_, err := actions_service.ReviewDeployments(sctx, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: user4.ID}), freshRun(run2), []int64{job2.ID}, true, "too late")
 			require.ErrorIs(t, err, actions_service.ErrReviewNotWaiting, "approve after timeout refused")
 			require.NoError(t, actions_service.ExpireDeploymentReviews(sctx))
 			assert.Equal(t, actions_model.DeploymentExpired, getDeployment(job2, 1).Status)

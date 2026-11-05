@@ -62,10 +62,11 @@ func ReviewCutoff() timeutil.TimeStamp {
 
 // notReviewersOwn tells that the request is not the reviewer's own act: it is made under sudo, or with a credential that
 // another party holds on the user's behalf (an OAuth2 grant, or an authorized integration that workflow code can use).
-// This is the rule of auth_service.IsHeldByUser, read from the request's actor, which every authentication fills.
+// This is the rule of auth_service.IsHeldByUser, read from the request's actor, which every authentication fills; a
+// request without an actor can't be told from those, so it fails closed.
 func notReviewersOwn(ctx context.Context) bool {
 	actor := audit_model.ActorFromContext(ctx)
-	return actor != nil && (actor.SudoByID != 0 ||
+	return actor == nil || (actor.SudoByID != 0 ||
 		actor.Credential.Type == audit_model.CredentialOAuth2Grant || actor.Credential.Type == audit_model.CredentialAuthorizedIntegration)
 }
 
@@ -198,8 +199,8 @@ func notWaiting(runID int64) error {
 	return ErrReviewNotWaiting
 }
 
-// ReviewDeployments approves or rejects the deployments of run that wait for a review: those of jobIDs, or every one
-// the doer may review when jobIDs is empty. One approval releases a job (when its wait timer is due too), one
+// ReviewDeployments approves or rejects the deployments of run that wait for a review: those of jobIDs, which must be
+// named (an empty list is an invalid argument, so no review ever covers jobs the reviewer didn't see). One approval releases a job (when its wait timer is due too), one
 // rejection fails it. Nothing changes unless every deployment can be reviewed: a job that doesn't wait any more
 // (another reviewer, the expiry or a cancel came first, or it waited longer than the timeout) is ErrReviewNotWaiting,
 // a deployment the doer may not review is ErrReviewForbidden. A review made under sudo, or with an OAuth2 grant or an
@@ -208,6 +209,9 @@ func notWaiting(runID int64) error {
 func ReviewDeployments(ctx context.Context, doer *user_model.User, run *actions_model.ActionRun, jobIDs []int64, approve bool, comment string) ([]*actions_model.ActionDeployment, error) {
 	if notReviewersOwn(ctx) {
 		return nil, ErrReviewForbidden
+	}
+	if len(jobIDs) == 0 {
+		return nil, util.NewInvalidArgumentErrorf("name the jobs to review")
 	}
 	comment, err := reviewComment(comment, approve)
 	if err != nil {
@@ -222,36 +226,28 @@ func ReviewDeployments(ctx context.Context, doer *user_model.User, run *actions_
 	if err != nil {
 		return nil, err
 	}
-	if len(jobIDs) > 0 {
-		jobs, err := actions_model.GetRunJobsByRunID(ctx, run.ID)
-		if err != nil {
-			return nil, err
-		}
-		for _, id := range jobIDs {
-			if !slices.ContainsFunc(jobs, func(j *actions_model.ActionRunJob) bool { return j.ID == id }) {
-				return nil, util.NewInvalidArgumentErrorf("job %d is not a job of the run", id)
-			}
-			if !slices.ContainsFunc(waiting, func(d *actions_model.ActionDeployment) bool { return d.JobID == id }) {
-				return nil, notWaiting(run.ID)
-			}
-		}
-		waiting = slices.DeleteFunc(waiting, func(d *actions_model.ActionDeployment) bool { return !slices.Contains(jobIDs, d.JobID) })
-	} else if len(waiting) == 0 {
-		return nil, notWaiting(run.ID)
+	jobs, err := actions_model.GetRunJobsByRunID(ctx, run.ID)
+	if err != nil {
+		return nil, err
 	}
+	for _, id := range jobIDs {
+		if !slices.ContainsFunc(jobs, func(j *actions_model.ActionRunJob) bool { return j.ID == id }) {
+			return nil, util.NewInvalidArgumentErrorf("job %d is not a job of the run", id)
+		}
+		if !slices.ContainsFunc(waiting, func(d *actions_model.ActionDeployment) bool { return d.JobID == id }) {
+			return nil, notWaiting(run.ID)
+		}
+	}
+	waiting = slices.DeleteFunc(waiting, func(d *actions_model.ActionDeployment) bool { return !slices.Contains(jobIDs, d.JobID) })
 
 	var selected []*actions_model.ActionDeployment
 	for _, d := range waiting {
 		if ok, err := checker.May(ctx, d); err != nil {
 			return nil, err
-		} else if ok {
-			selected = append(selected, d)
-		} else if len(jobIDs) > 0 {
-			return nil, ErrReviewForbidden
+		} else if !ok {
+			return nil, ErrReviewForbidden // all or nothing
 		}
-	}
-	if len(selected) == 0 {
-		return nil, ErrReviewForbidden
+		selected = append(selected, d)
 	}
 
 	now := timeutil.TimeStampNow()
