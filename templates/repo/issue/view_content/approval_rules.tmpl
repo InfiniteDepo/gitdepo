@@ -16,6 +16,9 @@
 						{{if .CanApprove}}<span class="text grey">{{ctx.Locale.Tr "repo.pulls.approval_rule_eligible" (StringUtils.Join .CanApprove ", ")}}</span>{{end}}
 						{{if .Approvers}}<span class="text grey">({{range $i, $u := .Approvers}}{{if $i}}, {{end}}{{$u.Name}}{{end}})</span>{{end}}
 					</div>
+					{{if .CodeOwnersUnchecked}}
+						<div class="codeowners-unchecked tw-ml-6">{{ctx.Locale.Tr "repo.pulls.codeowners_unchecked"}}</div>
+					{{end}}
 					{{if .CodeOwnersErrorLine}}
 						<div class="codeowners-error tw-ml-6">
 							{{if $.Permission.CanRead $.UnitTypeCode}}
@@ -26,7 +29,7 @@
 							{{end}}
 						</div>
 					{{end}}
-					{{if and .Ineligible ($.Permission.CanRead $.UnitTypeCode)}}
+					{{if and .Ineligible ($.Permission.CanWrite $.UnitTypeCode)}}
 						<div class="codeowners-ineligible tw-ml-6 text grey">
 							{{range $i, $m := .Ineligible}}{{if $i}}; {{end}}{{$m.Text ctx.Locale}}{{end}}{{if .IneligibleMore}}; {{ctx.Locale.Tr "repo.codeowners.more"}}{{end}}
 						</div>
@@ -34,7 +37,7 @@
 					{{range .Shortfalls}}
 						<div class="codeowners-shortfall tw-ml-6">
 							{{if $.Permission.CanRead $.UnitTypeCode}}
-								{{if lt .Eligible .Required}}{{ctx.Locale.TrPluralString .Required "repo.pulls.codeowners_section_unreachable" .Name .Required .Eligible}}{{else}}{{ctx.Locale.TrPluralString .Required "repo.pulls.codeowners_section_short" .Name .Required .Granted}}{{end}}
+								{{if and (lt .Eligible .Required) ($.Permission.CanWrite $.UnitTypeCode)}}{{ctx.Locale.TrPluralString .Required "repo.pulls.codeowners_section_unreachable" .Name .Required .Eligible}}{{else}}{{ctx.Locale.TrPluralString .Required "repo.pulls.codeowners_section_short" .Name .Required .Granted}}{{end}}
 							{{else}}
 								{{ctx.Locale.Tr "repo.pulls.codeowners_section_hidden"}}
 							{{end}}

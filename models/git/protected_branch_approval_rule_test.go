@@ -5,6 +5,7 @@ package git_test
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -259,13 +260,32 @@ func TestApprovalRulePathMatchingSharedBudget(t *testing.T) {
 			assert.True(t, r.AppliesTo(budget, files), "fails closed")
 		}
 	}
-	// 20 files of 4 KiB against 100 patterns is about 8 Mi / 1 of the budget: only the first rule fits
-	assert.Equal(t, 59, undecided)
-	// about 0.3 s; without the shared budget it was about 13 s
-	assert.Less(t, time.Since(start), 3*slowdown*time.Second)
+	// a rule takes about 100 patterns of about 20 instructions times 80 KiB: a few rules fit, the rest fail closed
+	assert.Less(t, undecided, 60)
+	assert.Greater(t, undecided, 50)
+	// about 1 s; without the shared budget it was about 13 s
+	assert.Less(t, time.Since(start), 4*slowdown*time.Second)
 
 	// a rule that fits in what is left is still matched
 	small := &git_model.ApprovalRule{PathPatterns: "docs/**"}
 	matches, decided := small.MatchesPaths(budget, []string{"docs/a.md"})
 	assert.True(t, matches && decided)
+}
+
+// The work of a match is path bytes times instructions: Take refuses what is beyond what is left, and RegexpInsts
+// grows with a counted repetition, which costs time per byte in proportion.
+func TestPathMatchBudgetTake(t *testing.T) {
+	small, big := regexp.MustCompile(`^.*\.go$`), regexp.MustCompile(`^.*(a|b|/){1,1000}x$`)
+	assert.Less(t, git_model.RegexpInsts(small), 20)
+	assert.Greater(t, git_model.RegexpInsts(big), 1000)
+
+	budget := git_model.NewPathMatchBudget()
+	file := strings.Repeat("a", 1<<10)
+	files := make([]string, git_model.MaxPathMatchWork/(1<<10)/git_model.RegexpInsts(big))
+	for i := range files {
+		files[i] = file
+	}
+	require.True(t, budget.Take(files, git_model.RegexpInsts(big)))
+	assert.False(t, budget.Take([]string{file}, git_model.RegexpInsts(big)), "nothing that big is left")
+	assert.True(t, budget.Take([]string{"a.go"}, 1), "a small match still fits")
 }

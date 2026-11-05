@@ -11,6 +11,7 @@
 					{{range .LastApproverWarnings}}
 						<li>{{if .Link}}<a href="{{.Link}}">{{.Text}}</a>{{else}}{{.Text}}{{end}} ({{.Kind}})</li>
 					{{end}}
+					{{if .LastApproverMore}}<li>{{ctx.Locale.Tr "admin.users.last_approver_more" .LastApproverMore}}</li>{{end}}
 				</ul>
 			</div>
 			{{end}}

@@ -649,9 +649,11 @@ func DeleteAvatar(ctx *context.Context) {
 	ctx.JSONRedirect(setting.AppSubURL + "/admin/users/" + strconv.FormatInt(u.ID, 10))
 }
 
-// Limits of the flash after a save, which travels in a cookie: its encoded size (after HTML escaping and the two
-// rounds of URL encoding the flash and the cookie each apply), the warnings it lists and the length of one name.
+// Limits of the warnings: the edit page lists at most maxShownWarnings. The flash after a save travels in a cookie:
+// its encoded size (after HTML escaping and the two rounds of URL encoding the flash and the cookie each apply), the
+// warnings it lists and the length of one name are limited.
 const (
+	maxShownWarnings   = 50 // on the edit page
 	maxFlashBytes      = 2048
 	maxFlashedWarnings = 5
 	maxFlashedName     = 80
@@ -682,7 +684,8 @@ func loadLastApproverWarnings(ctx *context.Context, u *user_model.User) []lastAp
 			rows[i].Link = ""
 		}
 	}
-	ctx.Data["LastApproverWarnings"] = rows
+	ctx.Data["LastApproverWarnings"] = rows[:min(len(rows), maxShownWarnings)]
+	ctx.Data["LastApproverMore"] = max(len(rows)-maxShownWarnings, 0)
 	return rows
 }
 

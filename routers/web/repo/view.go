@@ -455,12 +455,15 @@ func renderFile(ctx *context.Context, entry *git.TreeEntry) {
 			if len(owners.Warnings) > 0 {
 				ctx.Data["FileWarning"] = strings.Join(owners.Warnings, "\n")
 			}
-			// owners who can't approve, with the reasons the viewer may see
-			viewer := pull_service.NewOwnerViewer(ctx, ctx.Doer, ctx.Repo.Repository, ctx.Repo.IsAdmin())
-			if marks, more, err := pull_service.CodeOwnerLineMarks(ctx, ctx.Repo.Repository, viewer, owners.Rules); err != nil {
-				log.Error("CodeOwnerLineMarks: %v", err)
-			} else {
-				ctx.Data["CodeOwnerMarks"], ctx.Data["CodeOwnerMarksMore"] = marks, more
+			// owners who can't approve, with the reasons the viewer may see, only to those who can change the file: to
+			// anyone else the mark would tell whether an account can sign in
+			if ctx.Repo.CanWrite(unit_model.TypeCode) {
+				viewer := pull_service.NewOwnerViewer(ctx, ctx.Doer, ctx.Repo.Repository, ctx.Repo.IsAdmin())
+				if marks, more, err := pull_service.CodeOwnerLineMarks(ctx, ctx.Repo.Repository, viewer, owners.Rules); err != nil {
+					log.Error("CodeOwnerLineMarks: %v", err)
+				} else {
+					ctx.Data["CodeOwnerMarks"], ctx.Data["CodeOwnerMarksMore"] = marks, more
+				}
 			}
 		}
 	} else if ctx.Repo.TreePath == ".gitmodules" {

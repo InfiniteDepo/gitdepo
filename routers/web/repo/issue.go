@@ -2108,10 +2108,13 @@ func ViewIssue(ctx *context.Context) {
 			}
 			if len(approvalRules) > 0 {
 				ctx.Data["ApprovalRules"] = approvalRules
-				if ctx.Repo.CanRead(unit.TypeCode) {
-					// why owners can't approve is shown to readers of the code only
-					if err := pull_service.LoadIneligibleOwners(ctx, pull.BaseRepo, pull_service.NewOwnerViewer(ctx, ctx.Doer, pull.BaseRepo, ctx.Repo.IsAdmin()), approvalRules); err != nil {
+				// who can't approve is shown only to those who can change the rule or CODEOWNERS: to anyone else the
+				// mark would tell whether an account can sign in
+				if ctx.Repo.CanWrite(unit.TypeCode) {
+					if marked, err := pull_service.LoadIneligibleOwners(ctx, pull.BaseRepo, pull_service.NewOwnerViewer(ctx, ctx.Doer, pull.BaseRepo, ctx.Repo.IsAdmin()), approvalRules); err != nil {
 						log.Error("LoadIneligibleOwners for %-v: %v", pull, err)
+					} else {
+						ctx.Data["ApprovalRules"] = marked
 					}
 				}
 				ctx.Data["IsBlockedByApprovalRules"] = ctx.Data["IsBlockedByApprovalRules"] == true || slices.ContainsFunc(approvalRules, func(s *pull_service.ApprovalRuleStatus) bool { return !s.Satisfied })

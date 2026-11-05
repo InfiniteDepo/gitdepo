@@ -198,17 +198,9 @@ func IneligibleOwners(ctx context.Context, repo *repo_model.Repository, writers 
 	names := make(map[int64]string, len(users))
 	for _, u := range users {
 		names[u.ID] = u.Name
-		switch {
-		case !writers.WouldWrite(repo.ID, u.ID):
-			reasons[u.ID] = OwnerNoWrite
-		case !u.IsActive:
-			reasons[u.ID] = OwnerInactive
-		case u.ProhibitLogin:
-			reasons[u.ID] = OwnerProhibited
-		case writers.TwoFactorBlocked(repo.ID, u.ID):
-			reasons[u.ID] = OwnerTwoFactor
-		default:
-			reasons[u.ID] = "-"
+		reasons[u.ID] = "-"
+		if r := approvers.Cause(u, []int64{repo.ID}, writers); r != "" {
+			reasons[u.ID] = OwnerReason(r)
 		}
 	}
 

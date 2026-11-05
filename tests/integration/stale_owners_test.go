@@ -117,17 +117,14 @@ func TestStaleOwners(t *testing.T) {
 			href, _ := doc.Find(".codeowners-ineligible a").First().Attr("href")
 			assert.Equal(t, "#L1", href)
 
-			// a plain code reader, signed in or not, gets the neutral mark only
+			// someone who can't change the file, signed in or not, sees no mark: it would tell whether an account can
+			// sign in
 			for _, doc := range []*HTMLDoc{anonymous("/user2/repo1/src/branch/so-main/CODEOWNERS"), func() *HTMLDoc {
 				resp := loginUser(t, "user8").MakeRequest(t, NewRequest(t, "GET", "/user2/repo1/src/branch/so-main/CODEOWNERS"), http.StatusOK)
 				return NewHTMLParser(t, resp.Body)
 			}()} {
-				marks := text(doc, ".codeowners-ineligible")
-				assert.Contains(t, marks, "user4 can't approve")
-				assert.Contains(t, marks, "user8 can't approve")
-				for _, reason := range []string{"inactive", "login prohibited", "no write access", "two-factor"} {
-					assert.NotContains(t, marks, reason)
-				}
+				assert.Empty(t, text(doc, ".codeowners-ineligible"))
+				assert.Contains(t, text(doc, "body"), "incorrect codeowner team: org3/team1", "the file's own warnings stay")
 			}
 		})
 
@@ -146,11 +143,10 @@ func TestStaleOwners(t *testing.T) {
 			require.NotNil(t, can)
 			assert.Equal(t, "user2", strings.TrimSpace(can[1]), "user10 can't approve, so is not listed")
 
-			// every other code reader sees the owners of the file with the neutral mark, and not the rule's list
-			box = text(anonymous(fmt.Sprintf("/user2/repo1/pulls/%d", index)), ".merge-section .codeowners-ineligible")
-			assert.Contains(t, box, "user4 can't approve")
-			assert.NotContains(t, box, "(")
-			assert.NotContains(t, box, "user10")
+			// someone who can't change the rule or the file sees the plain status, with no marks
+			anonBox := anonymous(fmt.Sprintf("/user2/repo1/pulls/%d", index))
+			assert.Empty(t, text(anonBox, ".merge-section .codeowners-ineligible"))
+			assert.NotContains(t, text(anonBox, ".merge-section"), "Can approve")
 
 			// without read access to the code the merge box stays, with no owners in it: the unit is off for everyone
 			_, err := db.GetEngine(t.Context()).Exec("DELETE FROM repo_unit WHERE repo_id = 1 AND type = 1")
@@ -242,13 +238,8 @@ func TestStaleOwnersTeams(t *testing.T) {
 		assert.Contains(t, marks, "user10 can't approve (no write access)")
 		assert.Contains(t, marks, "No member of "+ghosts+" can approve")
 
-		// anyone who can read the code sees the team where nobody can approve, and no count
-		marks = view(nil)
-		assert.NotContains(t, marks, "team1", "someone can approve there")
-		assert.NotContains(t, marks, "Only")
-		assert.Contains(t, marks, "No member of "+ghosts+" can approve")
-		assert.Contains(t, marks, "user10 can't approve")
-		assert.NotContains(t, marks, "(")
+		// someone who can't change the file sees no mark
+		assert.Empty(t, view(nil))
 	})
 }
 
@@ -330,6 +321,7 @@ func TestStaleOwnersTwoFactor(t *testing.T) {
 		call("PUT", "/collaborators/user4", &api.AddCollaboratorOption{Permission: new("write")}, http.StatusNoContent)
 		// user5 administers the repository and has a second factor, so the requirement doesn't touch them
 		call("PUT", "/collaborators/user5", &api.AddCollaboratorOption{Permission: new("admin")}, http.StatusNoContent)
+		repoAdmin := loginUser(t, "user5") // before the second factor makes a sign-in need it
 		require.NoError(t, db.Insert(db.DefaultContext, &auth_model.TwoFactor{UID: 5, Secret: []byte("secret"), ScratchSalt: "salt", ScratchHash: "hash"}))
 		t.Cleanup(func() {
 			_, err := db.GetEngine(db.DefaultContext).Where("uid = 5").Delete(&auth_model.TwoFactor{})
@@ -366,7 +358,7 @@ func TestStaleOwnersTwoFactor(t *testing.T) {
 		}
 		assert.Equal(t, 1, strings.Count(marks, "two-factor"))
 		// a repository admin who isn't an owner of the organization gets the neutral mark
-		marks = view(loginUser(t, "user5"))
+		marks = view(repoAdmin)
 		assert.Contains(t, marks, "user4 can't approve")
 		assert.NotContains(t, marks, "two-factor")
 		assert.NotContains(t, marks, "no write access", "that would be false without the requirement")

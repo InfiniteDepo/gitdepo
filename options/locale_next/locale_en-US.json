@@ -1908,6 +1908,7 @@
 	"admin.users.last_approver.kind.org_rule": "Organization approval rule",
 	"admin.users.last_approver_more": "and %d more",
 	"repo.pulls.approval_rule_eligible": "Can approve: %s",
+	"repo.pulls.codeowners_unchecked": "The changes are too large to check against CODEOWNERS, which blocks the merge. Split the pull request, or ask an administrator.",
 	"repo.pulls.codeowners_error": "<a href=\"%s\">CODEOWNERS on %s</a> has an error on line %d, which blocks the merge. A section header needs the form <code>[Name]</code> or <code>[Name][N]</code>; to write a pattern that starts with <code>[</code>, escape it as <code>\\[</code>.",
 	"repo.pulls.codeowners_error_hidden": "The CODEOWNERS file has an error, which blocks the merge.",
 	"repo.pulls.codeowners_section_short": {

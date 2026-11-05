@@ -6,6 +6,7 @@ package git
 import (
 	"context"
 	"regexp"
+	"regexp/syntax"
 	"slices"
 	"strconv"
 	"strings"
@@ -52,6 +53,7 @@ type ApprovalRule struct {
 // pathMatcher holds the compiled path patterns of a rule; invalid if a stored pattern is beyond the limits.
 type pathMatcher struct {
 	patterns []*regexp.Regexp
+	insts    int // of all patterns, see RegexpInsts
 	invalid  bool
 }
 
@@ -147,34 +149,57 @@ func (r *ApprovalRule) IsApprover(ctx context.Context, userID int64) (bool, erro
 }
 
 // Bounds of approval-rule path matching. A rule holds at most maxPathPatterns patterns of maxPathPatternBytes in
-// total, and one evaluation of the rules of a pull request (every rule of every level, see PathMatchBudget) may take
-// at most maxPathMatchWork path bytes times patterns (10,000 files of 100 bytes against 8 patterns, under 0.4 s for the
-// slowest patterns); beyond it the files are not matched.
+// total, and one evaluation of a pull request (every rule of every level and the CODEOWNERS lines, see
+// PathMatchBudget) may take at most maxPathMatchWork; beyond it the files are not matched.
 const (
 	maxPathPatterns     = 100
 	maxPathPatternBytes = 8 << 10
-	maxPathMatchWork    = 8 << 20
+	// MaxPathMatchWork is path bytes times instructions of the compiled patterns (see MatchWork): about 1 s for
+	// ordinary CODEOWNERS lines and glob patterns, about 3 s for the slowest ones per instruction (about 6 ns per byte
+	// and instruction). 1000 changed files of 80 bytes against a CODEOWNERS file of 500 ordinary lines fit.
+	MaxPathMatchWork = 512 << 20
 )
 
-// PathMatchBudget is the work left for matching the path patterns of approval rules in one evaluation of a pull
-// request. Share one budget between all rules and levels the evaluation looks at, so the work doesn't grow with the
-// number of rules.
+// PathMatchBudget is the work left for matching paths in one evaluation of the approval rules of a pull request:
+// the path patterns of the rules and the CODEOWNERS lines. Share one budget between all rules and levels the
+// evaluation looks at, so the work doesn't grow with the number of rules.
 type PathMatchBudget struct {
 	left int
 }
 
 // NewPathMatchBudget returns the budget of one evaluation.
 func NewPathMatchBudget() *PathMatchBudget {
-	return &PathMatchBudget{left: maxPathMatchWork}
+	return &PathMatchBudget{left: MaxPathMatchWork}
 }
 
-// take takes work from the budget, false (and nothing taken) if less is left.
-func (b *PathMatchBudget) take(work int) bool {
+// Take takes the work of matching the files against patterns of insts instructions (see RegexpInsts) from the
+// budget, false (and nothing taken) if less is left.
+func (b *PathMatchBudget) Take(files []string, insts int) bool {
+	work := 0
+	for _, f := range files {
+		// can't overflow: the files are bounded by the size of a diff, the instructions by the patterns' size
+		work += len(f) * insts
+	}
 	if work > b.left {
 		return false
 	}
 	b.left -= work
 	return true
+}
+
+// RegexpInsts returns the number of instructions of the compiled program of re. Go's regular expressions run in
+// time linear in the input and the program, so path bytes times instructions bounds the time of a match. A pattern
+// that can't be parsed again counts as more than any budget.
+func RegexpInsts(re *regexp.Regexp) int {
+	parsed, err := syntax.Parse(re.String(), syntax.Perl)
+	if err != nil {
+		return MaxPathMatchWork + 1
+	}
+	prog, err := syntax.Compile(parsed.Simplify())
+	if err != nil {
+		return MaxPathMatchWork + 1
+	}
+	return len(prog.Inst)
 }
 
 // AppliesTo returns true if the rule has no path patterns or one of the changed files matches. If the paths can't be
@@ -203,12 +228,7 @@ func (r *ApprovalRule) FilesInScope(budget *PathMatchBudget, changedFiles []stri
 	if len(m.patterns) == 0 {
 		return nil, true
 	}
-	work := 0
-	for _, f := range changedFiles {
-		// a sum over the files can't overflow: they are bounded by the size of a diff
-		work += len(f) * len(m.patterns)
-	}
-	if !budget.take(work) {
+	if !budget.Take(changedFiles, m.insts) {
 		return nil, false
 	}
 	inScope = make([]bool, len(changedFiles))
@@ -240,6 +260,7 @@ func (r *ApprovalRule) pathMatcher() *pathMatcher {
 			return r.paths
 		}
 		r.paths.patterns = append(r.paths.patterns, g)
+		r.paths.insts += RegexpInsts(g)
 	}
 	return r.paths
 }

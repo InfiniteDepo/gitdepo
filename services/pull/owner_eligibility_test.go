@@ -236,7 +236,9 @@ func TestUnmetLinesQueriesIndependentOfApprovers(t *testing.T) {
 	t.Cleanup(func() { counter.off.Store(true) })
 	run := func(people []*user_model.User) (int64, int) {
 		counter.n.Store(0)
-		s := &ApprovalRuleStatus{Rule: &git_model.ApprovalRule{}, Approvers: people, files: []string{"a"}, codeOwners: &issues_model.CodeOwners{Rules: rules}}
+		info := &pullGitInfo{files: []string{"a"}, owners: &issues_model.CodeOwners{Rules: rules}}
+		require.True(t, info.matchOwners(git_model.NewPathMatchBudget()))
+		s := &ApprovalRuleStatus{Rule: &git_model.ApprovalRule{}, Approvers: people, files: info.files, git: info}
 		lines, err := s.unmetLines(ctx)
 		require.NoError(t, err)
 		return counter.n.Load(), len(lines)

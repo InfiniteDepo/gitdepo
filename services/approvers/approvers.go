@@ -155,7 +155,7 @@ func Check(ctx context.Context, rules []*git_model.ApprovalRule, leaving []int64
 		res := &Result{WriteChecked: checked}
 		listed := Uniq(r.UserIDs)
 		for _, id := range slices.Compact(candidates) {
-			if reason := cause(byID[id], repoIDs, writers); reason != "" {
+			if reason := Cause(byID[id], repoIDs, writers); reason != "" {
 				if slices.Contains(listed, id) && byID[id] != nil {
 					res.Unusable = append(res.Unusable, Unusable{ID: id, Reason: reason})
 				}
@@ -172,9 +172,10 @@ func Check(ctx context.Context, rules []*git_model.ApprovalRule, leaving []int64
 	return out, nil
 }
 
-// cause returns why the user can't approve under a rule covering repoIDs, "" if they can. Nothing is known about
+// Cause returns why the user can't approve under a rule covering repoIDs, "" if they can; it is the one order of the
+// reasons (no write access, inactive, can't sign in, two-factor) for every page. Nothing is known about
 // the access of a rule without a checked repository (too many, or none covered): its people count by their state.
-func cause(u *user_model.User, repoIDs []int64, writers *Writers) string {
+func Cause(u *user_model.User, repoIDs []int64, writers *Writers) string {
 	has := func(f func(repoID, uid int64) bool) bool {
 		return slices.ContainsFunc(repoIDs, func(id int64) bool { return f(id, u.ID) })
 	}
