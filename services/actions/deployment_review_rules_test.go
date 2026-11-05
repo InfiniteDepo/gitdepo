@@ -365,7 +365,7 @@ func TestApprovalRevokedWhenApproverIsNoLongerEligible(t *testing.T) {
 
 	for name, change := range map[string]func(t *testing.T, f *reviewFixture){
 		"removed from the reviewers": func(t *testing.T, f *reviewFixture) {
-			require.NoError(t, SetEnvironmentReviewers(f.ctx, f.env, []int64{2}, nil))
+			require.NoError(t, setReviewers(f.ctx, f.env, []int64{2}, nil))
 		},
 		"deactivated": func(t *testing.T, f *reviewFixture) {
 			_, err := db.GetEngine(t.Context()).Exec("UPDATE user SET is_active = ? WHERE id = 4", false)
