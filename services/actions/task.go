@@ -14,6 +14,7 @@ import (
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unit"
 	actions_module "forgejo.org/modules/actions"
+	"forgejo.org/modules/cache"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/timeutil"
@@ -71,6 +72,7 @@ func failPickedJob(ctx context.Context, jobID int64) error {
 }
 
 func pickTask(ctx context.Context, runner *actions_model.ActionRunner, requestKey, handle *string) (*runnerv1.Task, *actions_model.ActionRunJob, error) {
+	ctx = cache.WithCacheContext(ctx)
 	// no new jobs start while maintenance mode is on, running ones finish
 	if setting.GetMaintenance(ctx).ReadOnly() {
 		return nil, nil, actions_model.ErrNoMatchingJobFound

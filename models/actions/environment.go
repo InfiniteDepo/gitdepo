@@ -226,6 +226,7 @@ func (e *ActionEnvironment) auditData() map[string]any {
 	return map[string]any{
 		"name": e.Name, "ref_policy": e.RefPolicy, "ref_patterns": patterns, "wait_timer_minutes": e.WaitTimerMinutes,
 		"prevent_self_review": e.PreventSelfReview, "runner_labels": e.RunnerLabels, "allowed_workflows": e.AllowedWorkflows,
+		"reviews_required": e.ReviewsRequired,
 	}
 }
 

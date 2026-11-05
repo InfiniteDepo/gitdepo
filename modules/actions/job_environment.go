@@ -5,6 +5,8 @@ package actions
 
 import (
 	"errors"
+	"slices"
+	"strings"
 
 	"forgejo.org/modules/util"
 
@@ -63,9 +65,20 @@ func readRawJobs(content []byte) (map[string]rawJob, error) {
 	return raw.Jobs, nil
 }
 
-// NamesEnvironment tells if any job of the workflow file names an environment, or calls another workflow (which this
-// doesn't follow: that one could name one). A file that can't be read names none: whoever runs it fails on it anyway.
+// NamesEnvironment tells if any job of the workflow file names an environment. A file that can't be read names none:
+// whoever runs it fails on it anyway.
 func NamesEnvironment(content []byte) bool {
+	names, _ := namesEnvironmentAndCalls(content)
+	return names
+}
+
+// LocalWorkflowCalls lists the paths of the workflows of the same repository that the jobs of the file call.
+func LocalWorkflowCalls(content []byte) []string {
+	_, calls := namesEnvironmentAndCalls(content)
+	return calls
+}
+
+func namesEnvironmentAndCalls(content []byte) (bool, []string) {
 	var raw struct {
 		Jobs map[string]struct {
 			Environment yaml.Node `yaml:"environment"`
@@ -73,17 +86,20 @@ func NamesEnvironment(content []byte) bool {
 		} `yaml:"jobs"`
 	}
 	if yaml.Unmarshal(content, &raw) != nil {
-		return false
+		return false, nil
 	}
+	names := false
+	var calls []string
 	for _, job := range raw.Jobs {
 		if !job.Environment.IsZero() && job.Environment.ShortTag() != "!!null" { // a null value names none, as for readRawJobs
-			return true
+			names = true
 		}
-		if job.Uses != "" {
-			return true
+		if path, ok := strings.CutPrefix(job.Uses, "./"); ok {
+			calls = append(calls, path)
 		}
 	}
-	return false
+	slices.Sort(calls)
+	return names, calls
 }
 
 // attachJobEnvironments reads the `environment:` of every job of the workflow in content and sets it on the single

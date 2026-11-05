@@ -299,6 +299,7 @@ forgejo.org/routers/web/org
 forgejo.org/services/actions
 	DeleteEnvironment
 	SetEnvironmentReviewers
+	emitEnvironmentRuns
 
 forgejo.org/services/auth
 	RegisterInternalIssuerForTesting

@@ -5,6 +5,7 @@ package actions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -114,8 +115,33 @@ func ReplaceEnvironmentReviewers(ctx context.Context, e *ActionEnvironment, revi
 // environment that lost all its reviewers this way holds its deployments until someone edits its rules.
 func RemoveReviewers(ctx context.Context, cond builder.Cond) error {
 	var rows []*ActionEnvironmentReviewer
-	if err := db.GetEngine(ctx).Where(cond).OrderBy("environment_id, id").Find(&rows); err != nil {
+	find := func() error {
+		rows = rows[:0]
+		return db.GetEngine(ctx).Where(cond).OrderBy("environment_id, id").Find(&rows)
+	}
+	if err := find(); err != nil {
 		return err
+	}
+	// like every write of the reviewers: lock each environment (in ascending order), then read its rows again, so an
+	// edit that committed first isn't recorded as a removal that didn't happen
+	locked := map[int64]bool{}
+	for _, r := range rows {
+		if locked[r.EnvironmentID] {
+			continue
+		}
+		locked[r.EnvironmentID] = true
+		if env, has, err := db.GetByID[ActionEnvironment](ctx, r.EnvironmentID); err != nil {
+			return err
+		} else if has {
+			if err := LockEnvironment(ctx, env.RepoID, env.ID); err != nil && !errors.Is(err, ErrEnvironmentNotFound) {
+				return err
+			}
+		}
+	}
+	if len(locked) > 0 {
+		if err := find(); err != nil {
+			return err
+		}
 	}
 	byEnv := map[int64][]*ActionEnvironmentReviewer{}
 	var order []int64

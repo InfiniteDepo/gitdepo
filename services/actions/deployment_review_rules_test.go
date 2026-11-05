@@ -15,6 +15,7 @@ import (
 	org_model "forgejo.org/models/organization"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/queue"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/test"
 	"forgejo.org/modules/util"
@@ -109,6 +110,98 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 		stored, err := actions_model.GetRepoEnvironmentByID(f.ctx, 63, f.env.ID)
 		require.NoError(t, err)
 		assert.True(t, stored.ReviewsRequired)
+	})
+
+	t.Run("reviewers of an environment of a trashed repository can be removed and are recorded", func(t *testing.T) {
+		f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{2, 4}, nil)
+		teamReadsActions(t, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3}))
+		_, err := db.GetEngine(t.Context()).Exec("UPDATE repository SET trashed_unix = 1 WHERE id = 63")
+		require.NoError(t, err)
+		since := auditSince(t)
+		require.NoError(t, db.WithTx(f.ctx, func(ctx context.Context) error {
+			return actions_model.RemoveReviewers(ctx, actions_model.UserReviewerCond(4))
+		}))
+		assert.Len(t, auditActions(t, since, "repo.actions_env.updated"), 1)
+		// a team of another organization, as after a restore to a new owner
+		require.NoError(t, db.WithTx(f.ctx, func(ctx context.Context) error {
+			require.NoError(t, actions_model.ReplaceEnvironmentReviewers(ctx, f.env, []actions_model.ActionEnvironmentReviewer{{UserID: 2}, {TeamID: 2}}))
+			return actions_model.RemoveReviewers(ctx, actions_model.ForeignTeamReviewerCond(63, 6))
+		}))
+		rs, err := actions_model.FindEnvironmentReviewers(f.ctx, f.env.ID)
+		require.NoError(t, err)
+		assert.Len(t, rs, 1)
+		// deleting a team that reviews there
+		require.NoError(t, actions_model.ReplaceEnvironmentReviewers(f.ctx, f.env, []actions_model.ActionEnvironmentReviewer{{TeamID: 2}}))
+		team, err := org_model.GetTeamByID(f.ctx, 2)
+		require.NoError(t, err)
+		require.NoError(t, models.DeleteTeam(f.ctx, team))
+	})
+
+	t.Run("the delete entry says whether reviews were required", func(t *testing.T) {
+		f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{2}, nil)
+		require.NoError(t, db.WithTx(f.ctx, func(ctx context.Context) error {
+			return actions_model.RemoveReviewers(ctx, actions_model.UserReviewerCond(2))
+		}))
+		since := auditSince(t)
+		require.NoError(t, DeleteEnvironment(f.ctx, f.env))
+		entries := auditActions(t, since, "repo.actions_env.deleted")
+		require.Len(t, entries, 1)
+		assert.Contains(t, entries[0].Data, `"reviews_required":true`)
+	})
+
+	t.Run("editing the reviewers queues the runs of the waiting jobs, and the gate then releases them", func(t *testing.T) {
+		f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{2}, nil)
+		queued := make(chan int64, 10)
+		cfg, err := setting.NewConfigProviderFromData("[queue.actions_ready_job]\nTYPE = immediate\n")
+		require.NoError(t, err)
+		defer test.MockVariableValue(&setting.CfgProvider, cfg)()
+		q := queue.CreateUniqueQueue(t.Context(), "actions_ready_job", func(items ...*jobUpdate) []*jobUpdate {
+			for _, i := range items {
+				queued <- i.RunID
+			}
+			return nil
+		})
+		require.NotNil(t, q)
+		defer test.MockVariableValue(&jobEmitterQueue, q)()
+		_, err = db.GetEngine(t.Context()).Exec("UPDATE action_run_job SET task_id = 0 WHERE id = ?", f.job.ID) // no runner took it
+		require.NoError(t, err)
+		require.NoError(t, SetEnvironmentReviewers(f.ctx, f.env, nil, nil))
+		select {
+		case id := <-queued:
+			assert.Equal(t, f.run.ID, id)
+		default:
+			t.Fatal("the run was not queued")
+		}
+		assert.Equal(t, actions_model.StatusWaiting, f.emit(t).Status, "the gate released it")
+		assert.Equal(t, actions_model.DeploymentReleased, f.status(t))
+	})
+
+	t.Run("an environment without reviews is not expired: the gate releases the job", func(t *testing.T) {
+		f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{2}, nil)
+		defer test.MockVariableValue(&setting.Actions.DeploymentApprovalTimeout, 48*time.Hour)()
+		_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET created = ? WHERE job_id = ?", time.Now().Add(-49*time.Hour).Unix(), f.job.ID)
+		require.NoError(t, err)
+		require.NoError(t, actions_model.ReplaceEnvironmentReviewers(f.ctx, f.env, nil)) // no emitter pass, as in a race with the cron
+		require.NoError(t, ExpireDeploymentReviews(f.ctx))
+		assert.Equal(t, actions_model.DeploymentWaitingReview, f.status(t), "not expired")
+		f.emit(t)
+		assert.Equal(t, actions_model.DeploymentReleased, f.status(t))
+	})
+
+	t.Run("a sudo'd list says false where the review is refused", func(t *testing.T) {
+		f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{2}, nil)
+		doer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+		check := func(ctx context.Context) bool {
+			c, err := NewReviewChecker(ctx, doer, f.run)
+			require.NoError(t, err)
+			ok, err := c.May(ctx, f.deployment(t))
+			require.NoError(t, err)
+			return ok
+		}
+		assert.True(t, check(f.ctx))
+		actor := &audit_model.Actor{Type: "user", ID: 1, Name: "admin"}
+		actor.SetSudo(2, "user2")
+		assert.False(t, check(audit_model.WithActor(t.Context(), actor)))
 	})
 
 	t.Run("an environment name has no colon or whitespace", func(t *testing.T) {

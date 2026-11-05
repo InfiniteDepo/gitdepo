@@ -123,6 +123,10 @@ func (c *ReviewChecker) doerMayAct(ctx context.Context) (bool, error) {
 	}
 	ok := false
 	doer, repo := c.doer, c.run.Repo
+	// a decision is its reviewer's own: under sudo nobody reviews, so can_review says what the review call will
+	if actor := audit_model.ActorFromContext(ctx); actor != nil && actor.SudoByID != 0 {
+		doer = nil
+	}
 	if doer != nil && doer.ID > 0 && !doer.IsActions() && !doer.IsAccessTokenBot() && !doer.IsOrganization() && doer.IsActive && !doer.ProhibitLogin {
 		blocked, err := doer.TwoFactorBlocked(ctx, repo.Owner)
 		if err != nil {
@@ -326,6 +330,8 @@ func ExpireDeploymentReviews(ctx context.Context) error {
 	return nil
 }
 
+// expireDeployment expires a deployment that waited too long, unless its environment no longer requires a review: the
+// gate decides that one (it releases the job), so an edit that lifted the rule and the expiry can't disagree.
 func expireDeployment(ctx context.Context, d *actions_model.ActionDeployment) error {
 	repo, err := repo_model.GetRepositoryByIDIncludingTrashed(ctx, d.RepoID) // only the audit scope is needed
 	if err != nil {
@@ -334,6 +340,9 @@ func expireDeployment(ctx context.Context, d *actions_model.ActionDeployment) er
 	env, err := actions_model.GetRepoEnvironmentByID(ctx, d.RepoID, d.EnvironmentID)
 	if err != nil && !errors.Is(err, util.ErrNotExist) {
 		return err
+	}
+	if env != nil && !env.ReviewsRequired {
+		return nil
 	}
 	return db.WithTx(ctx, func(ctx context.Context) error {
 		d.Status = actions_model.DeploymentExpired

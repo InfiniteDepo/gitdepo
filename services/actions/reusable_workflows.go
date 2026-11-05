@@ -29,18 +29,37 @@ func expandForJob(job *jobparser.Job) bool {
 	return len(job.RunsOn()) == 0
 }
 
-// ErrUnexpandedEnvironment is the refusal of a call that the server doesn't expand, but whose called workflow names an
-// environment or calls another workflow (not followed: it could name one): the runner would run it as one job and
-// nothing would stand behind the environment, so the run fails.
+// ErrUnexpandedEnvironment is the refusal of a call that the server doesn't expand, but whose called workflow, or one
+// it calls in turn, names an environment: the runner would run it as one job and nothing would stand behind the
+// environment, so the run fails.
 // This holds for the calls the server can read (local, and on this instance when public); a call to an external https
 // workflow can't be read, so an environment inside it is not gated, and it gets no environment secrets (known limitation).
-var ErrUnexpandedEnvironment = util.NewInvalidArgumentErrorf("the called workflow names an environment or calls another workflow: remove runs-on from the job that calls it, so that it is expanded")
+// The same goes for a call that a called workflow makes to another repository.
+var ErrUnexpandedEnvironment = util.NewInvalidArgumentErrorf("the called workflow names an environment: remove runs-on from the job that calls it, so that it is expanded")
+
+// maxUnexpandedCallFiles bounds how many files of a chain of local calls are read.
+const maxUnexpandedCallFiles = 20
 
 // unexpandedCall is what a fetcher answers for a call that is not expanded: nothing to expand, except when the called
-// file names an environment. A file that can't be read is no reason to refuse (that call ran before as it does now).
-func unexpandedCall(read func() ([]byte, error)) error {
-	if content, err := read(); err == nil && actions_module.NamesEnvironment(content) {
-		return ErrUnexpandedEnvironment
+// file, or a file of the same commit that it calls in turn, names an environment. A file that can't be read is no
+// reason to refuse (that call ran before as it does now).
+func unexpandedCall(read func(path string) ([]byte, error), path string) error {
+	queue, seen := []string{path}, map[string]bool{path: true}
+	for len(queue) > 0 && len(seen) <= maxUnexpandedCallFiles {
+		content, err := read(queue[0])
+		queue = queue[1:]
+		if err != nil {
+			continue
+		}
+		if actions_module.NamesEnvironment(content) {
+			return ErrUnexpandedEnvironment
+		}
+		for _, call := range actions_module.LocalWorkflowCalls(content) {
+			if !seen[call] {
+				seen[call] = true
+				queue = append(queue, call)
+			}
+		}
 	}
 	return jobparser.ErrUnsupportedReusableWorkflowFetch
 }
@@ -71,7 +90,7 @@ func readLocalWorkflow(commit *git.Commit, path string) ([]byte, error) {
 var expandLocalReusableWorkflows = func(commit *git.Commit) jobparser.LocalWorkflowFetcher {
 	return func(job *jobparser.Job, path string) ([]byte, error) {
 		if !expandForJob(job) {
-			return nil, unexpandedCall(func() ([]byte, error) { return readLocalWorkflow(commit, path) })
+			return nil, unexpandedCall(func(p string) ([]byte, error) { return readLocalWorkflow(commit, p) }, path)
 		}
 
 		content, err := readLocalWorkflow(commit, path)

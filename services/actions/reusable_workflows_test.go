@@ -245,13 +245,24 @@ func TestExpandInstanceReusableWorkflowsProject(t *testing.T) {
 }
 
 func TestUnexpandedCall(t *testing.T) {
-	read := func(content string, err error) func() ([]byte, error) {
-		return func() ([]byte, error) { return []byte(content), err }
+	files := func(m map[string]string) func(string) ([]byte, error) {
+		return func(path string) ([]byte, error) {
+			if c, ok := m[path]; ok {
+				return []byte(c), nil
+			}
+			return nil, os.ErrNotExist
+		}
 	}
 	named := "on: workflow_call\njobs:\n  deploy:\n    runs-on: docker\n    environment: production\n    steps: [{run: echo}]\n"
 	plain := "on: workflow_call\njobs:\n  build:\n    runs-on: docker\n    steps: [{run: echo}]\n"
-	require.ErrorIs(t, unexpandedCall(read(named, nil)), ErrUnexpandedEnvironment, "the run is refused")
-	require.ErrorIs(t, unexpandedCall(read(plain, nil)), jobparser.ErrUnsupportedReusableWorkflowFetch, "an ordinary call stays monolithic")
-	require.ErrorIs(t, unexpandedCall(read("", os.ErrNotExist)), jobparser.ErrUnsupportedReusableWorkflowFetch, "a file that can't be read is not refused")
-	require.ErrorIs(t, unexpandedCall(read("jobs: [", nil)), jobparser.ErrUnsupportedReusableWorkflowFetch)
+	calls := func(path string) string { return "on: workflow_call\njobs:\n  c:\n    uses: ./" + path + "\n" }
+	require.ErrorIs(t, unexpandedCall(files(map[string]string{"a.yml": named}), "a.yml"), ErrUnexpandedEnvironment, "the run is refused")
+	require.ErrorIs(t, unexpandedCall(files(map[string]string{"a.yml": plain}), "a.yml"), jobparser.ErrUnsupportedReusableWorkflowFetch, "an ordinary call stays monolithic")
+	require.ErrorIs(t, unexpandedCall(files(nil), "a.yml"), jobparser.ErrUnsupportedReusableWorkflowFetch, "a file that can't be read is not refused")
+	require.ErrorIs(t, unexpandedCall(files(map[string]string{"a.yml": "jobs: ["}), "a.yml"), jobparser.ErrUnsupportedReusableWorkflowFetch)
+
+	// a nested call is refused only when the chain it makes names an environment
+	require.ErrorIs(t, unexpandedCall(files(map[string]string{"a.yml": calls("b.yml"), "b.yml": plain}), "a.yml"), jobparser.ErrUnsupportedReusableWorkflowFetch)
+	require.ErrorIs(t, unexpandedCall(files(map[string]string{"a.yml": calls("b.yml"), "b.yml": calls("c.yml"), "c.yml": named}), "a.yml"), ErrUnexpandedEnvironment)
+	require.ErrorIs(t, unexpandedCall(files(map[string]string{"a.yml": calls("a.yml")}), "a.yml"), jobparser.ErrUnsupportedReusableWorkflowFetch, "a loop ends")
 }

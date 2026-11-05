@@ -16,6 +16,7 @@ import (
 	git_model "forgejo.org/models/git"
 	secret_model "forgejo.org/models/secret"
 	actions_module "forgejo.org/modules/actions"
+	"forgejo.org/modules/cache"
 	"forgejo.org/modules/container"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/timeutil"
@@ -208,7 +209,7 @@ func nextDeploymentStatus(d *actions_model.ActionDeployment, env *actions_model.
 		if env.WaitTimerMinutes > 0 {
 			d.ReleaseAfterUnix = timer
 		}
-	case prior == actions_model.DeploymentWaitingReview && d.Created != 0 && d.Created <= ReviewCutoff():
+	case prior == actions_model.DeploymentWaitingReview && env.ReviewsRequired && d.Created != 0 && d.Created <= ReviewCutoff():
 		d.Status = actions_model.DeploymentExpired
 	case prior == actions_model.DeploymentWaitingTimer && d.ReviewedBy == 0 && env.ReviewsRequired:
 		d.Status = actions_model.DeploymentWaitingReview // the timer keeps running next to the review
@@ -362,18 +363,21 @@ func jobOfTask(task *actions_model.ActionTask) *actions_model.ActionRunJob {
 // an environment that still exists in the job's repository there is none: a job that names an environment never runs
 // without its gate.
 func releasedEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (*actions_model.ActionEnvironment, error) {
-	d, err := actions_model.GetDeployment(ctx, job.ID, job.Attempt)
-	if err != nil {
-		return nil, err
-	}
-	if d == nil || d.Status != actions_model.DeploymentReleased || d.RepoID != job.RepoID {
-		return nil, errEnvironmentNotReleased
-	}
-	env, err := actions_model.GetRepoEnvironmentByID(ctx, job.RepoID, d.EnvironmentID)
-	if errors.Is(err, actions_model.ErrEnvironmentNotFound) {
-		return nil, errEnvironmentNotReleased
-	}
-	return env, err
+	// the secrets, the variables and the context of one pick all ask: the request's cache context answers the later ones
+	return cache.GetWithContextCache(ctx, "actions_released_environment", fmt.Sprintf("%d:%d", job.ID, job.Attempt), func() (*actions_model.ActionEnvironment, error) {
+		d, err := actions_model.GetDeployment(ctx, job.ID, job.Attempt)
+		if err != nil {
+			return nil, err
+		}
+		if d == nil || d.Status != actions_model.DeploymentReleased || d.RepoID != job.RepoID {
+			return nil, errEnvironmentNotReleased
+		}
+		env, err := actions_model.GetRepoEnvironmentByID(ctx, job.RepoID, d.EnvironmentID)
+		if errors.Is(err, actions_model.ErrEnvironmentNotFound) {
+			return nil, errEnvironmentNotReleased
+		}
+		return env, err
+	})
 }
 
 // releasedEnvironmentName returns the name of the environment that released the job, "" if it names none.

@@ -317,6 +317,17 @@ func TestActionsEnvironmentReviews(t *testing.T) {
 			assert.False(t, list(reviewerToken, run, http.StatusOK)[1].Reviewers.CanReview)
 		})
 
+		t.Run("removing the reviewers releases a waiting job at once", func(t *testing.T) {
+			e := newEnv("breakglass-rv", []int64{user4.ID}, nil)
+			_, job := pushJob("", "rv-g", "    environment: breakglass-rv\n", "echo")
+			require.Equal(t, actions_model.DeploymentWaitingReview, deployment(job, 1).Status)
+			assert.Nil(t, runner.maybeFetchTask(t))
+			require.NoError(t, actions_service.SetEnvironmentReviewers(ctx, e, nil, nil))
+			require.Eventually(t, func() bool { return hasStatus(job, actions_model.StatusWaiting) }, 10*time.Second, 100*time.Millisecond)
+			assert.Equal(t, actions_model.DeploymentReleased, deployment(job, 1).Status)
+			runner.execTask(t, runner.fetchTask(t), &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
+		})
+
 		t.Run("a rerun needs a new approval", func(t *testing.T) {
 			newEnv("rerun-rv", []int64{user4.ID}, nil)
 			run, job := pushJob("", "rv-f", "    environment: rerun-rv\n", "echo")
@@ -530,6 +541,18 @@ jobs:
 			require.NoError(t, actions_service.SetEnvironmentReviewers(ctx, e, []int64{user4.ID}, nil))
 			require.NoError(t, actions_service.DeleteEnvironment(ctx, e))
 			assert.EqualValues(t, 0, count())
+		})
+
+		t.Run("a user who reviews in a repository in the trash can still be deleted, and the removal is recorded", func(t *testing.T) {
+			e := newEnv("trash-rv", []int64{user4.ID}, nil)
+			_, err := db.GetEngine(t.Context()).Exec("UPDATE repository SET trashed_unix = ? WHERE id = ?", timeutil.TimeStampNow(), repo.ID)
+			require.NoError(t, err)
+			since := auditNow()
+			MakeRequest(t, NewRequest(t, "DELETE", "/api/v1/admin/users/"+user4.Name+"?purge=true").AddTokenAuth(adminToken), http.StatusNoContent)
+			n, err := db.GetEngine(t.Context()).Where("environment_id = ?", e.ID).Count(new(actions_model.ActionEnvironmentReviewer))
+			require.NoError(t, err)
+			assert.EqualValues(t, 0, n)
+			assert.Positive(t, auditCount(since, "repo.actions_env.updated"))
 		})
 	})
 }

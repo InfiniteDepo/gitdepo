@@ -10,6 +10,7 @@ import (
 	org_model "forgejo.org/models/organization"
 	repo_model "forgejo.org/models/repo"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/log"
 	"forgejo.org/modules/util"
 )
 
@@ -38,5 +39,29 @@ func SetEnvironmentReviewers(ctx context.Context, e *actions_model.ActionEnviron
 		}
 		reviewers = append(reviewers, actions_model.ActionEnvironmentReviewer{TeamID: id})
 	}
-	return actions_model.ReplaceEnvironmentReviewers(ctx, e, reviewers)
+	if err := actions_model.ReplaceEnvironmentReviewers(ctx, e, reviewers); err != nil {
+		return err
+	}
+	return emitEnvironmentRuns(ctx, e)
+}
+
+// emitEnvironmentRuns queues the gate for the runs that have a job of the environment no runner took yet, after a
+// change of its rules has committed, so those jobs are decided by the rules as they are now (a removed review releases
+// them, a new one holds them) and don't wait for another event. It runs outside any transaction.
+func emitEnvironmentRuns(ctx context.Context, e *actions_model.ActionEnvironment) error {
+	jobs, err := actions_model.FindUnpickedEnvironmentJobs(ctx, e.RepoID, e.ID)
+	if err != nil {
+		return err
+	}
+	runs := map[int64]bool{}
+	for _, job := range jobs {
+		if runs[job.RunID] {
+			continue
+		}
+		runs[job.RunID] = true
+		if err := EmitJobsIfReady(job.RunID); err != nil {
+			log.Error("EmitJobsIfReady for run %d after a change of environment %d: %v", job.RunID, e.ID, err)
+		}
+	}
+	return nil
 }
