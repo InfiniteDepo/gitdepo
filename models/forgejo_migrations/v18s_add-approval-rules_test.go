@@ -38,10 +38,10 @@ func Test_addApprovalRules(t *testing.T) {
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, count)
 
-	_, err = x.Exec("INSERT INTO protected_branch_approval_rule (protected_branch_id, name, required_count, user_i_ds, team_i_ds, path_patterns) VALUES (1, 'Security', 1, '[2]', '[]', '')")
+	_, err = x.Exec("INSERT INTO approval_rule (protected_branch_id, name, required_count, user_i_ds, team_i_ds, path_patterns) VALUES (1, 'Security', 1, '[2]', '[]', '')")
 	require.NoError(t, err)
 	// names are unique per protected branch
-	_, err = x.Exec("INSERT INTO protected_branch_approval_rule (protected_branch_id, name, required_count, user_i_ds, team_i_ds, path_patterns) VALUES (1, 'Security', 1, '[2]', '[]', '')")
+	_, err = x.Exec("INSERT INTO approval_rule (protected_branch_id, name, required_count, user_i_ds, team_i_ds, path_patterns) VALUES (1, 'Security', 1, '[2]', '[]', '')")
 	require.Error(t, err)
 
 	// running the migration again is a no-op

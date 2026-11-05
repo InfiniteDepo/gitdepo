@@ -16,6 +16,7 @@ import (
 	quota_model "forgejo.org/models/quota"
 	repo_model "forgejo.org/models/repo"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/cache"
 	"forgejo.org/modules/git"
 	"forgejo.org/modules/gitrepo"
 	"forgejo.org/modules/graceful"
@@ -274,6 +275,8 @@ func handlePullRequestAutoMerge(pullID int64, sha string) {
 	ctx, _, finished := process.GetManager().AddContext(graceful.GetManager().HammerContext(),
 		fmt.Sprintf("Handle AutoMerge of PR[%d] with sha[%s]", pullID, sha))
 	defer finished()
+	// one pass is one request: the head of the pull request is read once for the checks and the merge
+	ctx = cache.WithCacheContext(ctx)
 
 	pr, err := issues_model.GetPullRequestByID(ctx, pullID)
 	if err != nil {

@@ -306,6 +306,7 @@ func procReceivePullRequest(ctx context.Context,
 	if err == nil && comment != nil {
 		notify_service.PullRequestPushCommits(ctx, pusher, pr, comment)
 	}
+	pull_service.RequestDefaultReviewers(ctx, pr, currentCommitID)
 	notify_service.PullRequestSynchronized(ctx, pusher, pr)
 
 	// this always seems to be false

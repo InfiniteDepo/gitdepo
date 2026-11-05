@@ -138,6 +138,11 @@ func ChangeTitle(ctx context.Context, issue *issues_model.Issue, doer *user_mode
 		if err != nil {
 			log.Error("PullRequestCodeOwnersReview: %v", err)
 		}
+		if more, err := DefaultReviewerRequests(ctx, issue, issue.PullRequest, ""); err != nil {
+			log.Error("DefaultReviewerRequests: %v", err)
+		} else {
+			reviewNotifiers = append(reviewNotifiers, more...)
+		}
 	}
 
 	notify_service.IssueChangeTitle(ctx, doer, issue, oldTitle)

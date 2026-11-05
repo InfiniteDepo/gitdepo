@@ -68,7 +68,11 @@ func storedBranchRule(ctx context.Context, id int64) (map[string]any, error) {
 	}
 	names := make([]string, 0, len(rules))
 	for _, r := range rules {
-		names = append(names, fmt.Sprintf("%s:%d", r.Name, r.RequiredCount))
+		name := fmt.Sprintf("%s:%d", r.Name, r.RequiredCount)
+		if r.RequestReviews {
+			name += fmt.Sprintf(":requests:%q", r.SourceBranchPattern)
+		}
+		names = append(names, name)
 	}
 	fields["approval_rules"] = names
 	if pb.OrgID != 0 {

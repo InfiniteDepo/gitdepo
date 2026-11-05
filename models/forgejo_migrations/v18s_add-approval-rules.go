@@ -30,7 +30,7 @@ type v18sProtectedBranchApprovalRule struct {
 }
 
 func (v18sProtectedBranchApprovalRule) TableName() string {
-	return "protected_branch_approval_rule"
+	return "approval_rule" // what xorm names git_model.ApprovalRule
 }
 
 func addApprovalRules(x *xorm.Engine) error {

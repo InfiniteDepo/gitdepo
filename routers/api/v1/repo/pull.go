@@ -1133,7 +1133,7 @@ func MergePullRequest(ctx *context.APIContext) {
 		} else if git.IsErrPushOutOfDate(err) {
 			ctx.Error(http.StatusConflict, "Merge", "merge push out of date")
 		} else if models.IsErrSHADoesNotMatch(err) {
-			ctx.Error(http.StatusConflict, "Merge", "head out of date")
+			ctx.Error(http.StatusConflict, "Merge", "the head of the pull request was updated or is still being updated: try again in a moment, or push again if it doesn't settle")
 		} else if git.IsErrPushRejected(err) {
 			errPushRej := err.(*git.ErrPushRejected)
 			if len(errPushRej.Message) == 0 {

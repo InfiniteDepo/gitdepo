@@ -16,6 +16,7 @@ import (
 	access_model "forgejo.org/models/perm/access"
 	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/cache"
 	"forgejo.org/modules/git"
 	"forgejo.org/modules/gitrepo"
 	api "forgejo.org/modules/structs"
@@ -153,8 +154,15 @@ func ApprovalRuleStatuses(ctx context.Context, pb *git_model.ProtectedBranch, pr
 
 // EvaluateApprovalRules returns the status of every approval rule of the protected branch rule that applies to the pull request.
 // The RequiredApprovals of the protected branch rule are not part of it, HasEnoughApprovals checks them.
+//
+// In one request the result is computed once per protected branch rule and state of the pull request (head and base
+// commit), and the path matching of all its levels shares one git_model.PathMatchBudget, so the merge box, the
+// approvals and the merge check of one request cost one evaluation however many rules there are. Don't change the
+// returned statuses.
 func EvaluateApprovalRules(ctx context.Context, pb *git_model.ProtectedBranch, pr *issues_model.PullRequest) ([]*ApprovalRuleStatus, error) {
 	rules, err := git_model.GetApprovalRules(ctx, pb.ID)
+	// a rule that only requests reviews (count 0) requires nothing and is never applicable
+	rules = slices.DeleteFunc(rules, func(r *git_model.ApprovalRule) bool { return r.RequiredCount == 0 })
 	if err != nil || len(rules) == 0 {
 		return nil, err
 	}
@@ -164,6 +172,28 @@ func EvaluateApprovalRules(ctx context.Context, pb *git_model.ProtectedBranch, p
 	if err := pr.LoadBaseRepo(ctx); err != nil {
 		return nil, err
 	}
+	head, err := issues_model.PullHeadCommitID(ctx, pr)
+	if err != nil {
+		return nil, err
+	}
+	// read for every call, not cached: a merge into the base branch in the same request changes the changed files
+	base, err := gitrepo.GetBranchCommitID(ctx, pr.BaseRepo, pr.BaseBranch)
+	if err != nil {
+		return nil, err
+	}
+	state := fmt.Sprintf("%d:%s:%s:%s", pr.ID, head, pr.BaseBranch, base)
+	budget, err := cache.GetWithContextCache(ctx, "approval_rules_budget", state, func() (*git_model.PathMatchBudget, error) {
+		return git_model.NewPathMatchBudget(), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return cache.GetWithContextCache(ctx, "approval_rules", fmt.Sprintf("%d:%s", pb.ID, state), func() ([]*ApprovalRuleStatus, error) {
+		return evaluateApprovalRules(ctx, pb, pr, rules, budget)
+	})
+}
+
+func evaluateApprovalRules(ctx context.Context, pb *git_model.ProtectedBranch, pr *issues_model.PullRequest, rules []*git_model.ApprovalRule, budget *git_model.PathMatchBudget) ([]*ApprovalRuleStatus, error) {
 	approvers, err := issues_model.ValidReviewers(ctx, pb, pr, issues_model.ReviewTypeApprove)
 	if err != nil {
 		return nil, err
@@ -181,7 +211,7 @@ func EvaluateApprovalRules(ctx context.Context, pb *git_model.ProtectedBranch, p
 
 	statuses := make([]*ApprovalRuleStatus, 0, len(rules))
 	for _, rule := range rules {
-		if !rule.AppliesTo(files) {
+		if !rule.AppliesTo(budget, files) {
 			continue
 		}
 		s := &ApprovalRuleStatus{Rule: rule, Name: rule.Name, Required: rule.RequiredCount}
@@ -205,7 +235,7 @@ func EvaluateApprovalRules(ctx context.Context, pb *git_model.ProtectedBranch, p
 				s.CodeOwnersErrorLine, s.CodeOwnersFile = codeOwners.ErrorLine, codeOwners.File
 				s.Satisfied = false
 			} else {
-				if s.UncoveredFiles, s.Shortfalls, err = countUncoveredFiles(ctx, pb, pr, rule, files, codeOwners.Rules, s.Approvers); err != nil {
+				if s.UncoveredFiles, s.Shortfalls, err = countUncoveredFiles(ctx, pb, pr, rule, budget, files, codeOwners.Rules, s.Approvers); err != nil {
 					return nil, err
 				}
 				s.Satisfied = s.Satisfied && s.UncoveredFiles == 0 && len(s.Shortfalls) == 0
@@ -249,13 +279,15 @@ func loadPullGitInfo(ctx context.Context, pr *issues_model.PullRequest, withOwne
 // every matching line of a section needs an approving owner, so a catch-all line can't cover a file that a more
 // specific line gives to other owners, and the distinct approving owners over the matching lines of the section must
 // reach its number of approvals. Optional sections never block.
-func countUncoveredFiles(ctx context.Context, pb *git_model.ProtectedBranch, pr *issues_model.PullRequest, rule *git_model.ApprovalRule, files []string, codeOwners []*issues_model.CodeOwnerRule, approvers []*user_model.User) (int, []*SectionShortfall, error) {
+func countUncoveredFiles(ctx context.Context, pb *git_model.ProtectedBranch, pr *issues_model.PullRequest, rule *git_model.ApprovalRule, budget *git_model.PathMatchBudget, files []string, codeOwners []*issues_model.CodeOwnerRule, approvers []*user_model.User) (int, []*SectionShortfall, error) {
 	uncovered := 0
 	var shortfalls []*SectionShortfall
 	reported := map[*issues_model.CodeOwnerSection]bool{}
 	byLine := map[*issues_model.CodeOwnerRule]map[int64]bool{} // lines are shared by many files
-	for _, f := range files {
-		if !rule.AppliesTo([]string{f}) {
+	// paths that can't be matched put every file in the scope of the rule (fails closed)
+	inScope, decided := rule.FilesInScope(budget, files)
+	for i, f := range files {
+		if decided && inScope != nil && !inScope[i] {
 			continue
 		}
 		var sections []*issues_model.CodeOwnerSection // in the order of the file
@@ -417,6 +449,7 @@ func ApprovalRulesFromAPI(ctx context.Context, owner *user_model.User, apiRules 
 		rules = append(rules, &git_model.ApprovalRule{
 			Name: r.Name, RequiredCount: r.RequiredCount, UserIDs: userIDs, TeamIDs: teamIDs,
 			PathPatterns: r.PathPatterns, RequireCodeOwners: r.RequireCodeOwners,
+			RequestReviews: r.RequestReviews, SourceBranchPattern: r.SourceBranchPattern,
 		})
 	}
 	return rules, nil
