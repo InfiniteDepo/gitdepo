@@ -51,7 +51,7 @@ func fixtureCreateToken(t *testing.T, user *user_model.User, scope auth_model.Ac
 	for _, repoID := range repoIDs {
 		resourceRepos = append(resourceRepos, &auth_model.AccessTokenResourceRepo{RepoID: repoID})
 	}
-	require.NoError(t, auth_model.NewAccessToken(t.Context(), accessToken, resourceRepos))
+	require.NoError(t, auth_model.NewAccessToken(audit_model.WithSystem(t.Context(), "test"), accessToken, resourceRepos))
 	return accessToken, nil
 }
 

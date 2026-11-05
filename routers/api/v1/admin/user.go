@@ -21,6 +21,7 @@ import (
 	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/timeutil"
+	"forgejo.org/modules/util"
 	"forgejo.org/modules/validation"
 	"forgejo.org/modules/web"
 	"forgejo.org/routers/api/v1/user"
@@ -217,6 +218,11 @@ func EditUser(ctx *context.APIContext) {
 		Password:           optional.FromNonDefault(form.Password),
 		MustChangePassword: optional.FromPtr(form.MustChangePassword),
 		ProhibitLogin:      optional.FromPtr(form.ProhibitLogin),
+	}
+	// refused before anything is written
+	if err := user_service.CheckEditIsOwnAct(ctx, ctx.User(), authOpts, &user_service.UpdateOptions{IsAdmin: optional.FromPtr(form.Admin)}); err != nil {
+		ctx.Error(http.StatusForbidden, "", err)
+		return
 	}
 	if err := user_service.UpdateAuth(ctx, ctx.User(), authOpts); err != nil {
 		switch {
@@ -537,6 +543,8 @@ func RenameUser(ctx *context.APIContext) {
 			ctx.Error(http.StatusUnprocessableEntity, "", ctx.Tr("user.form.name_pattern_not_allowed", newName))
 		case db.IsErrNameCharsNotAllowed(err):
 			ctx.Error(http.StatusUnprocessableEntity, "", ctx.Tr("user.form.name_chars_not_allowed", newName))
+		case errors.Is(err, util.ErrPermissionDenied):
+			ctx.Error(http.StatusForbidden, "", err)
 		default:
 			ctx.ServerError("ChangeUserName", err)
 		}

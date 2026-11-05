@@ -447,6 +447,11 @@ func ActionTransfer(accept bool) func(ctx *context.Context) {
 			ctx.Error(http.StatusForbidden, err.Error())
 			return
 		}
+		if errors.Is(err, util.ErrPermissionDenied) {
+			ctx.Flash.Error(ctx.Tr("settings.credential_not_own_act"))
+			ctx.Redirect(ctx.Repo.RepoLink)
+			return
+		}
 		if err != nil {
 			ctx.ServerError(fmt.Sprintf("Action (%s)", action), err)
 			return

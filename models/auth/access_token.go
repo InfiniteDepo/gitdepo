@@ -142,8 +142,13 @@ func init() {
 	})
 }
 
-// NewAccessToken creates a new access token limited to the given repositories, and records it in the audit log.
+// NewAccessToken creates a new access token limited to the given repositories, and records it in the audit log. A
+// token acts as its owner, so creating one for someone else (an admin for a user, or an organization, project or
+// repository token) is only a person's own act.
 func NewAccessToken(ctx context.Context, t *AccessToken, resources []*AccessTokenResourceRepo) error {
+	if err := checkMintIsOwnAct(ctx, t); err != nil {
+		return err
+	}
 	generateAccessToken(t)
 	return db.WithTx(ctx, func(ctx context.Context) error {
 		if _, err := db.GetEngine(ctx).Insert(t); err != nil {
@@ -372,9 +377,22 @@ func DeleteAccessTokenByID(ctx context.Context, id, userID int64) error {
 	})
 }
 
+// checkMintIsOwnAct refuses a new secret of t (see NewAccessToken) unless it is the owner's request for themselves or
+// a person's own act.
+func checkMintIsOwnAct(ctx context.Context, t *AccessToken) error {
+	if t.IsOwnedByUser() {
+		return audit_model.CheckOwnActFor(ctx, t.UID)
+	}
+	return audit_model.CheckOwnAct(ctx)
+}
+
 // RegenerateAccessTokenByID regenerates access token by given ID.
-// It regenerates token and salt, as well as updates the creation time.
+// It regenerates token and salt, as well as updates the creation time. Like NewAccessToken, doing it for someone
+// else is only a person's own act.
 func RegenerateAccessTokenByID(ctx context.Context, id, userID int64) (*AccessToken, error) {
+	if err := audit_model.CheckOwnActFor(ctx, userID); err != nil {
+		return nil, err
+	}
 	t := &AccessToken{}
 	return t, db.WithTx(ctx, func(ctx context.Context) error {
 		found, err := db.GetEngine(ctx).Where("id = ? AND uid = ?", id, userID).Get(t)

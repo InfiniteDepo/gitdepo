@@ -4,9 +4,11 @@
 package auth_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	"forgejo.org/models/unittest"
@@ -16,13 +18,46 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// sysCtx is the server acting by itself, which may create tokens for anyone
+func sysCtx() context.Context { return audit_model.WithSystem(db.DefaultContext, "test") }
+
+// A token acts as its owner, so a token (or a new secret) for someone else is only a person's own act; a user's
+// request for themselves is unchanged.
+func TestNewAccessTokenOwnAct(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	actor := func(uid int64, credential string, sudoBy int64) context.Context {
+		a := &audit_model.Actor{Type: audit_model.ActorUser, ID: uid, Name: "u", Credential: audit_model.Credential{Type: credential}}
+		if sudoBy != 0 {
+			a.SetSudo(sudoBy, "admin")
+		}
+		return audit_model.WithActor(db.DefaultContext, a)
+	}
+	adminGrant := actor(1, audit_model.CredentialOAuth2Grant, 0)
+	for name, ctx := range map[string]context.Context{
+		"grant":       adminGrant,
+		"integration": actor(1, audit_model.CredentialAuthorizedIntegration, 0),
+		"sudo":        actor(3, audit_model.CredentialAccessToken, 1),
+		"no actor":    db.DefaultContext,
+	} {
+		require.ErrorIs(t, auth_model.NewAccessToken(ctx, &auth_model.AccessToken{UID: 3, Name: "minted " + name}, nil), audit_model.ErrNotOwnAct, name)
+		_, err := auth_model.RegenerateAccessTokenByID(ctx, 1, 2) // user 2's token: someone else's for every actor here
+		require.ErrorIs(t, err, audit_model.ErrNotOwnAct, name)
+		require.ErrorIs(t, auth_model.NewAccessToken(ctx, &auth_model.AccessToken{OwnerType: auth_model.AccessTokenOwnerOrg, OwnerID: 3, Name: "org " + name}, nil), audit_model.ErrNotOwnAct, name)
+	}
+	unittest.AssertNotExistsBean(t, &auth_model.AccessToken{UID: 3, Name: "minted grant"})
+
+	require.NoError(t, auth_model.NewAccessToken(actor(3, audit_model.CredentialOAuth2Grant, 0), &auth_model.AccessToken{UID: 3, Name: "for themselves"}, nil))
+	require.NoError(t, auth_model.NewAccessToken(actor(1, audit_model.CredentialSession, 0), &auth_model.AccessToken{UID: 3, Name: "admin's own act"}, nil))
+	require.NoError(t, auth_model.NewAccessToken(audit_model.WithCLI(db.DefaultContext), &auth_model.AccessToken{UID: 3, Name: "cli"}, nil))
+}
+
 func TestNewAccessToken(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	token := &auth_model.AccessToken{
 		UID:  3,
 		Name: "Token C",
 	}
-	require.NoError(t, auth_model.NewAccessToken(db.DefaultContext, token, nil))
+	require.NoError(t, auth_model.NewAccessToken(sysCtx(), token, nil))
 	unittest.AssertExistsAndLoadBean(t, token)
 
 	invalidToken := &auth_model.AccessToken{
@@ -30,7 +65,7 @@ func TestNewAccessToken(t *testing.T) {
 		UID:  2,
 		Name: "Token F",
 	}
-	require.Error(t, auth_model.NewAccessToken(db.DefaultContext, invalidToken, nil))
+	require.Error(t, auth_model.NewAccessToken(sysCtx(), invalidToken, nil))
 }
 
 func TestAccessTokenByNameExists(t *testing.T) {
@@ -48,7 +83,7 @@ func TestAccessTokenByNameExists(t *testing.T) {
 	assert.False(t, exist)
 
 	// Save it to the database
-	require.NoError(t, auth_model.NewAccessToken(db.DefaultContext, token, nil))
+	require.NoError(t, auth_model.NewAccessToken(sysCtx(), token, nil))
 	unittest.AssertExistsAndLoadBean(t, token)
 
 	// This token must be found by name in the DB now
@@ -105,7 +140,7 @@ func TestGetAccessTokenBySHAExpired(t *testing.T) {
 
 	t.Run("not cached", func(t *testing.T) {
 		token := &auth_model.AccessToken{UID: 2, Name: "expired", ExpiresUnix: timeutil.TimeStampNow().Add(-1)}
-		require.NoError(t, auth_model.NewAccessToken(db.DefaultContext, token, nil))
+		require.NoError(t, auth_model.NewAccessToken(sysCtx(), token, nil))
 
 		_, err := auth_model.GetAccessTokenBySHA(db.DefaultContext, token.Token)
 		assert.True(t, auth_model.IsErrAccessTokenExpired(err))
@@ -113,7 +148,7 @@ func TestGetAccessTokenBySHAExpired(t *testing.T) {
 
 	t.Run("not yet expired", func(t *testing.T) {
 		token := &auth_model.AccessToken{UID: 2, Name: "valid", ExpiresUnix: timeutil.TimeStampNow().Add(3600)}
-		require.NoError(t, auth_model.NewAccessToken(db.DefaultContext, token, nil))
+		require.NoError(t, auth_model.NewAccessToken(sysCtx(), token, nil))
 
 		_, err := auth_model.GetAccessTokenBySHA(db.DefaultContext, token.Token)
 		require.NoError(t, err)
@@ -177,7 +212,7 @@ func TestRegenerateAccessTokenByID(t *testing.T) {
 	token, err := auth_model.GetAccessTokenBySHA(db.DefaultContext, "4c6f36e6cf498e2a448662f915d932c09c5a146c")
 	require.NoError(t, err)
 
-	newToken, err := auth_model.RegenerateAccessTokenByID(db.DefaultContext, token.ID, 1)
+	newToken, err := auth_model.RegenerateAccessTokenByID(sysCtx(), token.ID, 1)
 	require.NoError(t, err)
 	unittest.AssertNotExistsBean(t, &auth_model.AccessToken{ID: token.ID, UID: token.UID, TokenHash: token.TokenHash})
 	newToken = &auth_model.AccessToken{

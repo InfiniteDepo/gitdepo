@@ -149,6 +149,15 @@ func CheckOwnAct(ctx context.Context) error {
 	return nil
 }
 
+// CheckOwnActFor is CheckOwnAct for an act that gives user uid a credential or a privilege: a user acting for
+// themselves (no sudo) is left as before, anyone else acting for uid needs an own act.
+func CheckOwnActFor(ctx context.Context, uid int64) error {
+	if a := ActorFromContext(ctx); a != nil && a.Type == ActorUser && a.ID == uid && a.SudoByID == 0 {
+		return nil
+	}
+	return CheckOwnAct(ctx)
+}
+
 // SystemActor is the server doing work by itself, e.g. "cron:<task>", "mirror:<repo id>", "install".
 func SystemActor(name string) *Actor {
 	return &Actor{Type: ActorSystem, Name: name, Credential: Credential{Type: CredentialSystem}}

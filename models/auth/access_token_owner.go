@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	"forgejo.org/models/perm"
 	"forgejo.org/modules/timeutil"
@@ -277,6 +278,10 @@ func DeleteOwnedAccessToken(ctx context.Context, opts FindOwnedAccessTokensOptio
 // keeping everything else; an expired token may be rotated. oldHash, when set, must still be the token's hash (a
 // token rotating itself). rotatedByID is the user who rotated it, or the token's own identity.
 func RotateOwnedAccessToken(ctx context.Context, opts FindOwnedAccessTokensOptions, id int64, oldHash string, expires timeutil.TimeStamp, rotatedByID int64) (*AccessToken, error) {
+	// a new secret, as in NewAccessToken; a token rotating itself acts with its own credential
+	if err := audit_model.CheckOwnAct(ctx); err != nil {
+		return nil, err
+	}
 	t := &AccessToken{}
 	return t, db.WithTx(ctx, func(ctx context.Context) error {
 		if has, err := db.GetEngine(ctx).Where(opts.ToConds()).And("id = ?", id).Get(t); err != nil {

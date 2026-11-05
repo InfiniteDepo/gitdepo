@@ -32,7 +32,7 @@ func TestAdminUserTokens(t *testing.T) {
 	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		f, _ := prepareRepoGroupGit(t)
 		admin := loginUser(t, "user1")
-		ctx := db.DefaultContext
+		ctx := audit_model.WithSystem(db.DefaultContext, "test") // creates fixture tokens for other users
 
 		tokensURL := func(uid int64, rest string) string { return fmt.Sprintf("/admin/users/%d/tokens/%s", uid, rest) }
 		editURL := func(uid int64) string { return fmt.Sprintf("/admin/users/%d/edit", uid) }

@@ -4,6 +4,7 @@
 package user
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -150,7 +151,7 @@ func TestDeleteUserCleansUpRepoSpecificAPIAccess(t *testing.T) {
 		Scope:            auth_model.AccessTokenScopeReadRepository,
 		ResourceAllRepos: false,
 	}
-	require.NoError(t, auth_model.NewAccessToken(t.Context(), accessToken, nil))
+	require.NoError(t, auth_model.NewAccessToken(ownCtx(), accessToken, nil))
 	resRepo1 := &auth_model.AccessTokenResourceRepo{
 		RepoID: 2,
 	}
@@ -251,14 +252,14 @@ func TestRenameUser(t *testing.T) {
 	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 21})
 
 	t.Run("Same username", func(t *testing.T) {
-		require.NoError(t, RenameUser(db.DefaultContext, user, user.Name))
+		require.NoError(t, RenameUser(ownCtx(), user, user.Name))
 	})
 
 	t.Run("Non usable username", func(t *testing.T) {
 		usernames := []string{"--diff", ".well-known", "gitea-actions", "aaa.atom", "aa.png"}
 		for _, username := range usernames {
 			require.Error(t, user_model.IsUsableUsername(username), "non-usable username: %s", username)
-			require.Error(t, RenameUser(db.DefaultContext, user, username), "non-usable username: %s", username)
+			require.Error(t, RenameUser(ownCtx(), user, username), "non-usable username: %s", username)
 		}
 	})
 
@@ -267,7 +268,7 @@ func TestRenameUser(t *testing.T) {
 		unittest.AssertNotExistsBean(t, &user_model.User{ID: user.ID, Name: caps})
 		unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{OwnerID: user.ID, OwnerName: user.Name})
 
-		require.NoError(t, RenameUser(db.DefaultContext, user, caps))
+		require.NoError(t, RenameUser(ownCtx(), user, caps))
 
 		unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: user.ID, Name: caps})
 		unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{OwnerID: user.ID, OwnerName: caps})
@@ -276,17 +277,25 @@ func TestRenameUser(t *testing.T) {
 	t.Run("Already exists", func(t *testing.T) {
 		existUser := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
 
-		require.ErrorIs(t, RenameUser(db.DefaultContext, user, existUser.Name), user_model.ErrUserAlreadyExist{Name: existUser.Name})
-		require.ErrorIs(t, RenameUser(db.DefaultContext, user, existUser.LowerName), user_model.ErrUserAlreadyExist{Name: existUser.LowerName})
+		require.ErrorIs(t, RenameUser(ownCtx(), user, existUser.Name), user_model.ErrUserAlreadyExist{Name: existUser.Name})
+		require.ErrorIs(t, RenameUser(ownCtx(), user, existUser.LowerName), user_model.ErrUserAlreadyExist{Name: existUser.LowerName})
 		newUsername := fmt.Sprintf("uSEr%d", existUser.ID)
-		require.ErrorIs(t, RenameUser(db.DefaultContext, user, newUsername), user_model.ErrUserAlreadyExist{Name: newUsername})
+		require.ErrorIs(t, RenameUser(ownCtx(), user, newUsername), user_model.ErrUserAlreadyExist{Name: newUsername})
+	})
+
+	t.Run("Not an own act", func(t *testing.T) {
+		grant := audit_model.WithActor(db.DefaultContext, &audit_model.Actor{Type: audit_model.ActorUser, ID: 1, Name: "user1", Credential: audit_model.Credential{Type: audit_model.CredentialOAuth2Grant}})
+		require.ErrorIs(t, AdminRenameUser(grant, user, "renamed-by-grant"), audit_model.ErrNotOwnAct)
+		require.ErrorIs(t, RenameUser(grant, user, "renamed-by-grant"), audit_model.ErrNotOwnAct)
+		unittest.AssertNotExistsBean(t, &user_model.User{LowerName: "renamed-by-grant"})
+		require.NoError(t, RenameUser(grant, user, strings.ToUpper(user.Name)), "only the case")
 	})
 
 	t.Run("Normal", func(t *testing.T) {
 		oldUsername := user.Name
 		newUsername := "User_Rename"
 
-		require.NoError(t, RenameUser(db.DefaultContext, user, newUsername))
+		require.NoError(t, RenameUser(ownCtx(), user, newUsername))
 		unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: user.ID, Name: newUsername, LowerName: strings.ToLower(newUsername)})
 
 		redirectUID, err := redirect_service.LookupUserRedirect(db.DefaultContext, user, oldUsername)
@@ -303,18 +312,18 @@ func TestRenameUser(t *testing.T) {
 
 		setting.Service.MaxUserRedirects = 1
 
-		require.NoError(t, RenameUser(db.DefaultContext, user, "redirect-1"))
+		require.NoError(t, RenameUser(ownCtx(), user, "redirect-1"))
 		unittest.AssertExistsIf(t, true, &user_model.Redirect{LowerName: "user_rename"})
 
 		// The granularity of created_unix is a second.
 		test.SleepTillNextSecond()
-		require.NoError(t, RenameUser(db.DefaultContext, user, "redirect-2"))
+		require.NoError(t, RenameUser(ownCtx(), user, "redirect-2"))
 		unittest.AssertExistsIf(t, false, &user_model.Redirect{LowerName: "user_rename"})
 		unittest.AssertExistsIf(t, true, &user_model.Redirect{LowerName: "redirect-1"})
 
 		setting.Service.MaxUserRedirects = 2
 		test.SleepTillNextSecond()
-		require.NoError(t, RenameUser(db.DefaultContext, user, "redirect-3"))
+		require.NoError(t, RenameUser(ownCtx(), user, "redirect-3"))
 		unittest.AssertExistsIf(t, true, &user_model.Redirect{LowerName: "redirect-1"})
 		unittest.AssertExistsIf(t, true, &user_model.Redirect{LowerName: "redirect-2"})
 	})
@@ -326,7 +335,7 @@ func TestRenameUser(t *testing.T) {
 		assert.True(t, user.IsOAuth2())
 
 		t.Run("Allowed", func(t *testing.T) {
-			require.NoError(t, RenameUser(t.Context(), user, "I-am-a-local-username"))
+			require.NoError(t, RenameUser(ownCtx(), user, "I-am-a-local-username"))
 		})
 
 		t.Run("Not allowed", func(t *testing.T) {
@@ -336,9 +345,9 @@ func TestRenameUser(t *testing.T) {
 			_, err := db.GetEngine(t.Context()).Cols("cfg").ID(authSource.ID).Update(authSource)
 			require.NoError(t, err)
 
-			require.ErrorIs(t, RenameUser(t.Context(), user, "Another-username-change"), user_model.ErrUserIsNotLocal{UID: user.ID, Name: user.Name})
+			require.ErrorIs(t, RenameUser(ownCtx(), user, "Another-username-change"), user_model.ErrUserIsNotLocal{UID: user.ID, Name: user.Name})
 			t.Run("Admin", func(t *testing.T) {
-				require.NoError(t, AdminRenameUser(t.Context(), user, "Another-username-change"))
+				require.NoError(t, AdminRenameUser(ownCtx(), user, "Another-username-change"))
 			})
 		})
 	})
@@ -523,4 +532,9 @@ func TestLastUsableAdmin(t *testing.T) {
 		require.NoError(t, DeleteUser(ctx, u, false))
 		unittest.AssertNotExistsBean(t, &user_model.User{ID: 8})
 	})
+}
+
+// ownCtx is a request of the site admin with a credential of their own (a session).
+func ownCtx() context.Context {
+	return audit_model.WithActor(db.DefaultContext, &audit_model.Actor{Type: audit_model.ActorUser, ID: 1, Name: "user1", Credential: audit_model.Credential{Type: audit_model.CredentialSession}})
 }

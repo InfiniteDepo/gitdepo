@@ -15,6 +15,7 @@ import (
 	"time"
 
 	actions_model "forgejo.org/models/actions"
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
@@ -141,7 +142,7 @@ func TestAccessTokenScopePolicyWeb(t *testing.T) {
 	t.Run("regenerate is not checked", func(t *testing.T) {
 		// A token that breaks the policy, created before it was set.
 		old := &auth_model.AccessToken{UID: 2, Name: "pre-policy", Scope: auth_model.AccessTokenScopeReadIssue, ResourceAllRepos: true}
-		require.NoError(t, auth_model.NewAccessToken(t.Context(), old, nil))
+		require.NoError(t, auth_model.NewAccessToken(audit_model.WithSystem(t.Context(), "test"), old, nil))
 
 		session := loginUser(t, "user2")
 		req := NewRequestWithValues(t, "POST", "/user/settings/keys/tokens/regenerate", map[string]string{"id": fmt.Sprint(old.ID)})

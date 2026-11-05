@@ -428,6 +428,12 @@ func EditUserPost(ctx *context.Context) {
 			sizeLimit = mib << 20
 		}
 	}
+	// refused before anything below is written
+	if err := user_service.CheckEditIsOwnAct(ctx, u, &user_service.UpdateAuthOptions{Password: optional.FromNonDefault(form.Password)},
+		&user_service.UpdateOptions{IsAdmin: optional.Some(form.Admin)}); err != nil {
+		ctx.RenderWithErr(ctx.Tr("settings.credential_not_own_act"), tplUserEdit, &form)
+		return
+	}
 
 	if form.UserName != "" {
 		if err := user_service.AdminRenameUser(ctx, u, form.UserName); err != nil {
@@ -447,6 +453,9 @@ func EditUserPost(ctx *context.Context) {
 			case db.IsErrNameCharsNotAllowed(err):
 				ctx.Data["Err_UserName"] = true
 				ctx.RenderWithErr(ctx.Tr("user.form.name_chars_not_allowed", form.UserName), tplUserEdit, &form)
+			case errors.Is(err, util.ErrPermissionDenied):
+				ctx.Data["Err_UserName"] = true
+				ctx.RenderWithErr(ctx.Tr("settings.credential_not_own_act"), tplUserEdit, &form)
 			default:
 				ctx.ServerError("RenameUser", err)
 			}

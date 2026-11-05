@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	audit_model "forgejo.org/models/audit"
 	org_model "forgejo.org/models/organization"
 	access_model "forgejo.org/models/perm/access"
 	repo_model "forgejo.org/models/repo"
@@ -151,14 +152,20 @@ func LoadRepoCommit(t *testing.T, ctx gocontext.Context) {
 	}
 }
 
-// LoadUser load a user into a test context
+// LoadUser load a user into a test context, with the audit actor a request of theirs would have (a session on the
+// web, an access token on the API)
 func LoadUser(t *testing.T, ctx gocontext.Context, userID int64) {
 	doer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: userID})
+	actor := func(credential string) *audit_model.Actor {
+		return &audit_model.Actor{Type: audit_model.ActorUser, ID: doer.ID, Name: doer.Name, Credential: audit_model.Credential{Type: credential}}
+	}
 	switch ctx := ctx.(type) {
 	case *context.Context:
 		ctx.Doer = doer
+		ctx.AppendContextValue(audit_model.ActorContextKey, actor(audit_model.CredentialSession))
 	case *context.APIContext:
 		ctx.SetDoer(doer)
+		ctx.AppendContextValue(audit_model.ActorContextKey, actor(audit_model.CredentialAccessToken))
 	default:
 		assert.FailNow(t, "context is not *context.Context or *context.APIContext")
 	}

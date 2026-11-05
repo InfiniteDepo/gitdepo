@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"testing"
 
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	"forgejo.org/models/organization"
@@ -113,7 +114,7 @@ func TestBitbucketOrigin(t *testing.T) {
 	t.Run("a transfer keeps the row", func(t *testing.T) {
 		require.NoError(t, db.Insert(ctx, &repo_model.BitbucketOrigin{RepoID: 1, ProjectKey: "WEB", Slug: "site", Server: "https://bb.example.com/bitbucket"}))
 		user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
-		require.NoError(t, repo_service.TransferOwnership(ctx, user2, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3}), unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1}), nil))
+		require.NoError(t, repo_service.TransferOwnership(audit_model.WithSystem(ctx, "test"), user2, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3}), unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1}), nil))
 		repos, _, err := repo_model.SearchRepositoryByName(ctx, &repo_model.SearchRepoOptions{Keyword: "WEB/site", Actor: user2, Private: true})
 		require.NoError(t, err)
 		require.Len(t, repos, 1)
