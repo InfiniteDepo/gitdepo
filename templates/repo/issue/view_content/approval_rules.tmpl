@@ -13,7 +13,7 @@
 						{{if .Satisfied}}{{svg "octicon-check"}}{{else}}{{svg "octicon-x"}}{{end}}
 						{{ctx.Locale.Tr "repo.pulls.approval_rule_status" .Name .Granted .Required}}
 						{{if .UncoveredFiles}}{{ctx.Locale.TrPluralString .UncoveredFiles "repo.pulls.approval_rule_uncovered" .UncoveredFiles}}{{end}}
-						{{if $.ApprovalRuleEligible}}{{with index $.ApprovalRuleEligible .Rule.ID}}<span class="text grey">{{ctx.Locale.Tr "repo.pulls.approval_rule_eligible" .}}</span>{{end}}{{end}}
+						{{if .CanApprove}}<span class="text grey">{{ctx.Locale.Tr "repo.pulls.approval_rule_eligible" (StringUtils.Join .CanApprove ", ")}}</span>{{end}}
 						{{if .Approvers}}<span class="text grey">({{range $i, $u := .Approvers}}{{if $i}}, {{end}}{{$u.Name}}{{end}})</span>{{end}}
 					</div>
 					{{if .CodeOwnersErrorLine}}

@@ -78,9 +78,11 @@ type Row struct {
 	AccessToken  *auth_model.AccessToken // a token of the repository, its project or its organization
 	Team         *organization.Team      // a team shown as one row, for viewers outside the org
 	OrgMember    bool                    // the user is a member of the repository's owner org
-	Repo         *repo_model.Repository
-	Perm         access_model.Permission
-	Paths        []*Path
+	// TwoFactorBlocked is set under Options.IgnoreTwoFactor for a user the owner's two-factor requirement blocks.
+	TwoFactorBlocked bool
+	Repo             *repo_model.Repository
+	Perm             access_model.Permission
+	Paths            []*Path
 }
 
 // Options selects what Compute reports.
@@ -93,6 +95,9 @@ type Options struct {
 	// Outsider computes for a viewer outside the owner org: users as if they were in no team and in no org, and
 	// one row per team instead of its members.
 	Outsider bool
+	// IgnoreTwoFactor computes the access users have when the owner's two-factor requirement doesn't apply to them,
+	// and marks the rows it would have changed (Row.TwoFactorBlocked).
+	IgnoreTwoFactor bool
 }
 
 type key struct{ a, b int64 }
@@ -111,6 +116,7 @@ type data struct {
 	groups      map[key][]*Group     // (team, uid)
 	roleUsers   []int64              // site admins and auditors
 	twoFactor   container.Set[int64] // users with 2FA, loaded only when an owner requires it
+	ignore2FA   bool                 // Options.IgnoreTwoFactor
 }
 
 // Compute returns the access rows of the repositories: one per user who has a path to the repository, the
@@ -158,6 +164,7 @@ func Compute(ctx context.Context, opts Options) ([]*Row, error) {
 				continue
 			}
 			row := &Row{User: u, Repo: repo, Perm: d.permission(repo, u), Paths: d.paths(repo, u), OrgMember: d.orgMember[key{repo.OwnerID, u.ID}]}
+			row.TwoFactorBlocked = opts.IgnoreTwoFactor && d.blockedByTwoFactor(owner, u)
 			if len(row.Paths) == 0 {
 				continue
 			}
@@ -275,7 +282,8 @@ func (d *data) pseudoRows(repo *repo_model.Repository, owner *user_model.User) [
 func load(ctx context.Context, repos repo_model.RepositoryList, opts Options) (*data, error) {
 	e := db.GetEngine(ctx)
 	d := &data{
-		owners: map[int64]*user_model.User{}, users: map[int64]*user_model.User{},
+		ignore2FA: opts.IgnoreTwoFactor,
+		owners:    map[int64]*user_model.User{}, users: map[int64]*user_model.User{},
 		collab: map[key]perm_model.AccessMode{}, access: map[key]perm_model.AccessMode{}, orgMember: map[key]bool{},
 		teams: map[int64]*organization.Team{}, repoTeams: map[int64][]int64{}, teamMembers: map[int64][]int64{},
 		userTeams: map[key]bool{}, groups: map[key][]*Group{},
@@ -443,6 +451,10 @@ func load(ctx context.Context, repos repo_model.RepositoryList, opts Options) (*
 
 // twoFactorBlocked is user_model.User.TwoFactorBlocked.
 func (d *data) twoFactorBlocked(owner, u *user_model.User) bool {
+	return !d.ignore2FA && d.blockedByTwoFactor(owner, u)
+}
+
+func (d *data) blockedByTwoFactor(owner, u *user_model.User) bool {
 	return owner.IsOrganization() && owner.RequireTwoFactor && !u.IsAdmin && u.ID > 0 && !d.twoFactor.Contains(u.ID)
 }
 

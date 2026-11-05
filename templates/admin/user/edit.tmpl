@@ -9,7 +9,7 @@
 				<div class="header">{{ctx.Locale.Tr "admin.users.last_approver_header" (ctx.Locale.TrString "admin.users.is_activated") (ctx.Locale.TrString "admin.users.prohibit_login")}}</div>
 				<ul class="tw-m-0">
 					{{range .LastApproverWarnings}}
-						<li><a href="{{.Link}}">{{.Name}}</a> ({{.Kind}})</li>
+						<li><a href="{{.Link}}">{{.Text}}</a> ({{.Kind}})</li>
 					{{end}}
 				</ul>
 			</div>

@@ -603,7 +603,7 @@ func TestPullRequest_LoadHeadRepoTrashed(t *testing.T) {
 
 func parseCodeOwnersText(t *testing.T, text string) *issues_model.CodeOwners {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	return issues_model.ParseCodeOwners(t.Context(), io.NopCloser(strings.NewReader(text)), false)
+	return issues_model.ParseCodeOwners(t.Context(), 0, io.NopCloser(strings.NewReader(text)), false)
 }
 
 func TestParseCodeOwnersSections(t *testing.T) {
@@ -687,4 +687,26 @@ func TestParseCodeOwnersNoHeaders(t *testing.T) {
 	assert.Zero(t, owners.ErrorLine)
 	assert.Equal(t, []string{"Line: 2: incorrect format", "Line: 3: incorrect codeowner user: nobody"}, owners.Warnings)
 	assert.True(t, owners.Rules[1].Negative)
+}
+
+// A team resolves only within the organization that owns the repository, so a team of another organization is as
+// unknown as one that doesn't exist or lives in an organization that doesn't: the same line, the same warning.
+func TestParseCodeOwnersForeignTeamLooksMissing(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	parse := func(ownerID int64, text string) *issues_model.CodeOwners {
+		return issues_model.ParseCodeOwners(t.Context(), ownerID, io.NopCloser(strings.NewReader(text)), false)
+	}
+	// user2 owns the repository: org3/team1 exists, org3/ghost doesn't, nosuchorg doesn't either
+	for _, team := range []string{"org3/team1", "org3/ghost", "nosuchorg/team1"} {
+		owners := parse(2, "a/.* @user2 @"+team+"\n")
+		require.Len(t, owners.Rules, 1, team)
+		assert.Empty(t, owners.Rules[0].Teams, team)
+		assert.Equal(t, []string{"Line: 1: incorrect codeowner team: " + team}, owners.Warnings, team)
+	}
+	// org3 owns it: its own team resolves, a missing one is warned about the same way
+	owners := parse(3, "a/.* @user2 @org3/team1 @org3/ghost @org2/team1\n")
+	require.Len(t, owners.Rules, 1)
+	require.Len(t, owners.Rules[0].Teams, 1)
+	assert.EqualValues(t, 2, owners.Rules[0].Teams[0].ID)
+	assert.Equal(t, []string{"Line: 1: incorrect codeowner team: org3/ghost", "Line: 1: incorrect codeowner team: org2/team1"}, owners.Warnings)
 }

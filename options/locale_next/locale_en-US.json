@@ -1856,7 +1856,6 @@
 	"repo.codeowners.more": "and more that are not shown",
 	"repo.codeowners.owner_neutral": "%s can't approve",
 	"repo.codeowners.owner_reason": "%s can't approve (%s)",
-	"repo.codeowners.team_foreign": "%s can't approve: a team of another organization has no access here",
 	"repo.codeowners.team_none": "No member of %s can approve",
 	"repo.codeowners.team_only": {
 		"one": "Only %[2]d member of %[1]s can approve",
@@ -1868,6 +1867,7 @@
 	"repo.codeowners.reason_two_factor": "blocked by the organization's two-factor requirement",
 	"repo.settings.rule_warnings_header": "This rule can block merges:",
 	"repo.settings.rule_warnings_todo": "To fix it, add owners or approvers who can approve, give the listed people write access again, or lower the number of approvals.",
+	"repo.settings.rule_codeowners_capped": "CODEOWNERS is not checked: it names more people and teams than one check looks at.",
 	"repo.settings.rule_codeowners_skipped": "CODEOWNERS is not checked for a rule with a pattern in its name. Open the CODEOWNERS file of a matching branch to see the owners who can't approve.",
 	"repo.settings.rule_warning_approvers_needs": {
 		"one": "Approval rule %s needs %d approval.",
@@ -1879,10 +1879,11 @@
 	},
 	"repo.settings.rule_warning_approvers_none": "Nobody can approve.",
 	"repo.settings.rule_warning_write_unchecked": "(Write access was not checked: the rule covers too many repositories.)",
-	"repo.settings.rule_warning_owner_line": "CODEOWNERS line %d has no owner who can approve, so changes to its files can't be merged under a code owner rule.",
+	"repo.settings.rule_warning_line_link": "CODEOWNERS line %d",
+	"repo.settings.rule_warning_owner_line": "no owner who can approve, so changes to its files can't be merged under a code owner rule.",
 	"repo.settings.rule_warning_owner_section": {
-		"one": "CODEOWNERS section %[1]s needs %[2]d approval; see line %[3]d.",
-		"other": "CODEOWNERS section %[1]s needs %[2]d approvals; see line %[3]d."
+		"one": "section %[1]s needs %[2]d approval.",
+		"other": "section %[1]s needs %[2]d approvals."
 	},
 	"repo.settings.rule_warning_section_only": {
 		"one": "Only %d owner can approve there.",
@@ -1890,6 +1891,10 @@
 	},
 	"admin.users.last_approver_header": "Turning off \"%s\" or turning on \"%s\" leaves these without enough approvers:",
 	"admin.users.last_approver_flash": "This account can no longer approve. These now lack approvers:",
+	"admin.users.last_approver_item": "Approval rule %[1]s of branch rule %[2]s in %[3]s",
+	"admin.users.last_approver_kind_repo_rule": "Repository approval rule",
+	"admin.users.last_approver_kind_project_rule": "Project approval rule",
+	"admin.users.last_approver_kind_org_rule": "Organization approval rule",
 	"admin.users.last_approver_more": "and %d more",
 	"repo.pulls.approval_rule_eligible": "Can approve: %s",
 	"repo.pulls.codeowners_error": "<a href=\"%s\">CODEOWNERS on %s</a> has an error on line %d, which blocks the merge. A section header needs the form <code>[Name]</code> or <code>[Name][N]</code>; to write a pattern that starts with <code>[</code>, escape it as <code>\\[</code>.",

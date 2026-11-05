@@ -29,8 +29,8 @@
 					{{range .Warnings}}
 						<li>
 							{{if eq .Kind "approvers_short"}}{{ctx.Locale.TrPluralString .Required "repo.settings.rule_warning_approvers_needs" .Name .Required}} {{if .Eligible}}{{ctx.Locale.TrPluralString .Eligible "repo.settings.rule_warning_approvers_only" .Eligible}}{{else}}{{ctx.Locale.Tr "repo.settings.rule_warning_approvers_none"}}{{end}}{{if .WriteUnchecked}} {{ctx.Locale.Tr "repo.settings.rule_warning_write_unchecked"}}{{end}}
-							{{else if eq .Kind "owner_line"}}<a href="{{.Link}}">{{ctx.Locale.Tr "repo.settings.rule_warning_owner_line" .Line}}</a>
-							{{else}}<a href="{{.Link}}">{{ctx.Locale.TrPluralString .Required "repo.settings.rule_warning_owner_section" .Name .Required .Line}}</a> {{ctx.Locale.TrPluralString .Eligible "repo.settings.rule_warning_section_only" .Eligible}}{{end}}
+							{{else if eq .Kind "owner_line"}}<a href="{{.Link}}">{{ctx.Locale.Tr "repo.settings.rule_warning_line_link" .Line}}</a>: {{ctx.Locale.Tr "repo.settings.rule_warning_owner_line"}}
+							{{else}}<a href="{{.Link}}">{{ctx.Locale.Tr "repo.settings.rule_warning_line_link" .Line}}</a>: {{ctx.Locale.TrPluralString .Required "repo.settings.rule_warning_owner_section" .Name .Required}} {{ctx.Locale.TrPluralString .Eligible "repo.settings.rule_warning_section_only" .Eligible}}{{end}}
 							{{if .Owners}}<span class="text grey">({{range $i, $m := .Owners}}{{if $i}}; {{end}}{{$m.Text ctx.Locale}}{{end}})</span>{{end}}
 						</li>
 					{{end}}
@@ -38,6 +38,9 @@
 				</ul>
 				<p class="tw-mb-0 tw-mt-2 tw-text-left">{{ctx.Locale.Tr "repo.settings.rule_warnings_todo"}}</p>
 			</div>
+			{{end}}
+			{{if .CodeOwnersCapped}}
+			<div class="ui attached info message">{{ctx.Locale.Tr "repo.settings.rule_codeowners_capped"}}</div>
 			{{end}}
 			{{if .CodeOwnersSkipped}}
 			<div class="ui attached info message">{{ctx.Locale.Tr "repo.settings.rule_codeowners_skipped"}}</div>

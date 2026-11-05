@@ -26,7 +26,7 @@ type ReviewRequestNotifier struct {
 }
 
 // LoadCodeOwnerRules reads the CODEOWNERS file of the commit. truncated is true when the file is too big and was only read in part.
-func LoadCodeOwnerRules(ctx context.Context, commit *git.Commit) (owners *issues_model.CodeOwners, truncated bool, err error) {
+func LoadCodeOwnerRules(ctx context.Context, ownerID int64, commit *git.Commit) (owners *issues_model.CodeOwners, truncated bool, err error) {
 	for _, file := range []string{"CODEOWNERS", "docs/CODEOWNERS", ".gitea/CODEOWNERS", ".forgejo/CODEOWNERS"} {
 		blob, err := commit.GetBlobByPath(file)
 		if git.IsErrNotExist(err) {
@@ -39,7 +39,7 @@ func LoadCodeOwnerRules(ctx context.Context, commit *git.Commit) (owners *issues
 			return nil, false, err
 		}
 		truncated = size > setting.UI.MaxDisplayFileSize
-		owners = issues_model.ParseCodeOwners(ctx, rc, truncated)
+		owners = issues_model.ParseCodeOwners(ctx, ownerID, rc, truncated)
 		owners.File = file
 		return owners, truncated, nil
 	}
@@ -84,7 +84,7 @@ func PullRequestCodeOwnersReview(ctx context.Context, issue *issues_model.Issue,
 		return nil, err
 	}
 
-	owners, _, _ := LoadCodeOwnerRules(ctx, commit)
+	owners, _, _ := LoadCodeOwnerRules(ctx, pr.BaseRepo.OwnerID, commit)
 	var rules []*issues_model.CodeOwnerRule
 	if owners != nil {
 		rules = owners.Rules

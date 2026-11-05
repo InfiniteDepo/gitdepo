@@ -7,7 +7,9 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,10 +17,15 @@ import (
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
+	"forgejo.org/models/organization"
+	"forgejo.org/models/perm"
+	access_model "forgejo.org/models/perm/access"
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
 	api "forgejo.org/modules/structs"
+	"forgejo.org/modules/test"
+	pull_service "forgejo.org/services/pull"
 	"forgejo.org/tests"
 
 	"github.com/PuerkitoBio/goquery"
@@ -26,7 +33,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// setUserCols changes columns of a user and restores them when the test ends.
+// setUserCols changes columns of a user and puts back their state (active, login allowed) when the test ends.
 func setUserCols(t *testing.T, id int64, change func(*user_model.User), cols ...string) {
 	t.Helper()
 	u := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: id})
@@ -38,6 +45,13 @@ func setUserCols(t *testing.T, id int64, change func(*user_model.User), cols ...
 		u.IsActive, u.ProhibitLogin = old.IsActive, old.ProhibitLogin
 		require.NoError(t, user_model.UpdateUserCols(db.DefaultContext, u, cols...))
 	})
+}
+
+// grantWrite makes the user a collaborator with write access to the repository.
+func grantWrite(t *testing.T, repoID, uid int64) {
+	t.Helper()
+	require.NoError(t, db.Insert(db.DefaultContext, &repo_model.Collaboration{RepoID: repoID, UserID: uid, Mode: perm.AccessModeWrite}))
+	require.NoError(t, db.Insert(db.DefaultContext, &access_model.Access{RepoID: repoID, UserID: uid, Mode: perm.AccessModeWrite}))
 }
 
 func text(doc *HTMLDoc, selector string) string {
@@ -61,13 +75,15 @@ func TestStaleOwners(t *testing.T) {
 		setUserCols(t, 4, func(u *user_model.User) { u.IsActive = false }, "is_active")
 		setUserCols(t, 5, func(u *user_model.User) { u.ProhibitLogin = true }, "prohibit_login")
 		owners := &api.ApprovalRule{Name: "Code owners", RequiredCount: 1, RequireCodeOwners: true}
-		// user4 is inactive, user5 prohibited, user8 can't write; team1 belongs to another organization
-		codeowners := "docs/.* @user4 @user5 @user8 @org3/team1\n[Core][2]\ncore/.* @user4\n"
+		// user4 is inactive, user5 prohibited, user8 can't write; org3/team1 belongs to another organization and
+		// org3/ghost doesn't exist: neither resolves, and the two look the same
+		codeowners := "docs/.* @user4 @user5 @user8 @org3/team1 @org3/ghost\n[Core][2]\ncore/.* @user4\n"
 
 		e.base("so-main", create("CODEOWNERS", codeowners))
 		e.protect("so-main", true, owners)
 		// the approval rule's own list: user10 can't write and appears nowhere in the file
-		require.NoError(t, db.Insert(db.DefaultContext, &git_model.ApprovalRule{ProtectedBranchID: staleRule(t, "so-main").ID, Name: "Leads", RequiredCount: 1, UserIDs: []int64{10}}))
+		// (and user2, who can write, is listed too)
+		require.NoError(t, db.Insert(db.DefaultContext, &git_model.ApprovalRule{ProtectedBranchID: staleRule(t, "so-main").ID, Name: "Leads", RequiredCount: 1, UserIDs: []int64{10, 2}}))
 		index := e.pr("so-main", create("docs/a.md", "a"))
 		anonymous := func(path string) *HTMLDoc {
 			return NewHTMLParser(t, MakeRequest(t, NewRequest(t, "GET", path), http.StatusOK).Body)
@@ -80,8 +96,12 @@ func TestStaleOwners(t *testing.T) {
 			marks := text(doc, ".codeowners-ineligible")
 			assert.Contains(t, marks, "Line 1: user4 can't approve (inactive); user5 can't approve (login prohibited); user8 can't approve (no write access)")
 			assert.Contains(t, marks, "Line 3: user4 can't approve (inactive)")
-			assert.Contains(t, marks, "@team1 can't approve: a team of another organization has no access here")
+			assert.NotContains(t, marks, "team1", "a team of another organization is as unknown as a missing one")
+			assert.NotContains(t, marks, "ghost")
 			assert.NotContains(t, marks, "user2", "the members of a team are not listed")
+			warnings := text(doc, "body")
+			assert.Contains(t, warnings, "incorrect codeowner team: org3/team1")
+			assert.Contains(t, warnings, "incorrect codeowner team: org3/ghost", "the same warning for a team that doesn't exist")
 			href, _ := doc.Find(".codeowners-ineligible a").First().Attr("href")
 			assert.Equal(t, "#L1", href)
 
@@ -105,6 +125,10 @@ func TestStaleOwners(t *testing.T) {
 			assert.Contains(t, box, "user4 can't approve (inactive)")
 			assert.Contains(t, box, "user8 can't approve (no write access)")
 			assert.Contains(t, box, "user10 can't approve (no write access)", "a repository admin sees the rule's listed approvers")
+			// the list of who can approve comes from the same check: nobody marked above is in it
+			can := regexp.MustCompile(`Can approve: (\w+(?:, \w+)*)`).FindStringSubmatch(text(e.mergeBox(e.owner, index), ".merge-section"))
+			require.NotNil(t, can)
+			assert.Equal(t, "user2", strings.TrimSpace(can[1]), "user10 can't approve, so is not listed")
 
 			// every other code reader sees the owners of the file with the neutral mark, and not the rule's list
 			box = text(anonymous(fmt.Sprintf("/user2/repo1/pulls/%d", index)), ".merge-section .codeowners-ineligible")
@@ -136,12 +160,15 @@ func TestStaleOwners(t *testing.T) {
 			warn := text(doc, ".rule-warnings")
 			assert.Contains(t, warn, "This rule can block merges:")
 			assert.Contains(t, warn, "Approval rule Leads needs 2 approvals. Only 1 person can approve. (user4 can't approve (inactive); user5 can't approve (login prohibited))")
-			assert.Contains(t, warn, "CODEOWNERS line 3 has no owner who can approve")
-			assert.Contains(t, warn, "CODEOWNERS section Core needs 2 approvals; see line 4. Only 1 owner can approve there.")
+			assert.Contains(t, warn, "CODEOWNERS line 3: no owner who can approve")
+			assert.Contains(t, warn, "CODEOWNERS line 4: section Core needs 2 approvals. Only 1 owner can approve there.")
 			assert.Contains(t, warn, "To fix it")
 			var hrefs []string
 			doc.Find(".rule-warnings li a").Each(func(_ int, a *goquery.Selection) { href, _ := a.Attr("href"); hrefs = append(hrefs, href) })
 			assert.Contains(t, hrefs, "/user2/repo1/src/branch/so-rule/CODEOWNERS#L3")
+			var linked []string // only the line is the link, not the sentence
+			doc.Find(".rule-warnings li a").Each(func(_ int, a *goquery.Selection) { linked = append(linked, strings.TrimSpace(a.Text())) })
+			assert.Contains(t, linked, "CODEOWNERS line 3")
 
 			// a pattern has no one branch to read: the approval rule is checked, CODEOWNERS isn't, and the page says so
 			e.base("so-none") // before the pattern protects it
@@ -150,7 +177,14 @@ func TestStaleOwners(t *testing.T) {
 			doc = NewHTMLParser(t, resp.Body)
 			assert.Contains(t, text(doc, ".rule-warnings"), "Approval rule Leads")
 			assert.NotContains(t, text(doc, ".rule-warnings"), "CODEOWNERS line")
-			assert.Contains(t, text(doc, ".ui.info.message"), "CODEOWNERS is not checked")
+			assert.Contains(t, text(doc, ".ui.info.message"), "CODEOWNERS is not checked for a rule with a pattern")
+
+			// a file that names more people than one check looks at is not checked either, and the page says so
+			defer test.MockVariableValue(&pull_service.MaxOwnerCandidates, 2)()
+			resp = e.owner.Session.MakeRequest(t, NewRequest(t, "GET", "/user2/repo1/settings/branches/edit?rule_name=so-rule"), http.StatusOK)
+			doc = NewHTMLParser(t, resp.Body)
+			assert.NotContains(t, text(doc, ".rule-warnings"), "CODEOWNERS line")
+			assert.Contains(t, text(doc, ".ui.info.message"), "CODEOWNERS is not checked: it names more people and teams than one check looks at.")
 
 			// no CODEOWNERS file on the branch, no CODEOWNERS warning
 			e.protect("so-none", true, owners)
@@ -160,22 +194,42 @@ func TestStaleOwners(t *testing.T) {
 	})
 }
 
-// A team of the repository owner's organization is one mark with a count, never a list of its members, and a team of
-// another organization is not expanded at all.
+// A team of the repository owner's organization is one mark named org/team, never a list of its members. A code reader
+// sees it only when no member can approve (an empty team too) and never a count; a repository admin also sees how
+// many can when only some can.
 func TestStaleOwnersTeams(t *testing.T) {
 	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		f, pub := prepareRepoGroupGit(t)
 		admin := loginUser(t, "user1")
 		token := getTokenForLoggedInUser(t, admin, auth_model.AccessTokenScopeWriteRepository)
-		// team1 of the organization has user2 (an owner, who can write) and user4 (who can't); team 2 of org 3 is "Owners"
+		// team1 of the organization has user2 (an owner, who can write) and user4 (who can't); "ghosts" has no member
+		require.NoError(t, db.Insert(db.DefaultContext, &organization.Team{OrgID: f.org.ID, Name: "ghosts", LowerName: "ghosts", AccessMode: perm.AccessModeWrite}))
+		ghosts := f.org.Name + "/ghosts"
 		MakeRequest(t, NewRequestWithJSON(t, "POST", "/api/v1/repos/"+f.org.Name+"/pub/contents/CODEOWNERS", &api.CreateFileOptions{
-			ContentBase64: base64.StdEncoding.EncodeToString([]byte("a/.* @" + f.org.Name + "/team1\nb/.* @user10\n")),
+			ContentBase64: base64.StdEncoding.EncodeToString([]byte("a/.* @" + f.org.Name + "/team1\nb/.* @user10\nc/.* @" + ghosts + "\n")),
 		}).AddTokenAuth(token), http.StatusCreated)
-		resp := admin.MakeRequest(t, NewRequest(t, "GET", pub.Link()+"/src/branch/main/CODEOWNERS"), http.StatusOK)
-		marks := text(NewHTMLParser(t, resp.Body), ".codeowners-ineligible")
-		assert.Contains(t, marks, "Only 1 member of @team1 can approve")
+		view := func(s *TestSession) string {
+			var resp *httptest.ResponseRecorder
+			if s == nil {
+				resp = MakeRequest(t, NewRequest(t, "GET", pub.Link()+"/src/branch/main/CODEOWNERS"), http.StatusOK)
+			} else {
+				resp = s.MakeRequest(t, NewRequest(t, "GET", pub.Link()+"/src/branch/main/CODEOWNERS"), http.StatusOK)
+			}
+			assert.NotContains(t, resp.Body.String(), "user4", "no member of a team is named")
+			return text(NewHTMLParser(t, resp.Body), ".codeowners-ineligible")
+		}
+		marks := view(admin)
+		assert.Contains(t, marks, "Only 1 member of "+f.org.Name+"/team1 can approve")
 		assert.Contains(t, marks, "user10 can't approve (no write access)")
-		assert.NotContains(t, resp.Body.String(), "user4", "no member of a team is named")
+		assert.Contains(t, marks, "No member of "+ghosts+" can approve")
+
+		// anyone who can read the code sees the team where nobody can approve, and no count
+		marks = view(nil)
+		assert.NotContains(t, marks, "team1", "someone can approve there")
+		assert.NotContains(t, marks, "Only")
+		assert.Contains(t, marks, "No member of "+ghosts+" can approve")
+		assert.Contains(t, marks, "user10 can't approve")
+		assert.NotContains(t, marks, "(")
 	})
 }
 
@@ -189,19 +243,27 @@ func TestStaleOwnersOrgRulePages(t *testing.T) {
 		session := loginUser(t, "user2")
 
 		// the organization's rule and the project's rule each list user4, who is inactive, and count on 1 approval
+		orgPage := "/org/" + f.org.Name + "/settings/branches/edit?rule_name=main"
+		projectPage := "/org/" + f.org.Name + "/groups/" + strconv.FormatInt(group.ID, 10) + "/settings/branches/edit?rule_name=main"
 		for _, c := range []struct {
 			groupID int64
 			page    string
-		}{
-			{0, "/org/" + f.org.Name + "/settings/branches/edit?rule_name=main"},
-			{group.ID, "/org/" + f.org.Name + "/groups/" + strconv.FormatInt(group.ID, 10) + "/settings/branches/edit?rule_name=main"},
-		} {
+		}{{0, orgPage}, {group.ID, projectPage}} {
 			rule := &git_model.ProtectedBranch{RuleName: "main"}
 			require.NoError(t, git_model.UpdateOrgProtectBranch(db.DefaultContext, f.org.ID, c.groupID, rule, git_model.WhitelistOptions{}, nil))
 			require.NoError(t, db.Insert(db.DefaultContext, &git_model.ApprovalRule{ProtectedBranchID: rule.ID, Name: "Leads", RequiredCount: 1, UserIDs: []int64{4}}))
-			resp := session.MakeRequest(t, NewRequest(t, "GET", c.page), http.StatusOK)
-			assert.Contains(t, text(NewHTMLParser(t, resp.Body), ".rule-warnings"), "Approval rule Leads needs 1 approval. Nobody can approve.", c.page)
 		}
+		warn := func(page string) string {
+			return text(NewHTMLParser(t, session.MakeRequest(t, NewRequest(t, "GET", page), http.StatusOK).Body), ".rule-warnings")
+		}
+		const nobody = "Approval rule Leads needs 1 approval. Nobody can approve. "
+		// user4 writes a repository of the organization, but none of the project: the cause differs
+		assert.Contains(t, warn(orgPage), nobody+"(user4 can't approve (inactive))")
+		assert.Contains(t, warn(projectPage), nobody+"(user4 can't approve (no write access))")
+		priv, err := repo_model.GetRepositoryByPath(db.DefaultContext, f.org.ID, group.Name, "priv")
+		require.NoError(t, err)
+		grantWrite(t, priv.ID, 4)
+		assert.Contains(t, warn(projectPage), nobody+"(user4 can't approve (inactive))")
 	})
 }
 
@@ -222,7 +284,12 @@ func TestStaleOwnersProject(t *testing.T) {
 		session := loginUser(t, "user2")
 		resp := session.MakeRequest(t, NewRequest(t, "GET", priv.Link()+"/settings/branches/edit?rule_name=main"), http.StatusOK)
 		warn := text(NewHTMLParser(t, resp.Body), ".rule-warnings")
-		assert.Contains(t, warn, "Approval rule Leads needs 1 approval. Nobody can approve. (user4 can't approve (inactive))")
+		assert.Contains(t, warn, "Approval rule Leads needs 1 approval. Nobody can approve. (user4 can't approve (no write access))")
+
+		// with write access to the repository, being inactive is the reason
+		grantWrite(t, priv.ID, 4)
+		resp = session.MakeRequest(t, NewRequest(t, "GET", priv.Link()+"/settings/branches/edit?rule_name=main"), http.StatusOK)
+		assert.Contains(t, text(NewHTMLParser(t, resp.Body), ".rule-warnings"), "(user4 can't approve (inactive))")
 	})
 }
 
@@ -243,12 +310,22 @@ func TestStaleOwnersTwoFactor(t *testing.T) {
 			_, err := db.GetEngine(db.DefaultContext).Where("uid = 5").Delete(&auth_model.TwoFactor{})
 			require.NoError(t, err)
 		})
-		call("POST", "/contents/CODEOWNERS", &api.CreateFileOptions{ContentBase64: base64.StdEncoding.EncodeToString([]byte("a/.* @user4\n"))}, http.StatusCreated)
+		// two read-only collaborators, one of them with a second factor, and two outsiders, one with a second factor
+		call("PUT", "/collaborators/user12", &api.AddCollaboratorOption{Permission: new("read")}, http.StatusNoContent)
+		call("PUT", "/collaborators/user13", &api.AddCollaboratorOption{Permission: new("read")}, http.StatusNoContent)
+		for _, uid := range []int64{11, 12} {
+			require.NoError(t, db.Insert(db.DefaultContext, &auth_model.TwoFactor{UID: uid, Secret: []byte("secret"), ScratchSalt: "salt", ScratchHash: "hash"}))
+		}
+		t.Cleanup(func() {
+			_, err := db.GetEngine(db.DefaultContext).In("uid", 11, 12).Delete(&auth_model.TwoFactor{})
+			require.NoError(t, err)
+		})
+		call("POST", "/contents/CODEOWNERS", &api.CreateFileOptions{ContentBase64: base64.StdEncoding.EncodeToString([]byte("a/.* @user4\nb/.* @user8 @user11 @user12 @user13\n"))}, http.StatusCreated)
 		view := func(s *TestSession) string {
 			resp := s.MakeRequest(t, NewRequest(t, "GET", pub.Link()+"/src/branch/main/CODEOWNERS"), http.StatusOK)
 			return text(NewHTMLParser(t, resp.Body), ".codeowners-ineligible")
 		}
-		assert.Empty(t, view(admin), "user4 can write")
+		assert.NotContains(t, view(admin), "user4", "user4 can write")
 
 		_, err := db.GetEngine(t.Context()).Exec("UPDATE `user` SET require_two_factor = ? WHERE id = ?", true, f.org.ID)
 		require.NoError(t, err)
@@ -256,9 +333,15 @@ func TestStaleOwnersTwoFactor(t *testing.T) {
 			_, err := db.GetEngine(db.DefaultContext).Exec("UPDATE `user` SET require_two_factor = ? WHERE id = ?", false, f.org.ID)
 			require.NoError(t, err)
 		})
-		assert.Contains(t, view(admin), "Line 1: user4 can't approve (blocked by the organization's two-factor requirement)")
+		marks := view(admin)
+		assert.Contains(t, marks, "Line 1: user4 can't approve (blocked by the organization's two-factor requirement)")
+		// whoever wouldn't write anyway is "no write access", with or without a second factor: the reason can't tell
+		for _, name := range []string{"user8", "user11", "user12", "user13"} {
+			assert.Contains(t, marks, name+" can't approve (no write access)")
+		}
+		assert.Equal(t, 1, strings.Count(marks, "two-factor"))
 		// a repository admin who isn't an owner of the organization gets the neutral mark
-		marks := view(loginUser(t, "user5"))
+		marks = view(loginUser(t, "user5"))
 		assert.Contains(t, marks, "user4 can't approve")
 		assert.NotContains(t, marks, "two-factor")
 		assert.NotContains(t, marks, "no write access", "that would be false without the requirement")
@@ -269,14 +352,17 @@ func TestStaleOwnersTwoFactor(t *testing.T) {
 func TestStaleOwnersAdminPage(t *testing.T) {
 	onApplicationRun(t, func(t *testing.T, u *url.URL) {
 		e := newApprovalRulesEnv(t)
-		long := strings.Repeat("<&>", 80) // 240 characters that grow when escaped
+		const maxFlashItems = 5
+		long := strings.Repeat(`<>&"'`, 40) // 200 characters that grow a lot when escaped and encoded
 		e.protect("so-admin", true, &api.ApprovalRule{Name: "Only <b>user4</b>", RequiredCount: 1, Usernames: []string{"user4"}})
-		e.protect("so-long", true, &api.ApprovalRule{Name: long, RequiredCount: 1, Usernames: []string{"user4"}})
+		for i := range 7 {
+			e.protect(fmt.Sprintf("so-long%d", i), true, &api.ApprovalRule{Name: fmt.Sprintf("%s%d", long, i), RequiredCount: 1, Usernames: []string{"user4"}})
+		}
 		session := loginUser(t, "user1")
 
 		resp := session.MakeRequest(t, NewRequest(t, "GET", "/admin/users/4/edit"), http.StatusOK)
 		doc := NewHTMLParser(t, resp.Body)
-		assert.Contains(t, text(doc, ".last-approver-warnings"), "Rule \"so-admin\" in user2/repo1: Only <b>user4</b> (Repository approval rule)")
+		assert.Contains(t, text(doc, ".last-approver-warnings"), "Approval rule Only <b>user4</b> of branch rule so-admin in user2/repo1 (Repository approval rule)")
 		assert.Contains(t, text(doc, ".last-approver-warnings .header"), "Turning off \"Activated account\" or turning on \"Suspended account\"")
 		assert.Zero(t, doc.Find(".last-approver-warnings b").Length(), "names are escaped")
 		href, _ := doc.Find(".last-approver-warnings a").First().Attr("href")
@@ -307,12 +393,15 @@ func TestStaleOwnersAdminPage(t *testing.T) {
 		resp = session.MakeRequest(t, NewRequestWithValues(t, "POST", "/admin/users/4/edit", form(false)), http.StatusSeeOther)
 		assert.False(t, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 4}).IsActive)
 		for _, c := range resp.Result().Cookies() {
-			assert.Less(t, len(c.Value), 3500, c.Name)
+			assert.Less(t, len(c.String()), 4096, c.Name)
+			if c.Name == "flash" {
+				assert.Less(t, len(c.Value), 2500, "the flash is bounded by its encoded size")
+			}
 		}
 		doc = flash()
 		assert.Contains(t, text(doc, ".flash-warning"), "These now lack approvers:")
-		assert.Contains(t, text(doc, ".flash-warning li"), "Rule \"so-admin\" in user2/repo1: Only <b>user4</b> (Repository approval rule)")
-		assert.Equal(t, 2, doc.Find(".flash-warning li").Length())
+		assert.Contains(t, text(doc, ".flash-warning li"), "Approval rule Only <b>user4</b> of branch rule so-admin in user2/repo1 (Repository approval rule)")
+		assert.LessOrEqual(t, doc.Find(".flash-warning li").Length(), maxFlashItems+1, "the list and its \"more\" line")
 		assert.Zero(t, doc.Find(".flash-warning b").Length(), "names are escaped")
 		assert.Contains(t, text(doc, ".flash-warning"), "…", "a long name is cut")
 	})

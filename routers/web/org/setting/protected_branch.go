@@ -107,7 +107,7 @@ func SettingsProtectedBranch(ctx *context.Context) {
 			return
 		}
 		rows = convert.ToOrgBranchProtection(ctx, rule, nil).ApprovalRules
-		report, err := pull_service.BranchRuleWarnings(ctx, nil, rule, pull_service.OwnerViewer{})
+		report, err := pull_service.BranchRuleWarnings(ctx, nil, rule, pull_service.OwnerViewer{Details: true, TwoFactor: true})
 		if err != nil {
 			ctx.ServerError("BranchRuleWarnings", err)
 			return

@@ -201,3 +201,23 @@ func GetTeamIDsOfUsers(ctx context.Context, userIDs []int64) ([]int64, error) {
 	var ids []int64
 	return ids, db.GetEngine(ctx).Table("team_user").Distinct("team_id").In("uid", userIDs).Find(&ids)
 }
+
+// GetMemberships returns, for each of the users, which of the teams they are a member of, in one query. A user
+// in none of them has no key.
+func GetMemberships(ctx context.Context, teamIDs, userIDs []int64) (map[int64]map[int64]bool, error) {
+	out := map[int64]map[int64]bool{}
+	if len(teamIDs) == 0 || len(userIDs) == 0 {
+		return out, nil
+	}
+	rows := make([]*TeamUser, 0, len(userIDs))
+	if err := db.GetEngine(ctx).Cols("team_id", "uid").In("team_id", teamIDs).In("uid", userIDs).Find(&rows); err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		if out[r.UID] == nil {
+			out[r.UID] = map[int64]bool{}
+		}
+		out[r.UID][r.TeamID] = true
+	}
+	return out, nil
+}

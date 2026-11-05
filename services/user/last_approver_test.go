@@ -22,10 +22,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type countHook struct{ n atomic.Int64 }
+// countHook counts queries until the test ends (xorm can't remove a hook, so it is switched off).
+type countHook struct {
+	n   atomic.Int64
+	off atomic.Bool
+}
 
 func (h *countHook) BeforeProcess(c *contexts.ContextHook) (context.Context, error) {
-	h.n.Add(1)
+	if !h.off.Load() {
+		h.n.Add(1)
+	}
 	return db.TracingHook{}.BeforeProcess(c)
 }
 func (*countHook) AfterProcess(*contexts.ContextHook) error { return nil }
@@ -53,7 +59,7 @@ func TestLastApproverWarnings(t *testing.T) {
 		got := map[string]string{}
 		for _, x := range w {
 			assert.Contains(t, userIDs, x.UserID)
-			got[x.Name] = x.Kind + " " + x.Link
+			got[x.Rule+"|"+x.Branch+"|"+x.Where] = x.Kind + " " + x.Link
 		}
 		return got
 	}
@@ -70,8 +76,8 @@ func TestLastApproverWarnings(t *testing.T) {
 
 	got := kinds(4)
 	assert.Equal(t, map[string]string{
-		`Rule "main" in user2/repo1: Lead`: "Repository approval rule /user2/repo1/settings/branches/edit?rule_name=main",
-		`Rule "release" in org3: Team`:     "Organization approval rule /org/org3/settings/branches/edit?rule_name=release",
+		`Lead|main|user2/repo1`: "repo_rule /user2/repo1/settings/branches/edit?rule_name=main",
+		`Team|release|org3`:     "org_rule /org/org3/settings/branches/edit?rule_name=release",
 	}, got, "the shared rule keeps user 5, so it is no warning")
 
 	// user 5 loses write access to the repository: they no longer count as remaining approver of the pair
@@ -79,12 +85,12 @@ func TestLastApproverWarnings(t *testing.T) {
 	require.NoError(t, err)
 	_, err = db.GetEngine(ctx).Where("repo_id = 1 AND user_id = 5").Delete(&access_model.Access{})
 	require.NoError(t, err)
-	assert.Contains(t, kinds(4), `Rule "dev" in user2/repo1: Pair`)
+	assert.Contains(t, kinds(4), `Pair|dev|user2/repo1`)
 	grantWrite(t, 5)
-	assert.NotContains(t, kinds(4), `Rule "dev" in user2/repo1: Pair`)
+	assert.NotContains(t, kinds(4), `Pair|dev|user2/repo1`)
 
 	// via team: user 2 is in team 2 as well
-	assert.Equal(t, []string{`Rule "release" in org3: Team`}, keysOf(kinds(2)))
+	assert.Equal(t, []string{`Team|release|org3`}, keysOf(kinds(2)))
 	// both users leave: the pair is empty too
 	assert.Len(t, kinds(4, 5), 3)
 	assert.Empty(t, kinds(8), "a user no rule lists")
@@ -102,6 +108,7 @@ func TestLastApproverWarnings(t *testing.T) {
 		require.NoError(t, err)
 		h := &countHook{}
 		engine.AddHook(h)
+		t.Cleanup(func() { h.off.Store(true) })
 		count := func() int64 {
 			h.n.Store(0)
 			_, err := LastApproverWarnings(ctx, []int64{4})
@@ -129,9 +136,9 @@ func TestLastApproverWarnings(t *testing.T) {
 		assert.Greater(t, len(w), 12)
 		names := map[string]string{}
 		for _, x := range w {
-			names[x.Name] = x.Kind
+			names[x.Rule+"|"+x.Branch+"|"+x.Where] = x.Kind
 		}
-		assert.Equal(t, "Project approval rule", names[`Rule "proj-0" in org3/proj: Extra`], "a project rule names its project")
+		assert.Equal(t, "project_rule", names["Extra|proj-0|org3/proj"], "a project rule names its project")
 		assert.Equal(t, before, count(), "the same number of queries with more rules, repositories and levels")
 	})
 }

@@ -21,41 +21,74 @@ import (
 // is counted without the write check: the people it lists count when they are active and can sign in.
 const MaxCheckedRepos = 50
 
-// Writers holds who can write which repositories, loaded once and shared by every computation of a request.
-type Writers struct{ by map[int64]map[int64]bool }
+// Writers holds who can write which repositories, loaded once and shared by every computation of a request. It is
+// computed as if the owner's two-factor requirement didn't apply, and remembers who that requirement blocks, so
+// the cause of "can't write" is known: no access at all, or access held back by two-factor enrolment.
+type Writers struct {
+	by      map[int64]map[int64]bool // repo -> users with write access, enrolled or not
+	blocked map[int64]map[int64]bool // repo -> users with write access the two-factor requirement blocks
+}
 
 // NewWriters returns an empty set; Load fills it.
-func NewWriters() *Writers { return &Writers{by: map[int64]map[int64]bool{}} }
+func NewWriters() *Writers {
+	return &Writers{by: map[int64]map[int64]bool{}, blocked: map[int64]map[int64]bool{}}
+}
 
 // Load computes the access of the repositories that are not loaded yet, in a fixed number of queries.
 func (w *Writers) Load(ctx context.Context, repoIDs ...int64) error {
 	var missing []int64
 	for _, id := range repoIDs {
-		if _, ok := w.by[id]; !ok {
+		if _, ok := w.by[id]; !ok && !slices.Contains(missing, id) {
 			missing = append(missing, id)
-			w.by[id] = map[int64]bool{}
 		}
 	}
 	if len(missing) == 0 {
 		return nil
 	}
-	rows, err := accessreport.Compute(ctx, accessreport.Options{RepoIDs: missing})
+	rows, err := accessreport.Compute(ctx, accessreport.Options{RepoIDs: missing, IgnoreTwoFactor: true})
 	if err != nil {
 		return err
+	}
+	for _, id := range missing {
+		w.by[id], w.blocked[id] = map[int64]bool{}, map[int64]bool{}
 	}
 	for _, row := range rows {
 		if row.User != nil && row.Perm.CanWrite(unit.TypeCode) {
 			w.by[row.Repo.ID][row.User.ID] = true
+			w.blocked[row.Repo.ID][row.User.ID] = row.TwoFactorBlocked
 		}
 	}
 	return nil
 }
 
 // Can reports whether the user can write the loaded repository.
-func (w *Writers) Can(repoID, uid int64) bool { return w.by[repoID][uid] }
+func (w *Writers) Can(repoID, uid int64) bool { return w.by[repoID][uid] && !w.blocked[repoID][uid] }
+
+// WouldWrite reports whether the user would write the repository if the two-factor requirement didn't hold them back.
+func (w *Writers) WouldWrite(repoID, uid int64) bool { return w.by[repoID][uid] }
+
+// TwoFactorBlocked reports whether the user has write access that the two-factor requirement holds back.
+func (w *Writers) TwoFactorBlocked(repoID, uid int64) bool { return w.blocked[repoID][uid] }
+
+// Why a listed user can't approve; the values are the reasons of the owner checks.
+const (
+	ReasonNoWrite    = "no_write"
+	ReasonInactive   = "inactive"
+	ReasonProhibited = "prohibited"
+	ReasonTwoFactor  = "two_factor"
+)
+
+// Unusable is a user an approval rule lists directly who can't approve, with the cause: a user who would have no
+// write access anyway is "no write access", whatever their state or two-factor enrolment.
+type Unusable struct {
+	ID     int64
+	Reason string
+}
 
 // Result is the eligible approvers of one approval rule.
 type Result struct {
+	// Unusable are the users the rule lists directly who can't approve, in ID order.
+	Unusable []Unusable
 	// WriteChecked is false when the rule covers too many repositories for the write check: its people count when
 	// they are active and can sign in.
 	WriteChecked bool
@@ -85,22 +118,22 @@ func Check(ctx context.Context, rules []*git_model.ApprovalRule, leaving []int64
 	for _, r := range rules {
 		pbIDs, teamIDs, ids = append(pbIDs, r.ProtectedBranchID), append(teamIDs, r.TeamIDs...), append(ids, r.UserIDs...)
 	}
-	members, err := organization.GetTeamsMemberIDs(ctx, uniq(teamIDs))
+	members, err := organization.GetTeamsMemberIDs(ctx, Uniq(teamIDs))
 	if err != nil {
 		return nil, err
 	}
 	for _, m := range members {
 		ids = append(ids, m...)
 	}
-	users, err := user_model.GetUserByIDs(ctx, uniq(ids))
+	users, err := user_model.GetUserByIDs(ctx, Uniq(ids))
 	if err != nil {
 		return nil, err
 	}
-	usable := map[int64]bool{}
+	byID := make(map[int64]*user_model.User, len(users))
 	for _, u := range users {
-		usable[u.ID] = u.IsActive && !u.ProhibitLogin
+		byID[u.ID] = u
 	}
-	if out.Branches, err = db.GetByIDs(ctx, "id", uniq(pbIDs), &git_model.ProtectedBranch{}); err != nil {
+	if out.Branches, err = db.GetByIDs(ctx, "id", Uniq(pbIDs), &git_model.ProtectedBranch{}); err != nil {
 		return nil, err
 	}
 	covered, err := coveredRepos(ctx, out.Branches, writers)
@@ -120,8 +153,12 @@ func Check(ctx context.Context, rules []*git_model.ApprovalRule, leaving []int64
 		slices.Sort(candidates)
 		repoIDs, checked := covered[pb.ID]
 		res := &Result{WriteChecked: checked}
+		listed := Uniq(r.UserIDs)
 		for _, id := range slices.Compact(candidates) {
-			if !usable[id] || !canWrite(repoIDs, writers, id) {
+			if reason := cause(byID[id], repoIDs, writers); reason != "" {
+				if slices.Contains(listed, id) && byID[id] != nil {
+					res.Unusable = append(res.Unusable, Unusable{ID: id, Reason: reason})
+				}
 				continue
 			}
 			if slices.Contains(leaving, id) {
@@ -135,15 +172,29 @@ func Check(ctx context.Context, rules []*git_model.ApprovalRule, leaving []int64
 	return out, nil
 }
 
-// canWrite is true for a rule without a checked repository (too many, or none covered).
-func canWrite(repoIDs []int64, writers *Writers, uid int64) bool {
-	if len(repoIDs) == 0 {
-		return true
+// cause returns why the user can't approve under a rule covering repoIDs, "" if they can. Nothing is known about
+// the access of a rule without a checked repository (too many, or none covered): its people count by their state.
+func cause(u *user_model.User, repoIDs []int64, writers *Writers) string {
+	has := func(f func(repoID, uid int64) bool) bool {
+		return slices.ContainsFunc(repoIDs, func(id int64) bool { return f(id, u.ID) })
 	}
-	return slices.ContainsFunc(repoIDs, func(id int64) bool { return writers.Can(id, uid) })
+	switch {
+	case u == nil:
+		return ReasonNoWrite
+	case len(repoIDs) > 0 && !has(writers.WouldWrite):
+		return ReasonNoWrite
+	case !u.IsActive:
+		return ReasonInactive
+	case u.ProhibitLogin:
+		return ReasonProhibited
+	case len(repoIDs) > 0 && !has(writers.Can):
+		return ReasonTwoFactor
+	}
+	return ""
 }
 
-func uniq(ids []int64) []int64 {
+// Uniq returns the IDs sorted, without duplicates.
+func Uniq(ids []int64) []int64 {
 	ids = slices.Clone(ids)
 	slices.Sort(ids)
 	return slices.Compact(ids)

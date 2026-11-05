@@ -1104,13 +1104,15 @@ type CodeOwners struct {
 // Return warning messages on parsing errors
 // We're trying to do the best we can when parsing a file.
 // Invalid lines are skipped. Non-existent users and teams too.
-func GetCodeOwnersFromReader(ctx context.Context, rc io.ReadCloser, truncated bool) ([]*CodeOwnerRule, []string) {
-	owners := ParseCodeOwners(ctx, rc, truncated)
+func GetCodeOwnersFromReader(ctx context.Context, ownerID int64, rc io.ReadCloser, truncated bool) ([]*CodeOwnerRule, []string) {
+	owners := ParseCodeOwners(ctx, ownerID, rc, truncated)
 	return owners.Rules, owners.Warnings
 }
 
-// ParseCodeOwners parses a CODEOWNERS file. A section header is never compiled as a pattern.
-func ParseCodeOwners(ctx context.Context, rc io.ReadCloser, truncated bool) *CodeOwners {
+// ParseCodeOwners parses a CODEOWNERS file of a repository of the owner ownerID. A section header is never compiled
+// as a pattern. A team resolves only within the owner's organization: a team of another organization is as unknown as
+// one that doesn't exist, and warned about in the same words.
+func ParseCodeOwners(ctx context.Context, ownerID int64, rc io.ReadCloser, truncated bool) *CodeOwners {
 	defer rc.Close()
 	scanner := bufio.NewScanner(rc)
 
@@ -1154,7 +1156,7 @@ func ParseCodeOwners(ctx context.Context, rc io.ReadCloser, truncated bool) *Cod
 			}
 			current, defaults = section, nil
 			if tokens := TokenizeCodeOwnersLine(rest); len(tokens) > 0 {
-				users, teams, wr := resolveCodeOwners(ctx, tokens)
+				users, teams, wr := resolveCodeOwners(ctx, ownerID, tokens)
 				for _, w := range wr {
 					owners.Warnings = append(owners.Warnings, fmt.Sprintf("Line: %d: %s", line, w))
 				}
@@ -1186,7 +1188,7 @@ func ParseCodeOwners(ctx context.Context, rc io.ReadCloser, truncated bool) *Cod
 			}
 		} else {
 			var wr []string
-			rule, wr = ParseCodeOwnersLine(ctx, tokens)
+			rule, wr = ParseCodeOwnersLine(ctx, ownerID, tokens)
 			for _, w := range wr {
 				owners.Warnings = append(owners.Warnings, fmt.Sprintf("Line: %d: %s", line, w))
 			}
@@ -1272,13 +1274,13 @@ func newCodeOwnerRule(pattern string) (*CodeOwnerRule, []string) {
 	return rule, nil
 }
 
-func ParseCodeOwnersLine(ctx context.Context, tokens []string) (*CodeOwnerRule, []string) {
+func ParseCodeOwnersLine(ctx context.Context, ownerID int64, tokens []string) (*CodeOwnerRule, []string) {
 	rule, warnings := newCodeOwnerRule(tokens[0])
 	if rule == nil {
 		return nil, warnings
 	}
 	var wr []string
-	rule.Users, rule.Teams, wr = resolveCodeOwners(ctx, tokens[1:])
+	rule.Users, rule.Teams, wr = resolveCodeOwners(ctx, ownerID, tokens[1:])
 	warnings = append(warnings, wr...)
 
 	if (len(rule.Users) == 0) && (len(rule.Teams) == 0) {
@@ -1290,7 +1292,7 @@ func ParseCodeOwnersLine(ctx context.Context, tokens []string) (*CodeOwnerRule, 
 }
 
 // resolveCodeOwners looks up the users and teams named by the tokens, skipping and warning about unknown ones.
-func resolveCodeOwners(ctx context.Context, tokens []string) (users []*user_model.User, teams []*org_model.Team, warnings []string) {
+func resolveCodeOwners(ctx context.Context, ownerID int64, tokens []string) (users []*user_model.User, teams []*org_model.Team, warnings []string) {
 	users, teams = make([]*user_model.User, 0), make([]*org_model.Team, 0)
 	for _, user := range tokens {
 		user = strings.TrimPrefix(user, "@")
@@ -1305,9 +1307,10 @@ func resolveCodeOwners(ctx context.Context, tokens []string) (users []*user_mode
 			orgName := s[0]
 			teamName := s[1]
 
+			// the same answer for a missing organization, a foreign one and a missing team
 			org, err := org_model.GetOrgByName(ctx, orgName)
-			if err != nil {
-				warnings = append(warnings, fmt.Sprintf("incorrect codeowner organization: %s", user))
+			if err != nil || org.ID != ownerID {
+				warnings = append(warnings, fmt.Sprintf("incorrect codeowner team: %s", user))
 				continue
 			}
 			orgTeams, err := org.LoadTeams(ctx)
@@ -1316,10 +1319,15 @@ func resolveCodeOwners(ctx context.Context, tokens []string) (users []*user_mode
 				continue
 			}
 
+			found := false
 			for _, team := range orgTeams {
 				if team.Name == teamName {
 					teams = append(teams, team)
+					found = true
 				}
+			}
+			if !found {
+				warnings = append(warnings, fmt.Sprintf("incorrect codeowner team: %s", user))
 			}
 		} else {
 			u, err := user_model.GetUserByName(ctx, user)
