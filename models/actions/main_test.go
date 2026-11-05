@@ -20,6 +20,8 @@ func TestMain(m *testing.M) {
 			"action_run_job.yml",
 			"action_task.yml",
 			"action_scheduled_dispatch.yml",
+			"action_environment.yml",
+			"action_deployment.yml",
 		},
 	})
 }

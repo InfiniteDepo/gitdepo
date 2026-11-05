@@ -251,6 +251,16 @@ func registerStartScheduledDispatches() {
 	})
 }
 
+func registerStartDueDeployments() {
+	RegisterTaskFatal("start_due_deployments", &BaseConfig{
+		Enabled:    true,
+		RunAtStart: true,
+		Schedule:   "@every 1m",
+	}, func(ctx context.Context, _ *user_model.User, _ Config) error {
+		return actions_service.StartDueDeployments(ctx)
+	})
+}
+
 func registerReloadLogShipping() {
 	RegisterTaskFatal("reload_log_shipping", &BaseConfig{
 		Enabled:    true,
@@ -292,6 +302,7 @@ func initBasicTasks() {
 	registerStartScheduledAutoMerges()
 	registerProcessMergeQueues()
 	registerStartScheduledDispatches()
+	registerStartDueDeployments()
 	registerReloadLogShipping()
 	if setting.Packages.Enabled {
 		registerCleanupPackages()

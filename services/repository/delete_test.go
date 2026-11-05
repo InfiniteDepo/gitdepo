@@ -7,9 +7,12 @@ import (
 	"strings"
 	"testing"
 
+	actions_model "forgejo.org/models/actions"
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
+	secret_model "forgejo.org/models/secret"
 	secretscan_model "forgejo.org/models/secretscan"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
@@ -32,6 +35,34 @@ func TestDeleteRepository(t *testing.T) {
 		require.NoError(t, repo_service.DeleteRepository(t.Context(), user2, repo, false))
 
 		unittest.AssertExistsIf(t, false, &repo_model.Repository{ID: 1})
+	})
+
+	t.Run("Actions environments", func(t *testing.T) {
+		repo := forgery.CreateRepository(t, user2, nil)
+		other := forgery.CreateRepository(t, user2, nil)
+		ctx := audit_model.WithSystem(t.Context(), "test")
+		env := &actions_model.ActionEnvironment{RepoID: repo.ID, Name: "prod"}
+		require.NoError(t, actions_model.CreateEnvironment(ctx, env))
+		otherEnv := &actions_model.ActionEnvironment{RepoID: other.ID, Name: "prod"}
+		require.NoError(t, actions_model.CreateEnvironment(ctx, otherEnv))
+		for _, e := range []*actions_model.ActionEnvironment{env, otherEnv} {
+			_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, e.RepoID, e.ID, "TOKEN", "s3cr3t")
+			require.NoError(t, err)
+			_, err = actions_model.InsertEnvironmentVariable(ctx, e.RepoID, e.ID, "COLOR", "blue")
+			require.NoError(t, err)
+			require.NoError(t, db.Insert(ctx, &actions_model.ActionDeployment{RepoID: e.RepoID, EnvironmentID: e.ID, JobID: e.RepoID, Attempt: 1}))
+		}
+
+		require.NoError(t, repo_service.DeleteRepository(t.Context(), user2, repo, false))
+
+		unittest.AssertNotExistsBean(t, &actions_model.ActionEnvironment{RepoID: repo.ID})
+		unittest.AssertNotExistsBean(t, &secret_model.Secret{RepoID: repo.ID})
+		unittest.AssertNotExistsBean(t, &actions_model.ActionVariable{RepoID: repo.ID})
+		unittest.AssertNotExistsBean(t, &actions_model.ActionDeployment{RepoID: repo.ID})
+		unittest.AssertExistsAndLoadBean(t, &actions_model.ActionEnvironment{ID: otherEnv.ID})
+		unittest.AssertExistsAndLoadBean(t, &secret_model.Secret{RepoID: other.ID})
+		unittest.AssertExistsAndLoadBean(t, &actions_model.ActionVariable{RepoID: other.ID})
+		unittest.AssertExistsAndLoadBean(t, &actions_model.ActionDeployment{RepoID: other.ID})
 	})
 
 	t.Run("Foreign key reference", func(t *testing.T) {

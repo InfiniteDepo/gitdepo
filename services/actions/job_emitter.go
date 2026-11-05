@@ -12,12 +12,14 @@ import (
 
 	actions_model "forgejo.org/models/actions"
 	"forgejo.org/models/db"
+	actions_module "forgejo.org/modules/actions"
 	"forgejo.org/modules/container"
 	"forgejo.org/modules/graceful"
 	"forgejo.org/modules/json"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/queue"
 	"forgejo.org/modules/structs"
+	"forgejo.org/modules/timeutil"
 	"forgejo.org/modules/util"
 
 	"code.forgejo.org/forgejo/runner/v13/act/jobparser"
@@ -86,14 +88,17 @@ func checkJobsOfRun(ctx context.Context, runID int64, recursionCount int) error 
 				updateColumns := []string{"status"}
 
 				if status.IsWaiting() {
+					runsOnBefore := len(job.RunsOn)
 					behaviour, err := prepareJobForEmitting(ctx, job, jobs)
 					switch behaviour {
 					case behaviourError:
 						return fmt.Errorf("error in prepareJobForEmitting: %w", err)
 
 					case behaviourExecuteJob:
-						// Intentional blank case -- proceed with updating the status of the job to waiting.
-						break
+						// Proceed with updating the status of the job to waiting, with the runner labels its environment added.
+						if len(job.RunsOn) != runsOnBefore {
+							updateColumns = append(updateColumns, "runs_on")
+						}
 
 					case behaviourIgnoreJob:
 						// Skip updating this job's status to waiting, continue with other jobs in the run.
@@ -106,6 +111,18 @@ func checkJobsOfRun(ctx context.Context, runID int64, recursionCount int) error 
 					case behaviorSkipJob:
 						// "status" is already a column that we're updating, so we can just switch the target status to skipped.
 						job.Status = actions_model.StatusSkipped
+
+					case behaviourFailJob:
+						job.Status = actions_model.StatusFailure
+						job.Stopped = timeutil.TimeStampNow()
+						updateColumns = append(updateColumns, "stopped")
+
+					case behaviourHoldJob:
+						// The job stays blocked, and a later pass of the emitter looks at it again. Don't let it count as
+						// updated, or the recursion below would never end.
+						job.Status = priorStatus
+						delete(updates, job.ID)
+						continue
 					}
 				} else if status.IsSuccess() || status.IsFailure() || status.IsSkipped() {
 					// Transition to these states can be triggered by workflow call outer jobs
@@ -264,13 +281,73 @@ const (
 
 	// behaviorSkipJob indicates that the job should be marked as skipped as the 'if' evaluation returned false.
 	behaviorSkipJob
+
+	// behaviourFailJob indicates that the job should be marked as failed because its environment refused it.
+	behaviourFailJob
+
+	// behaviourHoldJob indicates that the job stays blocked until a later pass of the emitter, for example because it
+	// waits for the wait timer of its environment.
+	behaviourHoldJob
 )
+
+// prepareJobForEmitting is evaluateJobForEmitting followed by the environment gate: a job that would run is only let
+// through when the environment it names releases it.
+func prepareJobForEmitting(ctx context.Context, blockedJob *actions_model.ActionRunJob, jobsInRun []*actions_model.ActionRunJob) (behaviour, error) {
+	b, err := evaluateJobForEmitting(ctx, blockedJob, jobsInRun)
+	if err != nil || b != behaviourExecuteJob {
+		return b, err
+	}
+	return gateEnvironment(ctx, blockedJob)
+}
+
+// jobNeedsContext returns the needs of blockedJob, with the outputs and results of the jobs it needs, as jobparser
+// takes them to evaluate the job.
+func jobNeedsContext(ctx context.Context, blockedJob *actions_model.ActionRunJob, jobsInRun []*actions_model.ActionRunJob) ([]string, map[string]map[string]string, map[string]string, error) {
+	// Compute jobOutputs for all the other jobs required as needed by this job:
+	jobNeeds := []string{}
+	jobOutputs := make(map[string]map[string]string, len(jobsInRun))
+	jobResults := make(map[string]string, len(jobsInRun))
+	blockedNamespacedNeeds := container.SetOf(blockedJob.NamespacedNeeds()...)
+	for _, job := range jobsInRun {
+		namespacedJobID := job.NamespacedJobID()
+		if !blockedNamespacedNeeds.Contains(namespacedJobID) {
+			// Only include jobs that are in the `needs` of the blocked job.  This filtering includes the namespace so
+			// that we never look at the outputs or results of a similarly named job in a different namespace.
+			continue
+		} else if !job.Status.IsDone() {
+			// Unexpected: `job` is needed by `blockedJob` but it isn't done; `jobStatusResolver` shouldn't be calling
+			// `prepareJobForEmitting` in this case.
+			return nil, nil, nil, fmt.Errorf(
+				"jobStatusResolver attempted to prepareJobForEmitting for a job (id=%d) with an incomplete 'needs' job (id=%d)", blockedJob.ID, job.ID,
+			)
+		}
+
+		// Jobs in a different namespace may be part of `needs` because of runtime order dependencies; for example, if a
+		// pre-req job runs before a reusable workflow, the reusable workflow's jobs will require the pre-req.  These
+		// job identifiers need to be converted to the local namespace of this job for needed jobs prerequisites to be
+		// considered complete, and for their statuses and outputs to be accessible.
+		localJobID := string(namespacedJobID.ToLocal(blockedJob.JobNamespace))
+
+		outputs, err := actions_model.FindTaskOutputByTaskID(ctx, job.TaskID)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("failed loading task outputs: %w", err)
+		}
+		outputsMap := make(map[string]string, len(outputs))
+		for _, v := range outputs {
+			outputsMap[v.OutputKey] = v.OutputValue
+		}
+		jobOutputs[localJobID] = outputsMap
+		jobResults[localJobID] = job.Status.String()
+		jobNeeds = append(jobNeeds, localJobID)
+	}
+	return jobNeeds, jobOutputs, jobResults, nil
+}
 
 // Invoked once a job has all its `needs` parameters met and is ready to transition to waiting. May expand the job's
 // `strategy.matrix` into multiple new jobs, may compute a calculated `runs-on` field, may expand reusable workflows,
 // and may evaluate `if` to see if the job should be skipped -- all things that could change based upon `${{ needs...
 // }}` outputs and results, which are now available.
-func prepareJobForEmitting(ctx context.Context, blockedJob *actions_model.ActionRunJob, jobsInRun []*actions_model.ActionRunJob) (behaviour, error) {
+func evaluateJobForEmitting(ctx context.Context, blockedJob *actions_model.ActionRunJob, jobsInRun []*actions_model.ActionRunJob) (behaviour, error) {
 	incompleteMatrix, _, err := blockedJob.HasIncompleteMatrix()
 	if err != nil {
 		return behaviourError, fmt.Errorf("job HasIncompleteMatrix: %w", err)
@@ -290,42 +367,9 @@ func prepareJobForEmitting(ctx context.Context, blockedJob *actions_model.Action
 		return behaviourError, fmt.Errorf("failure LoadRun in prepareJobForEmitting: %w", err)
 	}
 
-	// Compute jobOutputs for all the other jobs required as needed by this job:
-	jobNeeds := []string{}
-	jobOutputs := make(map[string]map[string]string, len(jobsInRun))
-	jobResults := make(map[string]string, len(jobsInRun))
-	blockedNamespacedNeeds := container.SetOf(blockedJob.NamespacedNeeds()...)
-	for _, job := range jobsInRun {
-		namespacedJobID := job.NamespacedJobID()
-		if !blockedNamespacedNeeds.Contains(namespacedJobID) {
-			// Only include jobs that are in the `needs` of the blocked job.  This filtering includes the namespace so
-			// that we never look at the outputs or results of a similarly named job in a different namespace.
-			continue
-		} else if !job.Status.IsDone() {
-			// Unexpected: `job` is needed by `blockedJob` but it isn't done; `jobStatusResolver` shouldn't be calling
-			// `prepareJobForEmitting` in this case.
-			return behaviourError, fmt.Errorf(
-				"jobStatusResolver attempted to prepareJobForEmitting for a job (id=%d) with an incomplete 'needs' job (id=%d)", blockedJob.ID, job.ID,
-			)
-		}
-
-		// Jobs in a different namespace may be part of `needs` because of runtime order dependencies; for example, if a
-		// pre-req job runs before a reusable workflow, the reusable workflow's jobs will require the pre-req.  These
-		// job identifiers need to be converted to the local namespace of this job for needed jobs prerequisites to be
-		// considered complete, and for their statuses and outputs to be accessible.
-		localJobID := string(namespacedJobID.ToLocal(blockedJob.JobNamespace))
-
-		outputs, err := actions_model.FindTaskOutputByTaskID(ctx, job.TaskID)
-		if err != nil {
-			return behaviourError, fmt.Errorf("failed loading task outputs: %w", err)
-		}
-		outputsMap := make(map[string]string, len(outputs))
-		for _, v := range outputs {
-			outputsMap[v.OutputKey] = v.OutputValue
-		}
-		jobOutputs[localJobID] = outputsMap
-		jobResults[localJobID] = job.Status.String()
-		jobNeeds = append(jobNeeds, localJobID)
+	jobNeeds, jobOutputs, jobResults, err := jobNeedsContext(ctx, blockedJob, jobsInRun)
+	if err != nil {
+		return behaviourError, err
 	}
 
 	vars, err := actions_model.GetVariablesOfRun(ctx, blockedJob.Run)
@@ -337,18 +381,22 @@ func prepareJobForEmitting(ctx context.Context, blockedJob *actions_model.Action
 	// one-or-more new jobs:
 	expandLocalReusableWorkflow, expandCleanup := lazyRepoExpandLocalReusableWorkflow(ctx, blockedJob.RepoID, blockedJob.Run.GetWorkflowSourceCommit())
 	defer expandCleanup()
+	reusableWorkflows := actions_module.ReusableWorkflows{}
 	newJobWorkflows, err := jobparser.Parse(blockedJob.WorkflowPayload, false,
 		jobparser.WithJobOutputs(jobOutputs),
 		jobparser.WithJobResults(jobResults),
 		jobparser.WithWorkflowNeeds(jobNeeds),
 		jobparser.SupportIncompleteRunsOn(),
-		jobparser.ExpandLocalReusableWorkflows(expandLocalReusableWorkflow),
-		jobparser.ExpandInstanceReusableWorkflows(expandInstanceReusableWorkflows(ctx)),
+		reusableWorkflows.ExpandLocal(expandLocalReusableWorkflow),
+		reusableWorkflows.ExpandInstance(expandInstanceReusableWorkflows(ctx)),
 		jobparser.WithVars(vars),
 		jobparser.WithInputs(getRunInputs(blockedJob.Run)),
 		jobparser.WithGitContext(generateGiteaContextForRun(blockedJob.Run)),
 		jobparser.EnableNamespaces(),
 	)
+	if err == nil { // the jobs of a reusable workflow that was expanded just now bring the environment of their file
+		err = reusableWorkflows.AttachEnvironments(blockedJob.WorkflowPayload, newJobWorkflows)
+	}
 	if err != nil {
 		// Reparsing errors are quite rare here since we were already able to parse this workflow in the past to
 		// generate `blockedJob`, but it would be possible with a remote reusable workflow if the reference disappears
@@ -454,13 +502,31 @@ func prepareJobForEmitting(ctx context.Context, blockedJob *actions_model.Action
 			newNeeds = append(newNeeds, string(n.ToLocal(actions_model.JobNamespace(swf.Metadata.Namespace))))
 		}
 
-		err := job.RawNeeds.Encode(newNeeds)
+		environment, err := actions_module.GetJobEnvironment(swf)
+		if err != nil {
+			return behaviourError, err
+		}
+		if actions_model.JobIdentifier(jobID) == blockedJob.JobID && swf.Metadata.Namespace == string(blockedJob.JobNamespace) {
+			if environment, err = blockedJobEnvironment(blockedJob); err != nil {
+				return behaviourError, err
+			}
+		}
+
+		err = job.RawNeeds.Encode(newNeeds)
 		if err != nil {
 			return behaviourError, fmt.Errorf("failure to encode newNeeds: %w", err)
 		}
 		err = swf.SetJob(jobID, job)
 		if err != nil {
 			return behaviourError, fmt.Errorf("failure to reencode updated job: %w", err)
+		}
+
+		// SetJob drops the environment: the job that was expanded keeps its own, a job of a reusable workflow has the
+		// one AttachEnvironments read from its file
+		if environment != nil {
+			if err := actions_module.SetJobEnvironment(swf, environment); err != nil {
+				return behaviourError, fmt.Errorf("failure to restore the environment: %w", err)
+			}
 		}
 	}
 

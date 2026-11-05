@@ -5,11 +5,14 @@ package actions
 
 import (
 	"errors"
+	"html"
 	"html/template"
+	"net/http"
 	"net/url"
 	"time"
 
 	"forgejo.org/modules/setting"
+	"forgejo.org/modules/util"
 	actions_service "forgejo.org/services/actions"
 	app_context "forgejo.org/services/context"
 )
@@ -36,7 +39,10 @@ func ManualRunWorkflow(ctx *app_context.Context) {
 	}
 
 	workflow, err := actions_service.GetWorkflowFromCommit(ctx.Repo.GitRepo, ref, workflowID)
-	if err != nil {
+	if errors.Is(err, util.ErrInvalidArgument) {
+		ctx.Error(http.StatusBadRequest, err.Error())
+		return
+	} else if err != nil {
 		ctx.ServerError("GetWorkflowFromCommit", err)
 		return
 	}
@@ -115,6 +121,9 @@ func dispatchErrorFlash(ctx *app_context.Context, err error) (template.HTML, boo
 		return ctx.Locale.Tr("actions.workflow.dispatch.schedule_inputs_too_large"), true
 	case errors.Is(err, actions_service.ErrScheduleLimit):
 		return ctx.Locale.Tr("actions.workflow.dispatch.schedule_limit"), true
+	case errors.Is(err, util.ErrInvalidArgument):
+		// a fault of the workflow file (for example its `environment:`); the text is escaped, the file is the user's
+		return template.HTML(html.EscapeString(err.Error())), true
 	}
 	return "", false
 }

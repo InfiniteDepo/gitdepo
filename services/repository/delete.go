@@ -229,6 +229,9 @@ func DeleteRepositoryDirectly(ctx context.Context, repoID int64, opts DeleteRepo
 			&actions_model.ActionRunJob{RepoID: repoID},
 			&actions_model.ActionRun{RepoID: repoID},
 			&actions_model.ActionRunner{RepoID: repoID},
+			&actions_model.ActionVariable{RepoID: repoID},
+			&actions_model.ActionEnvironment{RepoID: repoID},
+			&actions_model.ActionDeployment{RepoID: repoID},
 			&actions_model.ActionScheduledDispatch{RepoID: repoID},
 			&actions_model.ActionScheduleSpec{RepoID: repoID},
 			&actions_model.ActionSchedule{RepoID: repoID},
@@ -630,6 +633,8 @@ func deleteCounts(ctx context.Context, repoID int64) (map[string]int64, error) {
 		{"access_tokens", "access_token", builder.Eq{"owner_type": auth_model.AccessTokenOwnerRepo, "owner_id": repoID}},
 		{"secrets", "secret", builder.Eq{"repo_id": repoID}},
 		{"variables", "action_variable", builder.Eq{"repo_id": repoID}},
+		{"environments", "action_environment", builder.Eq{"repo_id": repoID}},
+		{"deployments", "action_deployment", builder.Eq{"repo_id": repoID}},
 		{"webhooks", "webhook", builder.Eq{"repo_id": repoID}},
 		{"branch_rules", "protected_branch", builder.Eq{"repo_id": repoID}},
 	} {
