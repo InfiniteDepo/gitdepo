@@ -92,6 +92,35 @@ func TestPreReceiveRecordsBranchPusher(t *testing.T) {
 		assert.Empty(t, pushers(task.RepoID, "bp-actions-none"))
 	})
 
+	t.Run("a push nobody can be named for is user 0", func(t *testing.T) {
+		task := unittest.AssertExistsAndLoadBean(t, &actions_model.ActionTask{ID: 47})
+		require.NoError(t, task.LoadJob(ctx))
+		runAs := func(branch string, triggerUserID int64) []int64 {
+			_, err := db.GetEngine(ctx).Exec("UPDATE action_run SET trigger_user_id = ? WHERE id = ?", triggerUserID, task.Job.RunID)
+			require.NoError(t, err)
+			hook(task.RepoID, branch, zero, commit, private.HookOptions{UserID: user_model.ActionsUserID, ActionTaskID: task.ID})
+			return pushers(task.RepoID, branch)
+		}
+		newToken := func(name string, creator int64) int64 {
+			token := &auth_model.AccessToken{
+				Name: name, OwnerType: auth_model.AccessTokenOwnerRepo, OwnerID: task.RepoID, Mode: perm_model.AccessModeWrite,
+				Scope: "write:repository", ResourceAllRepos: true, CreatorID: creator,
+			}
+			require.NoError(t, auth_model.NewAccessToken(db.DefaultContext, token, nil))
+			return token.ID
+		}
+		assert.Equal(t, []int64{0}, runAs("bp-scheduled", user_model.ActionsUserID), "a scheduled run")
+		assert.Equal(t, []int64{5}, runAs("bp-token-run", user_model.AccessTokenBotID(newToken("bp-run-token", 5))), "a run started by a token is its creator")
+		assert.Equal(t, []int64{0}, runAs("bp-token-run-0", user_model.AccessTokenBotID(newToken("bp-run-token-0", 0))), "a token with no creator")
+		assert.Equal(t, []int64{0}, runAs("bp-token-gone", user_model.AccessTokenBotID(99999)), "a token that is gone")
+		assert.Equal(t, []int64{0}, runAs("bp-user-gone", 99999), "a user that is gone")
+
+		// a token that pushes directly, with no creator
+		bot := user_model.AccessTokenBotID(newToken("bp-direct-0", 0))
+		require.NoError(t, hook(task.RepoID, "bp-direct-0", zero, commit, private.HookOptions{UserID: bot}).Error)
+		assert.Equal(t, []int64{0}, pushers(task.RepoID, "bp-direct-0"))
+	})
+
 	t.Run("a deploy key is its creator, or marks a key with no recorded owner", func(t *testing.T) {
 		owned, err := asymkey_model.AddDeployKey(asymkey_model.WithKeyCreator(ctx, 4), 1, "owned", newOrgDeployKeyContent(t), false, 0)
 		require.NoError(t, err)

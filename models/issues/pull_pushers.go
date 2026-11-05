@@ -5,8 +5,8 @@ package issues
 
 import (
 	"context"
-	"fmt"
 	"math"
+	"strconv"
 	"strings"
 
 	"forgejo.org/models/db"
@@ -43,7 +43,7 @@ func (p Pushers) Blocked() bool { return p[PusherUnknownDeployKey] || p[PusherTo
 // from the approvers, so a mistake here can only remove an approver, never admit one. The result is computed once per
 // request.
 func PullPushers(ctx context.Context, pr *PullRequest) (Pushers, error) {
-	return cache.GetWithContextCache(ctx, "pull_pushers", fmt.Sprintf("%d:%s", pr.ID, pr.HeadCommitID), func() (Pushers, error) {
+	return cache.GetWithContextCache(ctx, "pull_pushers", strconv.FormatInt(pr.ID, 10), func() (Pushers, error) {
 		return pullPushers(ctx, pr)
 	})
 }
@@ -103,7 +103,7 @@ func pullPushers(ctx context.Context, pr *PullRequest) (Pushers, error) {
 	for e := range emails {
 		lower = append(lower, e)
 		// the protected no-reply address of a user, matched like GetUserByEmail does
-		if name, ok := strings.CutSuffix(e, "@"+setting.Service.NoReplyAddress); ok {
+		if name, ok := strings.CutSuffix(e, "@"+strings.ToLower(setting.Service.NoReplyAddress)); ok {
 			names = append(names, name)
 		}
 	}

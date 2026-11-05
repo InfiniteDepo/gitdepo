@@ -4,6 +4,7 @@
 package private
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -44,7 +45,8 @@ type preReceiveContext struct {
 	deployKeyAccessMode perm_model.AccessMode
 	deployKeyKeyID      int64 // public key ID of the deploy key in use
 	// the user a branch push is credited to (see recordPusher): the user, the run's trigger user, the creator of the
-	// token or of the deploy key; 0 for a deploy key with no recorded owner, -1 when nobody is to be credited
+	// token or of the deploy key; 0 when no real person can be named (recorded as a marker that blocks flagged rules),
+	// noPusher for a server push as the Actions user without a task
 	pusherID int64
 	// the pusher is an Actions task whose token has permissions (`permissions:` or a read default)
 	actionTokenPermissions bool
@@ -347,15 +349,43 @@ func preReceiveBranch(ctx *preReceiveContext, oldCommitID, newCommitID string, r
 	}
 }
 
+const noPusher = int64(-1)
+
+// creditedPusher returns the person a push by id is credited to: a token identity gives its creator, and anything that
+// is not an existing user (the Actions user of a schedule, a deleted or unknown creator, 0) gives 0, which no
+// approval can satisfy.
+func creditedPusher(ctx context.Context, id int64) (int64, error) {
+	if user_model.IsAccessTokenBotID(id) {
+		bot, err := user_model.GetAccessTokenBot(ctx, id)
+		if user_model.IsErrUserNotExist(err) {
+			return 0, nil
+		} else if err != nil {
+			return 0, err
+		}
+		id = bot.BotToken.CreatorID
+	}
+	if id <= 0 {
+		return 0, nil
+	}
+	if _, err := user_model.GetUserByID(ctx, id); err != nil {
+		if user_model.IsErrUserNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return id, nil
+}
+
 // recordPusher remembers who pushed to the branch for the rules that ignore pusher approvals. It runs before the
 // push is accepted and fails closed: a push that a rule refuses later leaves an extra pusher, which only makes those
-// rules stricter. A deploy key with no recorded owner is recorded as user 0, which no approval can satisfy.
+// rules stricter. A push that can't be credited to a person (a deploy key or token with no recorded owner, a scheduled
+// run) is recorded as user 0, which no approval can satisfy.
 func (ctx *preReceiveContext) recordPusher(branchName string) bool {
 	if !ctx.loadPusherAndPermission() {
 		return false
 	}
-	if ctx.pusherID < 0 || ctx.pusherID == 0 && ctx.deployKeyKeyID == 0 {
-		return true // the Actions user without a run, a token whose creator is unknown: nothing to credit
+	if ctx.pusherID == noPusher {
+		return true // a push by the server as the Actions user, without a task
 	}
 	if err := git_model.AddBranchPusher(ctx, ctx.Repo.Repository.ID, branchName, ctx.pusherID); err != nil {
 		log.Error("Unable to record the pusher of branch %s in %-v: %v", branchName, ctx.Repo.Repository, err)
@@ -821,10 +851,14 @@ func (ctx *preReceiveContext) loadPusherAndPermission() bool {
 		ctx.user = repo.Owner
 		ctx.deployKeyAccessMode = deployKey.Mode
 		ctx.deployKeyKeyID = deployKey.KeyID
-		ctx.pusherID = deployKey.CreatorID
+		if ctx.pusherID, err = creditedPusher(ctx, deployKey.CreatorID); err != nil {
+			log.Error("Unable to resolve the creator of deploy key %d: %v", deployKey.KeyID, err)
+			ctx.JSON(http.StatusInternalServerError, private.Response{Err: "Unable to resolve the creator of the deploy key"})
+			return false
+		}
 	} else if ctx.opts.UserID == user_model.ActionsUserID {
 		ctx.user = user_model.NewActionsUser()
-		ctx.pusherID = -1
+		ctx.pusherID = noPusher
 		// Without a task (a push made by the server as the Actions user), the Actions user may do nothing.
 		if ctx.opts.ActionTaskID != 0 {
 			task, err := actions_model.GetTaskByID(ctx, ctx.opts.ActionTaskID)
@@ -835,7 +869,7 @@ func (ctx *preReceiveContext) loadPusherAndPermission() bool {
 			if err == nil {
 				if err = task.LoadJob(ctx); err == nil {
 					if err = task.Job.LoadRun(ctx); err == nil {
-						ctx.pusherID = task.Job.Run.TriggerUserID
+						ctx.pusherID, err = creditedPusher(ctx, task.Job.Run.TriggerUserID)
 					}
 				}
 			}
@@ -868,7 +902,12 @@ func (ctx *preReceiveContext) loadPusherAndPermission() bool {
 		ctx.user = user
 		ctx.pusherID = user.ID
 		if user.IsAccessTokenBot() {
-			ctx.pusherID = user.BotToken.CreatorID
+			var err error
+			if ctx.pusherID, err = creditedPusher(ctx, user.ID); err != nil {
+				log.Error("Unable to resolve the creator of token %d: %v", user.ID, err)
+				ctx.JSON(http.StatusInternalServerError, private.Response{Err: "Unable to resolve the creator of the token"})
+				return false
+			}
 		}
 		userPerm, err := access_model.GetUserRepoPermission(ctx, ctx.Repo.Repository, user)
 		if err != nil {

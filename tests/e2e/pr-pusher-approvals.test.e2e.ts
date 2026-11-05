@@ -42,7 +42,7 @@ test('Pusher approvals: updating the branch asks first, then the approval stops 
   await page.goto(`/user2/repo1/pulls/${number}`);
   await expect(page.locator('.pusher-approval')).toHaveCount(0);
   const update = page.locator('.update-button > button, form.update-branch-form button').first();
-  const warning = 'Updating the branch counts as a push: your approval will no longer count toward the required approvals.';
+  const warning = "Updating the branch counts as a push: your approval will no longer count toward this branch's approval requirements.";
 
   // cancelling the confirmation changes nothing
   const modal = page.locator('#update-branch-confirm');

@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +22,7 @@ import (
 	"forgejo.org/models/perm"
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unittest"
+	"forgejo.org/modules/git"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/services/forms"
 	"forgejo.org/tests"
@@ -215,14 +218,39 @@ func TestPusherApprovals(t *testing.T) {
 			index := e.pr("pa-key", create("a.txt", "a"))
 			e.approve("user4", index)
 			require.NoError(t, git_model.AddBranchPusher(t.Context(), 1, "head-pa-key", 0))
-			assert.Contains(t, e.apiMerge(e.owner, index, false, http.StatusMethodNotAllowed), "a deploy key with no recorded owner pushed to this pull request, so approvals can't be checked")
+			assert.Contains(t, e.apiMerge(e.owner, index, false, http.StatusMethodNotAllowed), "a push to this pull request has no recorded person, so approvals can't be checked")
 			text := strings.Join(strings.Fields(e.mergeBox(e.owner, index).doc.Find(".pusher-block").Text()), " ")
-			assert.Equal(t, "A deploy key with no recorded owner pushed to this pull request, so approvals can't be checked.", text)
+			assert.Equal(t, "A push to this pull request has no recorded person, so approvals can't be checked.", text)
 			// the line follows the approvals line it explains
 			assert.Contains(t, e.mergeBox(e.owner, index).Find(".pusher-block").Prev().Text(), "approvals")
 		})
 
 		// an approver whose activated email is the committer or author of a commit of the pull request
+		// AGit: the head is the poster's, not a branch, so there are no branch rows; the commit emails still exclude their owner
+		t.Run("agit", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+			e.base("pa-agit")
+			e.protectPushers("pa-agit", true)
+			dst := t.TempDir()
+			clone := *u
+			clone.Path = "user2/repo1.git"
+			clone.User = url.UserPassword("user4", userPassword)
+			doGitClone(dst, &clone)(t)
+			require.NoError(t, git.NewCommand(t.Context(), "checkout", "-b", "agit-work", "origin/pa-agit").Run(&git.RunOpts{Dir: dst}))
+			require.NoError(t, os.WriteFile(filepath.Join(dst, "agit.txt"), []byte("agit"), 0o666))
+			require.NoError(t, git.AddChanges(dst, true))
+			sig := &git.Signature{Email: "user5@example.com", Name: "Pusher", When: time.Now()}
+			require.NoError(t, git.CommitChanges(dst, git.CommitChangesOptions{Committer: sig, Author: sig, Message: "agit"}))
+			require.NoError(t, git.NewCommand(t.Context(), "push", "origin", "HEAD:refs/for/pa-agit", "-o", "topic=pa-agit").Run(&git.RunOpts{Dir: dst}))
+			pr := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{BaseRepoID: 1, HeadBranch: "user4/pa-agit"})
+
+			e.approve("user5", pr.Index)
+			assert.Contains(t, e.apiMerge(e.owner, pr.Index, false, http.StatusMethodNotAllowed), pusherNote)
+			ids, err := git_model.FindBranchPusherIDs(t.Context(), 1, pr.HeadBranch)
+			require.NoError(t, err)
+			assert.Empty(t, ids, "no rows for an AGit head")
+		})
+
 		t.Run("commit email", func(t *testing.T) {
 			defer tests.PrintCurrentTest(t)()
 			e.base("pa-email")
@@ -276,7 +304,7 @@ func TestPusherApprovals(t *testing.T) {
 				return strings.TrimSpace(box.Find("#update-branch-confirm .content").Text())
 			}
 			assert.Equal(t, 1, e.mergeBox(e.owner, index).Find(".update-button, .update-branch-form").Length(), "the update button is shown")
-			assert.Equal(t, "Updating the branch counts as a push: your approval will no longer count toward the required approvals.", confirm(e.writer["user4"]))
+			assert.Equal(t, "Updating the branch counts as a push: your approval will no longer count toward this branch's approval requirements.", confirm(e.writer["user4"]))
 			assert.Empty(t, confirm(e.writer["user5"]), "no approval to lose")
 			assert.Empty(t, confirm(e.owner), "the author has none either")
 

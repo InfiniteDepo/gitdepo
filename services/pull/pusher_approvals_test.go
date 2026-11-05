@@ -200,6 +200,33 @@ func TestIgnorePusherApprovalsBranchPushers(t *testing.T) {
 	assert.EqualValues(t, 1, issues_model.GetGrantedApprovalsCount(t.Context(), f.pb, f.pr))
 }
 
+// A fork pull request reads the rows of the fork's branch; an AGit pull request has no head branch, so rows of a
+// branch with the same name don't count.
+func TestIgnorePusherApprovalsForkAndAGit(t *testing.T) {
+	f := newApprovalFixture(t, ownersRule())
+	f.officialApprovals(t, 2, 4)
+	f.setHead(t, "", map[string]string{"a.txt": "a"}, "x@example.org", "x@example.org")
+	f.pb.RequiredApprovals = 2
+	f.pb.IgnorePusherApprovals = true
+	baseID, forkID := f.pr.BaseRepoID, f.pr.BaseRepoID+1000
+	branch := f.pr.HeadBranch
+
+	// fork: only the fork's rows count
+	f.pr.HeadRepoID = forkID
+	require.NoError(t, git_model.AddBranchPusher(t.Context(), baseID, branch, 4))
+	assert.EqualValues(t, 2, issues_model.GetGrantedApprovalsCount(t.Context(), f.pb, f.pr), "same branch name in the base repository")
+	require.NoError(t, git_model.AddBranchPusher(t.Context(), forkID, branch, 4))
+	assert.EqualValues(t, 1, issues_model.GetGrantedApprovalsCount(t.Context(), f.pb, f.pr), "the fork's pusher")
+
+	// AGit: the head is not a branch, rows don't apply (comments and emails do)
+	f.pr.Flow = issues_model.PullRequestFlowAGit
+	f.pr.HeadRepoID = baseID
+	require.NoError(t, git_model.AddBranchPusher(t.Context(), baseID, branch, 4))
+	assert.EqualValues(t, 2, issues_model.GetGrantedApprovalsCount(t.Context(), f.pb, f.pr))
+	f.pushComment(t, 4)
+	assert.EqualValues(t, 1, issues_model.GetGrantedApprovalsCount(t.Context(), f.pb, f.pr), "the poster of a push comment")
+}
+
 // The commit authors of the no-reply address count like those of an activated email.
 func TestIgnorePusherApprovalsNoReplyEmail(t *testing.T) {
 	defer test.MockVariableValue(&setting.Service.NoReplyAddress, "noreply.example.org")()

@@ -43,12 +43,13 @@
 	</div>
 {{end}}
 {{if $.UpdateBranchConfirm}}
-	<dialog class="modal" id="update-branch-confirm">
+	<dialog class="modal" id="update-branch-confirm" aria-labelledby="update-branch-confirm-heading">
 		<article>
+			<header id="update-branch-confirm-heading">{{ctx.Locale.Tr "repo.pulls.update_branch"}}</header>
 			<div class="content">{{ctx.Locale.Tr "repo.pulls.update_branch_pusher_confirm"}}</div>
 			<div class="actions">
 				<button type="button" class="ui cancel button">{{ctx.Locale.Tr "settings.cancel"}}</button>
-				<button type="button" class="ui primary button ok">{{ctx.Locale.Tr "modal.confirm"}}</button>
+				<button type="button" class="ui primary button ok">{{ctx.Locale.Tr "repo.pulls.update_branch"}}</button>
 			</div>
 		</article>
 	</dialog>

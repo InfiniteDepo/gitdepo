@@ -17,7 +17,7 @@
 						{{if .Approvers}}<span class="text grey">({{range $i, $u := .Approvers}}{{if $i}}, {{end}}{{$u.Name}}{{end}})</span>{{end}}
 					</div>
 					{{if .CodeOwnersErrorLine}}
-						<div class="codeowners-error">
+						<div class="codeowners-error tw-ml-6">
 							{{if $.Permission.CanRead $.UnitTypeCode}}
 								{{$link := printf "%s/src/branch/%s/%s#L%d" $.Repository.Link (PathEscapeSegments $.Issue.PullRequest.BaseBranch) (PathEscapeSegments .CodeOwnersFile) .CodeOwnersErrorLine}}
 								{{ctx.Locale.Tr "repo.pulls.codeowners_error" $link $.Issue.PullRequest.BaseBranch .CodeOwnersErrorLine}}
@@ -27,7 +27,7 @@
 						</div>
 					{{end}}
 					{{range .Shortfalls}}
-						<div class="codeowners-shortfall">
+						<div class="codeowners-shortfall tw-ml-6">
 							{{if $.Permission.CanRead $.UnitTypeCode}}
 								{{if lt .Eligible .Required}}{{ctx.Locale.TrPluralString .Required "repo.pulls.codeowners_section_unreachable" .Name .Required .Eligible}}{{else}}{{ctx.Locale.TrPluralString .Required "repo.pulls.codeowners_section_short" .Name .Required .Granted}}{{end}}
 							{{else}}

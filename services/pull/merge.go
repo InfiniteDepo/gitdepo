@@ -589,7 +589,7 @@ func withPusherNote(ctx context.Context, pb *git_model.ProtectedBranch, pr *issu
 	}
 	switch block {
 	case PusherBlockDeployKey:
-		return reason + " (a deploy key with no recorded owner pushed to this pull request, so approvals can't be checked)"
+		return reason + " (a push to this pull request has no recorded person, so approvals can't be checked)"
 	case PusherBlockUnchecked:
 		return reason + " (who pushed to this pull request can't be checked, so approvals can't be counted)"
 	}
