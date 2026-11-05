@@ -1192,7 +1192,7 @@ func AcceptMyTeamInvitation(ctx *context.APIContext) {
 			ctx.NotFound("AcceptInvite")
 		} else if organization.IsErrTeamInviteExpired(err) {
 			ctx.Error(http.StatusNotAcceptable, "AcceptInvite", err)
-		} else if organization.IsErrOrgArchived(err) || organization.IsErrUserNoVerifiedDomainEmail(err) {
+		} else if organization.IsErrOrgArchived(err) || organization.IsErrUserNoVerifiedDomainEmail(err) || errors.Is(err, util.ErrPermissionDenied) {
 			ctx.Error(http.StatusForbidden, "AcceptInvite", err)
 		} else {
 			ctx.ServerError("AcceptInvite", err)

@@ -13,6 +13,7 @@ import (
 
 	"forgejo.org/models"
 	asymkey_model "forgejo.org/models/asymkey"
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	"forgejo.org/models/git"
@@ -463,7 +464,7 @@ func TestDeleteUserCleansUpMembershipProvenance(t *testing.T) {
 	user28 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 28})
 	team1 := unittest.AssertExistsAndLoadBean(t, &organization.Team{ID: 1})
 
-	require.NoError(t, models.AddTeamMemberByCooptation(db.DefaultContext, team1, user28.ID, user2.ID))
+	require.NoError(t, models.AddTeamMemberByCooptation(audit_model.WithActor(db.DefaultContext, &audit_model.Actor{Type: audit_model.ActorUser, ID: user2.ID, Name: user2.Name, Credential: audit_model.Credential{Type: audit_model.CredentialSession}}), team1, user28.ID, user2.ID))
 
 	require.NoError(t, DeleteUser(db.DefaultContext, user2, true))
 

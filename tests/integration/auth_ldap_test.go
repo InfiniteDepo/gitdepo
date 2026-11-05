@@ -390,7 +390,7 @@ func TestLDAPUserGroupAdminWinsOverAdminFilter(t *testing.T) {
 
 	group := &organization.UserGroup{Name: "ldap-admins", GrantsSiteAdmin: true}
 	require.NoError(t, organization.InsertUserGroup(db.DefaultContext, group))
-	require.NoError(t, usergroup_service.AddMember(db.DefaultContext, group, fry))
+	require.NoError(t, usergroup_service.AddMember(ownActCtx(t), group, fry))
 	assert.True(t, unittest.AssertExistsAndLoadBean(t, &user_model.User{Name: "fry"}).IsAdmin)
 
 	// neither the sync nor a sign-in demotes them

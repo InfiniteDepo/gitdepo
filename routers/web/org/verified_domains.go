@@ -117,10 +117,10 @@ func VerifiedDomainsRequire(ctx *context.Context) {
 	ctx.Redirect(ctx.Org.OrgLink + "/settings/verified_domains")
 }
 
-// flashVerifiedDomainError flashes why a user can't join an organization that requires a verified email domain, or
+// flashTeamAddRefusal flashes why a user can't join an organization that requires a verified email domain, or
 // why a team whose members are part of deployment protection refused the request (audit_model.ErrNotOwnAct), and
 // reports whether err was one of them.
-func flashVerifiedDomainError(ctx *context.Context, err error, name string) bool {
+func flashTeamAddRefusal(ctx *context.Context, err error, name string) bool {
 	if errors.Is(err, audit_model.ErrNotOwnAct) { // a team whose members are part of deployment protection
 		ctx.Flash.Error(ctx.Tr("org.teams.add_member_not_own_act"))
 		return true

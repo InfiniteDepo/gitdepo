@@ -217,9 +217,9 @@ func TestOrgArchiveGroupSync(t *testing.T) {
 	require.False(t, inTeam(10) || inTeam(11) || inTeam(12))
 
 	group := &organization.UserGroup{Name: "archive-sync", LowerName: "archive-sync"}
-	require.NoError(t, usergroup.CreateGroup(t.Context(), group))
-	require.NoError(t, usergroup.LinkTeam(t.Context(), group, team))
-	require.NoError(t, usergroup.AddMember(t.Context(), group, leaver))
+	require.NoError(t, usergroup.CreateGroup(ownActCtx(t), group))
+	require.NoError(t, usergroup.LinkTeam(ownActCtx(t), group, team))
+	require.NoError(t, usergroup.AddMember(ownActCtx(t), group, leaver))
 	require.True(t, inTeam(leaver.ID))
 
 	// source (LDAP/OAuth) mapping: a member added before the archive
@@ -234,7 +234,7 @@ func TestOrgArchiveGroupSync(t *testing.T) {
 	archiveOrg3(t, false)
 
 	// adds are skipped while archived
-	require.NoError(t, usergroup.AddMember(t.Context(), group, newcomer))
+	require.NoError(t, usergroup.AddMember(ownActCtx(t), group, newcomer))
 	assert.False(t, inTeam(newcomer.ID))
 	// removals still apply: group removal and source-mapping removal
 	require.NoError(t, usergroup.RemoveMember(t.Context(), group, leaver.ID))
@@ -261,12 +261,12 @@ func TestOrgArchiveGroupSyncOwners(t *testing.T) {
 	newcomer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 11})
 
 	group := &organization.UserGroup{Name: "archive-admins", LowerName: "archive-admins", GrantsOrgAdmin: true}
-	require.NoError(t, usergroup.CreateGroup(t.Context(), group))
-	require.NoError(t, usergroup.AddMember(t.Context(), group, stay))
+	require.NoError(t, usergroup.CreateGroup(ownActCtx(t), group))
+	require.NoError(t, usergroup.AddMember(ownActCtx(t), group, stay))
 	require.True(t, inOwners(stay.ID))
 
 	archiveOrg3(t, false)
-	require.NoError(t, usergroup.AddMember(t.Context(), group, newcomer))
+	require.NoError(t, usergroup.AddMember(ownActCtx(t), group, newcomer))
 	assert.False(t, inOwners(newcomer.ID)) // the add is skipped
 	require.NoError(t, usergroup.RemoveMember(t.Context(), group, stay.ID))
 	assert.False(t, inOwners(stay.ID)) // the removal is applied

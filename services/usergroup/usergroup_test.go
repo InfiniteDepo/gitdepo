@@ -4,15 +4,18 @@
 package usergroup
 
 import (
+	"context"
 	"testing"
 
 	"forgejo.org/models"
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	org_model "forgejo.org/models/organization"
 	access_model "forgejo.org/models/perm/access"
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/container"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,7 +28,7 @@ func TestMain(m *testing.M) {
 func newGroup(t *testing.T, name string) *org_model.UserGroup {
 	t.Helper()
 	g := &org_model.UserGroup{Name: name}
-	require.NoError(t, org_model.InsertUserGroup(db.DefaultContext, g))
+	require.NoError(t, org_model.InsertUserGroup(ownCtx(), g))
 	return g
 }
 
@@ -53,7 +56,7 @@ func assertNotTeamMember(t *testing.T, team *org_model.Team, uid int64) {
 
 func TestLinkTeamAcrossOrganizations(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 
 	// team 2 belongs to org 3 and gives write access to repo 3; team 11 belongs to org 26.
 	team2, team11 := loadTeam(t, 2), loadTeam(t, 11)
@@ -90,7 +93,7 @@ func TestLinkTeamAcrossOrganizations(t *testing.T) {
 
 func TestUnlinkTeamKeepsDirectMembers(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 
 	team2, team11 := loadTeam(t, 2), loadTeam(t, 11)
 	group := newGroup(t, "platform-devs")
@@ -114,7 +117,7 @@ func TestUnlinkTeamKeepsDirectMembers(t *testing.T) {
 
 func TestMembershipChangesPropagateToLinkedTeams(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 
 	team2, team11 := loadTeam(t, 2), loadTeam(t, 11)
 	group := newGroup(t, "platform-devs")
@@ -140,7 +143,7 @@ func TestMembershipChangesPropagateToLinkedTeams(t *testing.T) {
 
 func TestUserInSeveralGroupsLinkedToSameTeam(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 
 	team2 := loadTeam(t, 2)
 	user5 := loadUser(t, 5)
@@ -159,7 +162,7 @@ func TestUserInSeveralGroupsLinkedToSameTeam(t *testing.T) {
 
 func TestDeleteGroup(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 
 	team2, team11 := loadTeam(t, 2), loadTeam(t, 11)
 	group := newGroup(t, "platform-devs")
@@ -178,7 +181,7 @@ func TestDeleteGroup(t *testing.T) {
 
 func TestLastOwnerViaGroupCannotBeRemoved(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 
 	// team 15 is the owners team of org 22 and has no members
 	owners := loadTeam(t, 15)
@@ -204,13 +207,13 @@ func TestOrganizationCannotBeMember(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 
 	group := newGroup(t, "platform-devs")
-	require.ErrorIs(t, AddMember(db.DefaultContext, group, loadUser(t, 3)), ErrOrganizationCannotBeMember)
+	require.ErrorIs(t, AddMember(ownCtx(), group, loadUser(t, 3)), ErrOrganizationCannotBeMember)
 	unittest.AssertNotExistsBean(t, &org_model.UserGroupUser{GroupID: group.ID})
 }
 
 func TestDeletingTeamRemovesLink(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 
 	team11 := loadTeam(t, 11)
 	group := newGroup(t, "platform-devs")
@@ -221,4 +224,49 @@ func TestDeletingTeamRemovesLink(t *testing.T) {
 
 	unittest.AssertNotExistsBean(t, &org_model.UserGroupTeam{TeamID: team11.ID})
 	unittest.AssertExistsAndLoadBean(t, &org_model.UserGroupUser{GroupID: group.ID, UID: 5})
+}
+
+// ownCtx is a request of the site admin with a credential of their own (audit_model.IsOwnAct): the group writes that
+// add team members refuse delegated credentials.
+func ownCtx() context.Context {
+	return audit_model.WithActor(db.DefaultContext, &audit_model.Actor{Type: audit_model.ActorUser, ID: 1, Name: "user1", Credential: audit_model.Credential{Type: audit_model.CredentialSession}})
+}
+
+// A request that links a group to the Owners team or a reviewer team, adds a member to a group, makes a group grant
+// the org-admin role or lifts an exclusion adds team members, so it is only the doer's own act; the sync that follows
+// such a change, and the sync of a login source, still adds to a protected team.
+func TestGroupWritesThatAddTeamMembersAreOwnActs(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	grant := audit_model.WithActor(db.DefaultContext, &audit_model.Actor{Type: audit_model.ActorUser, ID: 1, Name: "user1", Credential: audit_model.Credential{Type: audit_model.CredentialOAuth2Grant}})
+	owners, reviewers, unrelated := loadTeam(t, 1), loadTeam(t, 2), loadTeam(t, 7)
+	_, err := db.GetEngine(db.DefaultContext).Exec("INSERT INTO action_environment_reviewer (environment_id, user_id, team_id) VALUES (1, 0, ?)", reviewers.ID)
+	require.NoError(t, err)
+
+	group := newGroup(t, "deployers")
+	require.NoError(t, AddMember(ownCtx(), group, loadUser(t, 8)))
+	for _, team := range []*org_model.Team{owners, reviewers} {
+		require.ErrorIs(t, LinkTeam(grant, group, team), audit_model.ErrNotOwnAct)
+		assertNotTeamMember(t, team, 8)
+	}
+	require.NoError(t, LinkTeam(grant, group, unrelated), "another team")
+	assertTeamMember(t, unrelated, 8, org_model.MembershipReasonAddedByUserGroup)
+
+	require.ErrorIs(t, AddMember(grant, group, loadUser(t, 10)), audit_model.ErrNotOwnAct)
+	require.ErrorIs(t, CreateGroup(grant, &org_model.UserGroup{Name: "org-admins", GrantsOrgAdmin: true}), audit_model.ErrNotOwnAct)
+	unittest.AssertNotExistsBean(t, &org_model.UserGroup{LowerName: "org-admins"})
+	group.GrantsOrgAdmin = true
+	require.ErrorIs(t, UpdateGroup(grant, group), audit_model.ErrNotOwnAct)
+	assert.False(t, unittest.AssertExistsAndLoadBean(t, &org_model.UserGroup{ID: group.ID}).GrantsOrgAdmin)
+	require.ErrorIs(t, SetOrgAdminExclusions(grant, []int64{3}), audit_model.ErrNotOwnAct)
+
+	// the person's own link, then a login source sync adds a group member to the reviewer team
+	require.NoError(t, LinkTeam(ownCtx(), group, reviewers))
+	assertTeamMember(t, reviewers, 8, org_model.MembershipReasonAddedByUserGroup)
+	sync := audit_model.WithLoginSource(grant, 1, "ldap")
+	require.NoError(t, SyncDirectoryGroups(sync, loadUser(t, 10), 0, container.SetOf("cn=deployers"), map[string]container.Set[string]{"cn=deployers": container.SetOf("deployers")}, false))
+	assertTeamMember(t, reviewers, 10, org_model.MembershipReasonAddedByUserGroup)
+	// and a system actor (a cron task or the Bitbucket import) links
+	require.NoError(t, UnlinkTeam(ownCtx(), group, owners))
+	require.NoError(t, LinkTeam(audit_model.WithSystem(db.DefaultContext, "test"), group, owners))
+	assertTeamMember(t, owners, 8, org_model.MembershipReasonAddedByUserGroup)
 }

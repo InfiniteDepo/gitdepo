@@ -227,13 +227,13 @@ func TestOrgVerifiedDomainMembership(t *testing.T) {
 	t.Run("user group sync skips", func(t *testing.T) {
 		team := unittest.AssertExistsAndLoadBean(t, &organization.Team{ID: 2})
 		group := &organization.UserGroup{Name: "domain-sync", LowerName: "domain-sync"}
-		require.NoError(t, usergroup.CreateGroup(ctx, group))
-		require.NoError(t, usergroup.LinkTeam(ctx, group, team))
+		require.NoError(t, usergroup.CreateGroup(ownActCtx(t), group))
+		require.NoError(t, usergroup.LinkTeam(ownActCtx(t), group, team))
 		skipped := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 10})
 		added := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 12})
 		addEmail(12, "user12@company.com", true)
-		require.NoError(t, usergroup.AddMember(ctx, group, skipped))
-		require.NoError(t, usergroup.AddMember(ctx, group, added))
+		require.NoError(t, usergroup.AddMember(ownActCtx(t), group, skipped))
+		require.NoError(t, usergroup.AddMember(ownActCtx(t), group, added))
 		assert.False(t, isOrgMember(10))
 		assert.True(t, isOrgMember(12))
 

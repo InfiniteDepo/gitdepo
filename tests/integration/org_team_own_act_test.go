@@ -16,6 +16,7 @@ import (
 	org_model "forgejo.org/models/organization"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/container"
 	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/test"
@@ -106,13 +107,43 @@ func TestOrgTeamMemberAddOwnAct(t *testing.T) {
 			unittest.AssertExistsAndLoadBean(t, &org_model.TeamUser{TeamID: reviewers.ID, UID: 10})
 		})
 
-		t.Run("the user group sync adds to a reviewer team", func(t *testing.T) {
-			grant := audit_model.WithActor(t.Context(), &audit_model.Actor{Type: audit_model.ActorUser, ID: 1, Name: "user1", Credential: audit_model.Credential{Type: audit_model.CredentialOAuth2Grant}})
+		t.Run("linking a user group is checked, the sync that follows is not", func(t *testing.T) {
+			admin := audit_model.WithActor(t.Context(), &audit_model.Actor{Type: audit_model.ActorUser, ID: 1, Name: "user1", Credential: audit_model.Credential{Type: audit_model.CredentialSession}})
 			group := &org_model.UserGroup{Name: "deployers"}
-			require.NoError(t, usergroup_service.CreateGroup(grant, group))
-			require.NoError(t, usergroup_service.LinkTeam(grant, group, reviewers))
-			require.NoError(t, usergroup_service.AddMember(grant, group, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 8})))
+			require.NoError(t, usergroup_service.CreateGroup(admin, group))
+			require.NoError(t, usergroup_service.AddMember(admin, group, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 8})))
+			linkURL := fmt.Sprintf("/api/v1/teams/%d/groups/%s", reviewers.ID, group.Name)
+			for name, auth := range credentials {
+				MakeRequest(t, auth(NewRequest(t, "PUT", linkURL)), http.StatusForbidden)
+				assert.False(t, unittest.BeanExists(t, &org_model.TeamUser{TeamID: reviewers.ID, UID: 8}), name)
+				MakeRequest(t, auth(NewRequest(t, "PUT", fmt.Sprintf("/api/v1/teams/%d/groups/%s", owners.ID, group.Name))), http.StatusForbidden)
+			}
+			// an admin's delegated credential can't add a member to a group (it would join the linked teams)
+			adminGrant := createOAuth2Token(t, loginUser(t, "user1"), []auth_model.AccessTokenScope{auth_model.AccessTokenScopeWriteAdmin})
+			MakeRequest(t, NewRequest(t, "PUT", "/api/v1/admin/groups/deployers/members/user10").AddTokenAuth(adminGrant), http.StatusForbidden)
+			MakeRequest(t, NewRequestWithJSON(t, "PATCH", "/api/v1/admin/groups/deployers", &api.EditUserGroupOption{GrantsOrgAdmin: new(true)}).AddTokenAuth(adminGrant), http.StatusForbidden)
+			MakeRequest(t, NewRequestWithJSON(t, "PUT", "/api/v1/admin/roles/org-admin/exclusions", &api.SetOrgAdminExclusionsOption{Orgs: []string{}}).AddTokenAuth(adminGrant), http.StatusForbidden)
+
+			MakeRequest(t, NewRequest(t, "PUT", linkURL).AddTokenAuth(ownerToken), http.StatusNoContent)
 			unittest.AssertExistsAndLoadBean(t, &org_model.TeamUser{TeamID: reviewers.ID, UID: 8, Reason: org_model.MembershipReasonAddedByUserGroup})
+			// a login source sync adds a new group member to the linked reviewer team
+			sync := audit_model.WithLoginSource(t.Context(), 1, "directory")
+			require.NoError(t, usergroup_service.SyncDirectoryGroups(sync, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 12}), 0,
+				container.SetOf("cn=deployers"), map[string]container.Set[string]{"cn=deployers": container.SetOf("deployers")}, false))
+			unittest.AssertExistsAndLoadBean(t, &org_model.TeamUser{TeamID: reviewers.ID, UID: 12, Reason: org_model.MembershipReasonAddedByUserGroup})
+		})
+
+		t.Run("accepting an invitation is the invitee's own act", func(t *testing.T) {
+			defer test.MockVariableValue(&setting.Service.AddMembersByInvitations, true)()
+			MakeRequest(t, NewRequest(t, "PUT", memberURL(owners, "user11")).AddTokenAuth(ownerToken), http.StatusNoContent)
+			invite := unittest.AssertExistsAndLoadBean(t, &org_model.TeamInvite{TeamID: owners.ID})
+			acceptURL := fmt.Sprintf("/api/v1/user/team_invitations/%d/accept", invite.ID)
+			grant := createOAuth2Token(t, loginUser(t, "user11"), []auth_model.AccessTokenScope{auth_model.AccessTokenScopeWriteUser})
+			MakeRequest(t, NewRequestWithJSON(t, "POST", acceptURL, &api.AcceptTeamInviteOptions{}).AddTokenAuth(grant), http.StatusForbidden)
+			assert.False(t, unittest.BeanExists(t, &org_model.TeamUser{TeamID: owners.ID, UID: 11}))
+			own := getUserToken(t, "user11", auth_model.AccessTokenScopeWriteUser)
+			MakeRequest(t, NewRequestWithJSON(t, "POST", acceptURL, &api.AcceptTeamInviteOptions{}).AddTokenAuth(own), http.StatusNoContent)
+			unittest.AssertExistsAndLoadBean(t, &org_model.TeamUser{TeamID: owners.ID, UID: 11})
 		})
 
 		t.Run("creating an organization with a delegated credential", func(t *testing.T) {
