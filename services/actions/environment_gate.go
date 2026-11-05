@@ -487,14 +487,12 @@ func StartDueDeployments(ctx context.Context) error {
 	for _, runID := range runIDs {
 		if err := EmitJobsIfReady(runID); err != nil {
 			log.Error("EmitJobsIfReady for run %d after a wait timer or a change of rules: %v", runID, err)
-			// to the back of the line, so that a run that always fails doesn't starve the others
-			if err := actions_model.TouchDueDeployments(ctx, runID, timeutil.TimeStampNow()); err != nil {
-				log.Error("TouchDueDeployments for run %d: %v", runID, err)
-			}
-			continue
-		}
-		if err := actions_model.TouchStaleDeployments(ctx, runID); err != nil {
+		} else if err := actions_model.TouchStaleDeployments(ctx, runID); err != nil {
 			log.Error("TouchStaleDeployments for run %d: %v", runID, err)
+		}
+		// to the back of the line, so that runs that always fail don't starve the others
+		if err := actions_model.TouchDueDeployments(ctx, runID, timeutil.TimeStampNow()); err != nil {
+			log.Error("TouchDueDeployments for run %d: %v", runID, err)
 		}
 	}
 	return nil

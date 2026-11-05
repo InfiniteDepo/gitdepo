@@ -94,6 +94,8 @@ type ActionDeployment struct {
 	ReviewComment string             `xorm:"TEXT"` // plain text, never rendered as HTML
 	Created       timeutil.TimeStamp `xorm:"created"`
 	Updated       timeutil.TimeStamp `xorm:"updated"`
+	// the last time the due-deployments task queued, or failed to queue, a pass of the gate for it (0: never)
+	CheckedUnix timeutil.TimeStamp `xorm:"NOT NULL DEFAULT 0"`
 }
 
 func init() {
@@ -169,8 +171,8 @@ const staleDeployment = "(action_deployment.status IN (?, ?) AND EXISTS (SELECT 
 
 // FindDueDeploymentRunIDs returns the runs, at most limit, with a blocked job whose deployment waits for a wait timer
 // that ended, was rejected or expired and whose job the gate has not failed yet, or waits under rules that changed
-// since (staleDeployment), the ones looked at longest ago first (TouchDueDeployments moves a run whose pass failed to
-// the back, TouchStaleDeployments one whose pass started, so runs that always fail can't starve the others).
+// since (staleDeployment). The runs the task looked at least recently come first (TouchDueDeployments), then the ones
+// that wait longest, so runs whose pass always fails, however many, can't starve the others.
 func FindDueDeploymentRunIDs(ctx context.Context, now timeutil.TimeStamp, limit int) ([]int64, error) {
 	var ids []int64
 	return ids, db.GetEngine(ctx).Table("action_deployment").
@@ -182,15 +184,15 @@ func FindDueDeploymentRunIDs(ctx context.Context, now timeutil.TimeStamp, limit 
 			builder.Expr(staleDeployment, DeploymentWaitingTimer, DeploymentWaitingReview),
 		)).
 		Select("action_deployment.run_id").GroupBy("action_deployment.run_id").
-		OrderBy("MIN(action_deployment.updated), action_deployment.run_id").Limit(limit).Find(&ids)
+		OrderBy("MAX(action_deployment.checked_unix), MIN(action_deployment.updated), action_deployment.run_id").Limit(limit).Find(&ids)
 }
 
-// TouchDueDeployments sets the update time of the run's deployments that wait for a timer, were rejected or expired to
-// now, except a stale one (staleDeployment): it keeps its time, so that the change of rules is still seen.
+// TouchDueDeployments records that the task looked at the run now, whether its pass was queued or not: the run goes
+// to the back of the line. It changes no update time, so a stale deployment stays stale until TouchStaleDeployments.
 func TouchDueDeployments(ctx context.Context, runID int64, now timeutil.TimeStamp) error {
-	_, err := db.GetEngine(ctx).Table("action_deployment").Where("run_id = ?", runID).And(builder.In("status", DeploymentWaitingTimer, DeploymentRejected, DeploymentExpired)).
-		And(builder.Not{builder.Expr(staleDeployment, DeploymentWaitingTimer, DeploymentWaitingReview)}).
-		Update(map[string]any{"updated": now})
+	_, err := db.GetEngine(ctx).Table("action_deployment").Where("run_id = ?", runID).
+		And(builder.In("status", DeploymentWaitingTimer, DeploymentWaitingReview, DeploymentRejected, DeploymentExpired)).
+		Update(map[string]any{"checked_unix": now})
 	return err
 }
 
