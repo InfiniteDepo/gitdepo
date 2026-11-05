@@ -2099,11 +2099,9 @@ func ViewIssue(ctx *context.Context) {
 			ctx.Data["PusherApprovals"] = pushedApprovers
 			if ctx.Doer != nil && flagged != nil && !slices.ContainsFunc(pushedApprovers, func(u *user_model.User) bool { return u.ID == ctx.Doer.ID }) {
 				// whose approval counts now, with the rest of the rule as it is: updating the branch would make them a pusher
-				asIfOff := *flagged
-				asIfOff.IgnorePusherApprovals = false
-				approvers, err := issues_model.ValidReviewers(ctx, &asIfOff, pull, issues_model.ReviewTypeApprove)
+				approvers, err := pull_service.ApproversIgnoringPushers(ctx, flagged, pull)
 				if err != nil {
-					ctx.ServerError("ValidReviewers", err)
+					ctx.ServerError("ApproversIgnoringPushers", err)
 					return
 				}
 				ctx.Data["UpdateBranchConfirm"] = slices.ContainsFunc(approvers, func(u *user_model.User) bool { return u.ID == ctx.Doer.ID })
