@@ -6,11 +6,15 @@ package admin
 
 import (
 	"errors"
+	"fmt"
+	"html"
+	"html/template"
 	"math"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"forgejo.org/models"
 	"forgejo.org/models/auth"
@@ -23,6 +27,7 @@ import (
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/optional"
 	"forgejo.org/modules/setting"
+	"forgejo.org/modules/util"
 	"forgejo.org/modules/validation"
 	"forgejo.org/modules/web"
 	"forgejo.org/routers/web/explore"
@@ -377,6 +382,7 @@ func EditUser(ctx *context.Context) {
 	if ctx.Written() {
 		return
 	}
+	loadLastApproverWarnings(ctx, u)
 
 	ctx.HTML(http.StatusOK, tplUserEdit)
 }
@@ -395,8 +401,14 @@ func EditUserPost(ctx *context.Context) {
 
 	form := web.GetForm(ctx).(*forms.AdminEditUserForm)
 	if ctx.HasError() {
+		loadLastApproverWarnings(ctx, u)
 		ctx.HTML(http.StatusOK, tplUserEdit)
 		return
+	}
+	// the checks run only for a save that deactivates the user or suspends them, and before the update changes u
+	var leaving []lastApproverRow
+	if u.IsActive && !u.ProhibitLogin && (!form.Active || form.ProhibitLogin && ctx.Doer.ID != u.ID) {
+		leaving = loadLastApproverWarnings(ctx, u)
 	}
 	sizeLimit := u.PersonalRepoSizeLimit // no mode sent: unchanged
 	switch form.PersonalRepoSizeLimitMode {
@@ -560,6 +572,9 @@ func EditUserPost(ctx *context.Context) {
 	}
 
 	ctx.Flash.Success(ctx.Tr("admin.users.update_profile_success"))
+	if len(leaving) > 0 {
+		flashLastApproverWarnings(ctx, leaving)
+	}
 	ctx.Redirect(setting.AppSubURL + "/admin/users/" + url.PathEscape(ctx.Params(":userid")))
 }
 
@@ -632,4 +647,106 @@ func DeleteAvatar(ctx *context.Context) {
 	}
 
 	ctx.JSONRedirect(setting.AppSubURL + "/admin/users/" + strconv.FormatInt(u.ID, 10))
+}
+
+// Limits of the warnings: the edit page lists at most maxShownWarnings. The flash after a save travels in a cookie:
+// its encoded size (after HTML escaping and the two rounds of URL encoding the flash and the cookie each apply), the
+// warnings it lists and the length of one name are limited.
+const (
+	maxShownWarnings   = 50 // on the edit page
+	maxFlashBytes      = 2048
+	maxFlashedWarnings = 5
+	maxFlashedName     = 80
+)
+
+// lastApproverRow is a warning of the edit page, in words.
+type lastApproverRow struct{ Link, Text, Kind string }
+
+// loadLastApproverWarnings lists on the edit page what deactivating the user or suspending them would break. Nothing
+// is listed for a user who can't sign in already. It never blocks the save.
+func loadLastApproverWarnings(ctx *context.Context, u *user_model.User) []lastApproverRow {
+	if !u.IsActive || u.ProhibitLogin {
+		return nil
+	}
+	warnings, err := user_service.LastApproverWarnings(ctx, []int64{u.ID})
+	if err != nil {
+		log.Error("LastApproverWarnings for user %d: %v", u.ID, err)
+		return nil
+	}
+	rows := make([]lastApproverRow, len(warnings))
+	for i, w := range warnings {
+		rows[i] = lastApproverRow{
+			Link: w.Link,
+			Text: w.Name,
+			Kind: lastApproverKind(ctx, w.Kind),
+		}
+		if !isLocalLink(rows[i].Link) {
+			rows[i].Link = ""
+		}
+	}
+	ctx.Data["LastApproverWarnings"] = rows[:min(len(rows), maxShownWarnings)]
+	ctx.Data["LastApproverMore"] = max(len(rows)-maxShownWarnings, 0)
+	return rows
+}
+
+// lastApproverKind is the label of a check's warning: its Kind is a locale key where one exists, else plain text
+// (escaped when rendered).
+func lastApproverKind(ctx *context.Context, kind string) string {
+	switch kind { // literal keys, so that the locale lint sees them used
+	case user_service.LastApproverRepoRule:
+		return ctx.Locale.TrString("admin.users.last_approver.kind.repo_rule")
+	case user_service.LastApproverProjectRule:
+		return ctx.Locale.TrString("admin.users.last_approver.kind.project_rule")
+	case user_service.LastApproverOrgRule:
+		return ctx.Locale.TrString("admin.users.last_approver.kind.org_rule")
+	}
+	if ctx.Locale.HasKey(kind) { // another check's key
+		return ctx.Locale.TrString(kind)
+	}
+	return kind
+}
+
+// isLocalLink is true for a path on this site: it starts with one slash, and has no second slash right after it,
+// no backslash and no control character (C0, C1 or DEL), which browsers drop or read as a host.
+func isLocalLink(link string) bool {
+	if !strings.HasPrefix(link, "/") || strings.HasPrefix(link, "//") {
+		return false
+	}
+	return !strings.ContainsFunc(link, func(r rune) bool { return r == '\\' || unicode.IsControl(r) })
+}
+
+func flashName(s string, limit int) string {
+	if t := util.TruncateRunes(s, limit); t != s {
+		return t + "…"
+	}
+	return s
+}
+
+// flashLastApproverWarnings tells the admin, after a save, what the user leaving would break: a short list of
+// truncated names, as many as fit in maxFlashBytes once encoded for the cookie (fewer and shorter names for a name
+// that escapes to a lot). Everything is escaped, and a link is used only if it is a path on this site.
+func flashLastApproverWarnings(ctx *context.Context, rows []lastApproverRow) {
+	render := func(shown, nameLen int) string {
+		var b strings.Builder
+		b.WriteString(html.EscapeString(ctx.Locale.TrString("admin.users.last_approver_flash")) + "<ul>")
+		for _, r := range rows[:shown] {
+			text := html.EscapeString(flashName(r.Text, nameLen))
+			if isLocalLink(r.Link) {
+				text = fmt.Sprintf(`<a href="%s">%s</a>`, html.EscapeString(r.Link), text)
+			}
+			b.WriteString("<li>" + text + " (" + html.EscapeString(flashName(r.Kind, nameLen)) + ")</li>")
+		}
+		if shown < len(rows) {
+			b.WriteString("<li>" + html.EscapeString(ctx.Locale.TrString("admin.users.last_approver_more", len(rows)-shown)) + "</li>")
+		}
+		return b.String() + "</ul>"
+	}
+	for shown := min(len(rows), maxFlashedWarnings); shown >= 0; shown-- {
+		for nameLen := maxFlashedName; nameLen >= maxFlashedName/2; nameLen /= 2 {
+			if msg := render(shown, nameLen); len(url.QueryEscape(url.QueryEscape(msg))) <= maxFlashBytes {
+				ctx.Flash.Warning(template.HTML(msg))
+				return
+			}
+		}
+	}
 }

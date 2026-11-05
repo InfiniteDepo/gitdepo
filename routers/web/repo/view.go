@@ -55,6 +55,7 @@ import (
 	"forgejo.org/services/context"
 	funding_service "forgejo.org/services/funding"
 	issue_service "forgejo.org/services/issue"
+	pull_service "forgejo.org/services/pull"
 	repo_service "forgejo.org/services/repository"
 	files_service "forgejo.org/services/repository/files"
 
@@ -450,9 +451,19 @@ func renderFile(ctx *context.Context, entry *git.TreeEntry) {
 		}
 	} else if slices.Contains([]string{"CODEOWNERS", "docs/CODEOWNERS", ".gitea/CODEOWNERS", ".forgejo/CODEOWNERS"}, ctx.Repo.TreePath) {
 		if rc, size, err := blob.NewTruncatedReader(setting.UI.MaxDisplayFileSize); err == nil {
-			_, warnings := issues_model.GetCodeOwnersFromReader(ctx, rc, size > setting.UI.MaxDisplayFileSize)
-			if len(warnings) > 0 {
-				ctx.Data["FileWarning"] = strings.Join(warnings, "\n")
+			owners := issues_model.ParseCodeOwners(ctx, ctx.Repo.Repository.OwnerID, rc, size > setting.UI.MaxDisplayFileSize)
+			if len(owners.Warnings) > 0 {
+				ctx.Data["FileWarning"] = strings.Join(owners.Warnings, "\n")
+			}
+			// owners who can't approve, with the reasons the viewer may see, only to those who can change the file: to
+			// anyone else the mark would tell whether an account can sign in
+			if ctx.Repo.CanWrite(unit_model.TypeCode) {
+				viewer := pull_service.NewOwnerViewer(ctx, ctx.Doer, ctx.Repo.Repository, ctx.Repo.IsAdmin())
+				if marks, more, err := pull_service.CodeOwnerLineMarks(ctx, ctx.Repo.Repository, viewer, owners.Rules); err != nil {
+					log.Error("CodeOwnerLineMarks: %v", err)
+				} else {
+					ctx.Data["CodeOwnerMarks"], ctx.Data["CodeOwnerMarksMore"] = marks, more
+				}
 			}
 		}
 	} else if ctx.Repo.TreePath == ".gitmodules" {

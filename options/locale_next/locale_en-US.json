@@ -1862,7 +1862,53 @@
 		"one": "(%d changed file is not approved by a code owner)",
 		"other": "(%d changed files are not approved by a code owner)"
 	},
+	"repo.codeowners.ineligible_header": "These owners can't approve pull requests:",
+	"repo.codeowners.line": "Line %d",
+	"repo.codeowners.more": "and more that are not shown",
+	"repo.codeowners.owner_neutral": "%s can't approve",
+	"repo.codeowners.owner_reason": "%s can't approve (%s)",
+	"repo.codeowners.team_none": "No member of %s can approve",
+	"repo.codeowners.team_only": {
+		"one": "Only %[2]d member of %[1]s can approve",
+		"other": "Only %[2]d members of %[1]s can approve"
+	},
+	"repo.codeowners.reason_inactive": "inactive",
+	"repo.codeowners.reason_prohibited": "login prohibited",
+	"repo.codeowners.reason_no_write": "no write access",
+	"repo.codeowners.reason_two_factor": "blocked by the organization's two-factor requirement",
+	"repo.settings.rule_warnings_header": "This rule can block merges:",
+	"repo.settings.rule_warnings_todo": "To fix it, add owners or approvers who can approve, give the listed people write access again, or lower the number of approvals.",
+	"repo.settings.rule_codeowners_capped": "CODEOWNERS is not checked: it names more people and teams than one check looks at.",
+	"repo.settings.rule_codeowners_skipped": "CODEOWNERS is not checked for a rule with a pattern in its name. Open the CODEOWNERS file of a matching branch to see the owners who can't approve.",
+	"repo.settings.rule_warning_approvers_needs": {
+		"one": "Approval rule %s needs %d approval.",
+		"other": "Approval rule %s needs %d approvals."
+	},
+	"repo.settings.rule_warning_approvers_only": {
+		"one": "Only %d person can approve.",
+		"other": "Only %d people can approve."
+	},
+	"repo.settings.rule_warning_approvers_none": "Nobody can approve.",
+	"repo.settings.rule_warning_write_unchecked": "(Write access was not checked: the rule covers too many repositories.)",
+	"repo.settings.rule_warning_line_link": "CODEOWNERS line %d",
+	"repo.settings.rule_warning_owner_line": "no owner who can approve, so changes to its files can't be merged under a code owner rule.",
+	"repo.settings.rule_warning_owner_section": {
+		"one": "section %[1]s needs %[2]d approval.",
+		"other": "section %[1]s needs %[2]d approvals."
+	},
+	"repo.settings.rule_warning_section_only": {
+		"one": "Only %d owner can approve there.",
+		"other": "Only %d owners can approve there."
+	},
+	"admin.users.last_approver_header": "Approvers this change affects. Turning off \"%s\" or turning on \"%s\" leaves these without enough approvers:",
+	"admin.users.last_approver_flash": "This account can no longer approve. Approvers this change affects:",
+	"admin.users.last_approver_item": "Approval rule %[1]s of branch rule %[2]s in %[3]s",
+	"admin.users.last_approver.kind.repo_rule": "Repository approval rule",
+	"admin.users.last_approver.kind.project_rule": "Project approval rule",
+	"admin.users.last_approver.kind.org_rule": "Organization approval rule",
+	"admin.users.last_approver_more": "and %d more",
 	"repo.pulls.approval_rule_eligible": "Can approve: %s",
+	"repo.pulls.codeowners_unchecked": "The changes are too large to check against CODEOWNERS, which blocks the merge. Split the pull request, or ask an administrator.",
 	"repo.pulls.codeowners_error": "<a href=\"%s\">CODEOWNERS on %s</a> has an error on line %d, which blocks the merge. A section header needs the form <code>[Name]</code> or <code>[Name][N]</code>; to write a pattern that starts with <code>[</code>, escape it as <code>\\[</code>.",
 	"repo.pulls.codeowners_error_hidden": "The CODEOWNERS file has an error, which blocks the merge.",
 	"repo.pulls.codeowners_section_short": {
