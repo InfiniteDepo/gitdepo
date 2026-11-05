@@ -543,7 +543,7 @@ func TestLDAPGroupTeamSyncRemoveMember(t *testing.T) {
 	})
 	err = organization.AddOrgUser(db.DefaultContext, org.ID, user.ID)
 	require.NoError(t, err)
-	err = models.AddTeamMemberByCooptation(db.DefaultContext, team, user.ID, 1)
+	err = models.AddTeamMemberByCooptation(ownActCtx(t), team, user.ID, 1)
 	require.NoError(t, err)
 	isMember, err := organization.IsOrganizationMember(db.DefaultContext, org.ID, user.ID)
 	require.NoError(t, err)

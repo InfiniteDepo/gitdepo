@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"forgejo.org/models"
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	org_model "forgejo.org/models/organization"
 	"forgejo.org/models/perm"
@@ -66,7 +67,7 @@ func CreateTeam(t *testing.T, org *org_model.Organization, opts *CreateTeamOptio
 	require.NoError(t, db.Insert(t.Context(), &units))
 
 	for _, user := range opts.Members {
-		_, err := models.InsertTeamMember(t.Context(), team, user.ID, org_model.MembershipReasonUnknown, optional.None[int64](), optional.None[int64]())
+		_, err := models.InsertTeamMember(audit_model.WithSystem(t.Context(), "forgery"), team, user.ID, org_model.MembershipReasonUnknown, optional.None[int64](), optional.None[int64]())
 		require.NoError(t, err)
 	}
 

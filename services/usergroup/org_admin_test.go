@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"forgejo.org/models"
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	org_model "forgejo.org/models/organization"
 	"forgejo.org/models/unittest"
@@ -40,7 +41,7 @@ func withOrg22Owner(t *testing.T) {
 		if team.NumMembers > 0 {
 			continue
 		}
-		_, err := models.InsertTeamMember(db.DefaultContext, loadTeam(t, team.ID), 2, org_model.MembershipReasonAddedByUser, optional.None[int64](), optional.None[int64]())
+		_, err := models.InsertTeamMember(audit_model.WithSystem(db.DefaultContext, "test"), loadTeam(t, team.ID), 2, org_model.MembershipReasonAddedByUser, optional.None[int64](), optional.None[int64]())
 		require.NoError(t, err)
 	}
 }

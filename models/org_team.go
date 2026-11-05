@@ -558,6 +558,12 @@ func InsertTeamMember(ctx context.Context, team *organization.Team, userID int64
 	if err != nil || isAlreadyMember {
 		return nil, err
 	}
+	// a user group sync adds the members of the group, as its links (set by a site admin) say, whoever changed the group
+	if reason != organization.MembershipReasonAddedByUserGroup {
+		if err := organization.CheckMemberAddIsOwnAct(ctx, team); err != nil {
+			return nil, err
+		}
+	}
 
 	teamUser := &organization.TeamUser{
 		UID:                    userID,

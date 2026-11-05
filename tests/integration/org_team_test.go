@@ -187,7 +187,7 @@ func TestShowMembershipProvenance(t *testing.T) {
 	loginSource := auth_model.Source{ID: 1, Name: "Keycloak"}
 	unittest.AssertSuccessfulInsert(t, &loginSource)
 
-	require.NoError(t, models.AddTeamMemberByCooptation(t.Context(), team, user28.ID, user2.ID))
+	require.NoError(t, models.AddTeamMemberByCooptation(ownActCtx(t), team, user28.ID, user2.ID))
 	require.NoError(t, models.AddTeamMemberByLoginSource(t.Context(), team, user30.ID, loginSource.ID))
 
 	session := loginUser(t, "user30")

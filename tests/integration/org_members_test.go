@@ -298,7 +298,7 @@ func TestOrgAlreadyInvitedMemberFails(t *testing.T) {
 	user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
 	user5 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5})
 
-	_, err := organization.CreateTeamInviteForUser(t.Context(), user2, user5, team)
+	_, err := organization.CreateTeamInviteForUser(ownActCtx(t), user2, user5, team)
 	require.NoError(t, err)
 
 	session := loginUser(t, "user2")

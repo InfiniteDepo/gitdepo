@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"forgejo.org/models"
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	"forgejo.org/models/organization"
@@ -104,8 +105,9 @@ func TestTeam_GetTeamMemberships(t *testing.T) {
 	_, err := db.GetEngine(db.DefaultContext).Insert(loginSource)
 	require.NoError(t, err)
 
-	require.NoError(t, models.AddTeamMemberByCooptation(db.DefaultContext, team, user28.ID, user2.ID))
-	require.NoError(t, models.AddTeamMemberByLoginSource(db.DefaultContext, team, user30.ID, loginSource.ID))
+	own := audit_model.WithActor(db.DefaultContext, &audit_model.Actor{Type: audit_model.ActorUser, ID: user2.ID, Name: user2.Name, Credential: audit_model.Credential{Type: audit_model.CredentialSession}})
+	require.NoError(t, models.AddTeamMemberByCooptation(own, team, user28.ID, user2.ID))
+	require.NoError(t, models.AddTeamMemberByLoginSource(audit_model.WithLoginSource(db.DefaultContext, loginSource.ID, loginSource.Name), team, user30.ID, loginSource.ID))
 
 	memberships, err := organization.GetTeamMemberships(db.DefaultContext, &organization.SearchMembersOptions{TeamID: team.ID, ListOptions: db.ListOptionsAll})
 	require.NoError(t, err)
