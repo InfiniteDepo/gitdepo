@@ -121,14 +121,18 @@ func PusherApprovers(ctx context.Context, pb *git_model.ProtectedBranch, pr *iss
 	if err != nil {
 		return nil, err
 	}
-	// every valid approver of the rule, as if it counted pushers
-	asIfOff := *pb
-	asIfOff.IgnorePusherApprovals = false
-	approvers, err := issues_model.ValidReviewers(ctx, &asIfOff, pr, issues_model.ReviewTypeApprove)
+	approvers, err := ApproversIgnoringPushers(ctx, pb, pr)
 	if err != nil {
 		return nil, err
 	}
 	return slices.DeleteFunc(approvers, func(u *user_model.User) bool { return !pushers[u.ID] }), nil
+}
+
+// ApproversIgnoringPushers returns every valid approver of the rule pb as if it counted pushers.
+func ApproversIgnoringPushers(ctx context.Context, pb *git_model.ProtectedBranch, pr *issues_model.PullRequest) ([]*user_model.User, error) {
+	asIfOff := *pb
+	asIfOff.IgnorePusherApprovals = false
+	return issues_model.ValidReviewers(ctx, &asIfOff, pr, issues_model.ReviewTypeApprove)
 }
 
 // ApprovalRuleStatuses returns the status of the RequiredApprovals of the protected branch rule, if set,
@@ -330,9 +334,13 @@ func lineApprovers(ctx context.Context, line *issues_model.CodeOwnerRule, approv
 // maxEligibleLookups is how many short sections of a rule get their eligible owners counted.
 const maxEligibleLookups = 10
 
+// maxOwnerChecks bounds the permission checks eligibleOwners runs for one section.
+const maxOwnerChecks = 100
+
 // eligibleOwners counts the people named on the lines who could approve under the rule: they can write the code, are
 // no author of the pull request and, where the protected branch ignores them, no pusher. It only explains a section
-// that is short of approvals, so it stops counting at limit (the number of approvals the section needs).
+// that is short of approvals, so it stops counting at limit (the number of approvals the section needs), or after
+// maxOwnerChecks permission checks.
 func eligibleOwners(ctx context.Context, pb *git_model.ProtectedBranch, pr *issues_model.PullRequest, rule *git_model.ApprovalRule, lines []*issues_model.CodeOwnerRule, limit int) (int, error) {
 	var pushers issues_model.Pushers
 	if pb.IgnorePusherApprovals {
@@ -359,10 +367,14 @@ func eligibleOwners(ctx context.Context, pb *git_model.ProtectedBranch, pr *issu
 			}
 		}
 	}
-	eligible := 0
+	eligible, checked := 0, 0
 	for _, u := range candidates {
 		if u.ID == pr.Issue.PosterID || pushers[u.ID] || !u.IsActive || u.ProhibitLogin {
 			continue
+		}
+		// the count only explains a shortfall, so a huge team can't make every merge-box view a query per member
+		if checked++; checked > maxOwnerChecks {
+			break
 		}
 		if ok, err := access_model.HasAccessUnit(ctx, u, pr.BaseRepo, unit.TypeCode, perm.AccessModeWrite); err != nil {
 			return 0, err

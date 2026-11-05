@@ -280,6 +280,34 @@ func TestPusherApprovals(t *testing.T) {
 			assert.Empty(t, ids, "no rows for an AGit head")
 		})
 
+		// a head the client names (API head_commit_id, auto merge, stack) ahead of the pull ref, which a push updates
+		// asynchronously: the authors of the new commits weren't read yet, so the merge is refused
+		t.Run("client head ahead of the pull ref", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+			e.base("pa-ahead")
+			e.protectPushers("pa-ahead", true)
+			index := e.pr("pa-ahead", create("a.txt", "a"))
+			e.approve("user4", index)
+			// a commit user4 authored, put on the head branch without the hooks, so the pull ref stays behind
+			req := NewRequestWithJSON(t, "POST", "/api/v1/repos/user2/repo1/contents", &api.ChangeFilesOptions{
+				FileOptions: api.FileOptions{BranchName: "head-pa-ahead", NewBranchName: "pa-ahead-src", Message: "c", Author: *ident(user4Email), Committer: *ident(user4Email)},
+				Files:       []*api.ChangeFileOperation{create("b.txt", "b")},
+			}).AddTokenAuth(e.writer["user5"].Token)
+			e.writer["user5"].Session.MakeRequest(t, req, http.StatusCreated)
+			dir := repo_model.RepoPath("user2", "repo1")
+			ahead, err := git.GetFullCommitID(t.Context(), dir, "refs/heads/pa-ahead-src")
+			require.NoError(t, err)
+			require.NoError(t, git.NewCommand(t.Context(), "update-ref", "refs/heads/head-pa-ahead").AddDynamicArguments(ahead).Run(&git.RunOpts{Dir: dir}))
+			pr := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{Index: index, BaseRepoID: 1})
+			pullRef, err := git.GetFullCommitID(t.Context(), dir, pr.GetGitRefName())
+			require.NoError(t, err)
+			require.NotEqual(t, ahead, pullRef)
+
+			req = NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/repos/user2/repo1/pulls/%d/merge", index), &forms.MergePullRequestForm{Do: "merge", HeadCommitID: ahead}).AddTokenAuth(e.owner.Token)
+			e.owner.Session.MakeRequest(t, req, http.StatusConflict)
+			assert.False(t, unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{Index: index, BaseRepoID: 1}).HasMerged)
+		})
+
 		t.Run("commit email", func(t *testing.T) {
 			defer tests.PrintCurrentTest(t)()
 			e.base("pa-email")

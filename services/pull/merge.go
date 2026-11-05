@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -264,11 +263,16 @@ func Merge(ctx context.Context, pr *issues_model.PullRequest, doer *user_model.U
 	if TestHookBeforeHeadPin != nil {
 		TestHookBeforeHeadPin(ctx, pr)
 	}
-	if expectedHeadCommitID == "" {
-		if expectedHeadCommitID, err = headPinnedByPusherRule(ctx, pr); err != nil {
-			return err
-		}
+	// every path (web, API, auto merge, stack) merges the head the checks read, never one the client names: a given
+	// head only has to agree with it, and the merge refuses when the head branch is not at it
+	head, err := issues_model.PullHeadCommitID(ctx, pr)
+	if err != nil {
+		return fmt.Errorf("unable to read the head of %v: %w", pr, err)
 	}
+	if expectedHeadCommitID != "" && expectedHeadCommitID != head {
+		return models.ErrSHADoesNotMatch{GivenSHA: expectedHeadCommitID, CurrentSHA: head}
+	}
+	expectedHeadCommitID = head
 
 	defer func() {
 		AddTestPullRequestTask(ctx, doer, pr.BaseRepo.ID, pr.BaseBranch, false, "", "", 0)
@@ -283,22 +287,6 @@ func Merge(ctx context.Context, pr *issues_model.PullRequest, doer *user_model.U
 
 // TestHookBeforeHeadPin runs between the checks and the pin, so a test can move the head there.
 var TestHookBeforeHeadPin func(ctx context.Context, pr *issues_model.PullRequest)
-
-// headPinnedByPusherRule returns the head the pull request was checked at when a matched rule ignores pusher
-// approvals, "" when none does. Who pushed and who approved were read at that head (the pull ref), so the merge must
-// refuse when the head branch moved since, for instance while the pull request was closed and reopened.
-func headPinnedByPusherRule(ctx context.Context, pr *issues_model.PullRequest) (string, error) {
-	rules, err := git_model.GetMatchedProtectedBranchRules(ctx, pr.BaseRepoID, pr.BaseBranch)
-	if err != nil || !slices.ContainsFunc(rules, func(pb *git_model.ProtectedBranch) bool { return pb.IgnorePusherApprovals }) {
-		return "", err
-	}
-	// the head the pushers were read at (once per request), never the pull ref as it is now
-	head, err := issues_model.PullPushersHead(ctx, pr)
-	if err == nil && head == "" {
-		err = fmt.Errorf("the head of %-v can't be read", pr)
-	}
-	return head, err
-}
 
 // afterMerge notifies about the merge of pr, which the post-receive hook recorded, and closes the issues it references
 func afterMerge(ctx context.Context, pr *issues_model.PullRequest, doer *user_model.User, wasAutoMerged bool) error {
