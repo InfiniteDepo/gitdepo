@@ -17,6 +17,16 @@
 		</div>
 	{{end}}
 
+	{{- if .CodeOwnerMarks}}
+		<div class="ui warning message codeowners-ineligible">
+			<ul class="tw-m-0">
+				{{range .CodeOwnerMarks}}
+					<li>{{$line := .Line}}{{range $i, $m := .Marks}}{{if $i}}; {{end}}{{ctx.Locale.Tr "repo.codeowners.line_owner" $line $m.Name ($m.Reason.Text ctx.Locale)}}{{end}}</li>
+				{{end}}
+			</ul>
+		</div>
+	{{end}}
+
 	{{if not .ReadmeInList}}
 		<div id="repo-file-commit-box" class="ui segment list-header tw-mb-4 tw-flex tw-justify-between">
 			<div class="latest-commit">

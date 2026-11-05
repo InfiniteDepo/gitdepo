@@ -138,6 +138,12 @@ func SettingsProtectedBranch(c *context.Context) {
 	rows := []*api.ApprovalRule{}
 	if rule.ID != 0 {
 		rows = convert.ToBranchProtection(c, rule, c.Repo.Repository).ApprovalRules
+		warnings, err := pull_service.BranchRuleWarnings(c, c.Repo.Repository, rule)
+		if err != nil {
+			c.ServerError("BranchRuleWarnings", err)
+			return
+		}
+		c.Data["RuleWarnings"] = warnings
 	}
 	c.Data["ApprovalRules"] = rows
 	c.Data["MaxApprovalRules"] = git_model.MaxApprovalRules

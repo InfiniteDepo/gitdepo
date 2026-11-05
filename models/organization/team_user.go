@@ -179,3 +179,25 @@ func (t *TeamUser) IsMembershipAddedByLoginSource() bool {
 func (t *TeamUser) IsMembershipAddedByUserGroup() bool {
 	return t.Reason == MembershipReasonAddedByUserGroup
 }
+
+// GetTeamsMemberIDs returns the member IDs of every team, in one query.
+func GetTeamsMemberIDs(ctx context.Context, teamIDs []int64) (map[int64][]int64, error) {
+	members := map[int64][]int64{}
+	if len(teamIDs) == 0 {
+		return members, nil
+	}
+	rows := make([]*TeamUser, 0, len(teamIDs))
+	if err := db.GetEngine(ctx).Cols("team_id", "uid").In("team_id", teamIDs).Find(&rows); err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		members[r.TeamID] = append(members[r.TeamID], r.UID)
+	}
+	return members, nil
+}
+
+// GetTeamIDsOfUsers returns the IDs of the teams the users are members of, in one query.
+func GetTeamIDsOfUsers(ctx context.Context, userIDs []int64) ([]int64, error) {
+	var ids []int64
+	return ids, db.GetEngine(ctx).Table("team_user").Distinct("team_id").In("uid", userIDs).Find(&ids)
+}

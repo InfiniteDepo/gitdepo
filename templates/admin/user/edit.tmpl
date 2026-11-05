@@ -4,6 +4,16 @@
 			{{ctx.Locale.Tr "admin.users.edit_account"}}
 		</h4>
 		<div class="ui attached segment">
+			{{if .LastApproverWarnings}}
+			<div class="ui warning message last-approver-warnings">
+				<div class="header">{{ctx.Locale.Tr "admin.users.last_approver_header"}}</div>
+				<ul>
+					{{range .LastApproverWarnings}}
+						<li><a href="{{.Link}}">{{.Name}}</a> ({{.Kind}})</li>
+					{{end}}
+				</ul>
+			</div>
+			{{end}}
 			<form class="ui form" action="./edit" method="post">
 				{{template "base/disable_form_autofill"}}
 				<div class="field {{if .Err_UserName}}error{{end}}">

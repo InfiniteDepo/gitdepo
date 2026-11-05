@@ -6,6 +6,7 @@ package git
 import (
 	"context"
 	"slices"
+	"strconv"
 	"strings"
 
 	"forgejo.org/models/db"
@@ -15,6 +16,7 @@ import (
 	"forgejo.org/modules/util"
 
 	"github.com/gobwas/glob"
+	"xorm.io/builder"
 )
 
 // MaxApprovalRules is the number of approval rules a protected branch rule can have.
@@ -129,4 +131,28 @@ func (r *ApprovalRule) AppliesTo(changedFiles []string) bool {
 func MatchesAnyGlob(patterns []glob.Glob, path string) bool {
 	lpath := strings.ToLower(strings.TrimSpace(path))
 	return slices.ContainsFunc(patterns, func(g glob.Glob) bool { return g.Match(lpath) })
+}
+
+// FindApprovalRulesListing returns the approval rules, of every level, that list one of the users or one of the
+// teams, in one query. The JSON lists are matched as text first (they are stored as `[1,2,3]`) and checked exactly
+// after, so a rule can't be missed or matched by an ID that is only part of another one.
+func FindApprovalRulesListing(ctx context.Context, userIDs, teamIDs []int64) ([]*ApprovalRule, error) {
+	cond := builder.NewCond()
+	like := func(col string, ids []int64) {
+		for _, id := range ids {
+			s := strconv.FormatInt(id, 10)
+			cond = cond.Or(builder.Like{col, "[" + s + ","}).Or(builder.Like{col, "," + s + ","}).
+				Or(builder.Like{col, "," + s + "]"}).Or(builder.Eq{col: "[" + s + "]"})
+		}
+	}
+	like("user_i_ds", userIDs)
+	like("team_i_ds", teamIDs)
+	var found []*ApprovalRule
+	if err := db.GetEngine(ctx).Where(cond).OrderBy("id").Find(&found); err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(found, func(r *ApprovalRule) bool {
+		return !slices.ContainsFunc(userIDs, func(id int64) bool { return slices.Contains(r.UserIDs, id) }) &&
+			!slices.ContainsFunc(teamIDs, func(id int64) bool { return slices.Contains(r.TeamIDs, id) })
+	}), nil
 }

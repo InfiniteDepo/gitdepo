@@ -26,6 +26,11 @@
 							{{end}}
 						</div>
 					{{end}}
+					{{if and .Ineligible ($.Permission.CanRead $.UnitTypeCode)}}
+						<div class="codeowners-ineligible tw-ml-6 text grey">
+							{{range $i, $m := .Ineligible}}{{if $i}}; {{end}}{{ctx.Locale.Tr "repo.pulls.owner_cannot_approve" $m.Name ($m.Reason.Text ctx.Locale)}}{{end}}
+						</div>
+					{{end}}
 					{{range .Shortfalls}}
 						<div class="codeowners-shortfall tw-ml-6">
 							{{if $.Permission.CanRead $.UnitTypeCode}}

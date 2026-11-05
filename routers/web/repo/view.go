@@ -55,6 +55,7 @@ import (
 	"forgejo.org/services/context"
 	funding_service "forgejo.org/services/funding"
 	issue_service "forgejo.org/services/issue"
+	pull_service "forgejo.org/services/pull"
 	repo_service "forgejo.org/services/repository"
 	files_service "forgejo.org/services/repository/files"
 
@@ -450,9 +451,15 @@ func renderFile(ctx *context.Context, entry *git.TreeEntry) {
 		}
 	} else if slices.Contains([]string{"CODEOWNERS", "docs/CODEOWNERS", ".gitea/CODEOWNERS", ".forgejo/CODEOWNERS"}, ctx.Repo.TreePath) {
 		if rc, size, err := blob.NewTruncatedReader(setting.UI.MaxDisplayFileSize); err == nil {
-			_, warnings := issues_model.GetCodeOwnersFromReader(ctx, rc, size > setting.UI.MaxDisplayFileSize)
-			if len(warnings) > 0 {
-				ctx.Data["FileWarning"] = strings.Join(warnings, "\n")
+			owners := issues_model.ParseCodeOwners(ctx, rc, size > setting.UI.MaxDisplayFileSize)
+			if len(owners.Warnings) > 0 {
+				ctx.Data["FileWarning"] = strings.Join(owners.Warnings, "\n")
+			}
+			// owners who can't approve, for readers of the code (this page is one)
+			if marks, err := pull_service.CodeOwnerLineMarks(ctx, ctx.Repo.Repository, owners.Rules); err != nil {
+				log.Error("CodeOwnerLineMarks: %v", err)
+			} else {
+				ctx.Data["CodeOwnerMarks"] = marks
 			}
 		}
 	} else if ctx.Repo.TreePath == ".gitmodules" {

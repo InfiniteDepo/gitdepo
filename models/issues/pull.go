@@ -1198,7 +1198,7 @@ func ParseCodeOwners(ctx context.Context, rc io.ReadCloser, truncated bool) *Cod
 			fail("more than %d pattern lines", MaxCodeOwnerLines)
 			break
 		}
-		rule.Section = current
+		rule.Section, rule.Line = current, line
 		owners.Rules = append(owners.Rules, rule)
 	}
 	if err := scanner.Err(); err != nil {
@@ -1255,6 +1255,7 @@ type CodeOwnerRule struct {
 	Users    []*user_model.User
 	Teams    []*org_model.Team
 	Section  *CodeOwnerSection // the default section (Required 1, no name) of a line above every header
+	Line     int               // the line of the pattern in the file
 }
 
 // newCodeOwnerRule compiles the pattern of a line.

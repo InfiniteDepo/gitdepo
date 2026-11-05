@@ -1,0 +1,107 @@
+// Copyright 2026 The gitdepo contributors. All rights reserved.
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+package user
+
+import (
+	"context"
+	"fmt"
+	"sync/atomic"
+	"testing"
+
+	"forgejo.org/models/db"
+	git_model "forgejo.org/models/git"
+	"forgejo.org/models/unittest"
+	user_model "forgejo.org/models/user"
+
+	"code.forgejo.org/xorm/xorm/contexts"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+type countHook struct{ n atomic.Int64 }
+
+func (h *countHook) BeforeProcess(c *contexts.ContextHook) (context.Context, error) {
+	h.n.Add(1)
+	return db.TracingHook{}.BeforeProcess(c)
+}
+func (*countHook) AfterProcess(*contexts.ContextHook) error { return nil }
+
+func addRule(t *testing.T, pb *git_model.ProtectedBranch, rule *git_model.ApprovalRule) {
+	t.Helper()
+	require.NoError(t, db.Insert(t.Context(), pb))
+	rule.ProtectedBranchID = pb.ID
+	require.NoError(t, db.Insert(t.Context(), rule))
+}
+
+func TestLastApproverWarnings(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := t.Context()
+	kinds := func(userIDs ...int64) map[string]string {
+		w, err := LastApproverWarnings(ctx, userIDs)
+		require.NoError(t, err)
+		got := map[string]string{}
+		for _, x := range w {
+			assert.Contains(t, userIDs, x.UserID)
+			got[x.Name] = x.Kind + " " + x.Link
+		}
+		return got
+	}
+
+	// a repository rule listing user 4 only, an organization rule listing team 2 (users 2 and 4) with 2 approvals,
+	// and a repository rule that user 4 shares with user 5
+	addRule(t, &git_model.ProtectedBranch{RepoID: 1, RuleName: "main"}, &git_model.ApprovalRule{Name: "Lead", RequiredCount: 1, UserIDs: []int64{4}})
+	addRule(t, &git_model.ProtectedBranch{OrgID: 3, RuleName: "release"}, &git_model.ApprovalRule{Name: "Team", RequiredCount: 2, TeamIDs: []int64{2}})
+	addRule(t, &git_model.ProtectedBranch{RepoID: 1, RuleName: "dev"}, &git_model.ApprovalRule{Name: "Pair", RequiredCount: 1, UserIDs: []int64{4, 5}})
+
+	got := kinds(4)
+	assert.Equal(t, map[string]string{
+		"user2/repo1 main: Lead": "repository_approval_rule /user2/repo1/settings/branches/edit?rule_name=main",
+		"org3 release: Team":     "organization_approval_rule /org/org3/settings/branches/edit?rule_name=release",
+	}, got, "the shared rule keeps user 5, so it is no warning")
+
+	// via team: user 2 is in team 2 as well
+	assert.Equal(t, []string{"org3 release: Team"}, keysOf(kinds(2)))
+	// both users leave: the pair is empty too
+	assert.Len(t, kinds(4, 5), 3)
+	assert.Empty(t, kinds(8), "a user no rule lists")
+
+	// the user is already unable to sign in: nothing changes by leaving
+	u := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 4})
+	u.IsActive = false
+	require.NoError(t, user_model.UpdateUserCols(ctx, u, "is_active"))
+	assert.Empty(t, kinds(4))
+	u.IsActive = true
+	require.NoError(t, user_model.UpdateUserCols(ctx, u, "is_active"))
+
+	t.Run("queries do not grow with the rules", func(t *testing.T) {
+		engine, err := db.GetMasterEngine(db.GetEngine(db.DefaultContext))
+		require.NoError(t, err)
+		h := &countHook{}
+		engine.AddHook(h)
+		count := func() int64 {
+			h.n.Store(0)
+			_, err := LastApproverWarnings(ctx, []int64{4})
+			require.NoError(t, err)
+			return h.n.Load()
+		}
+		count() // warm up
+		before := count()
+		for i := range 10 {
+			addRule(t, &git_model.ProtectedBranch{RepoID: 1, RuleName: fmt.Sprintf("extra-%d", i)}, &git_model.ApprovalRule{Name: "Extra", RequiredCount: 1, UserIDs: []int64{4}})
+		}
+		h.n.Store(0)
+		w, err := LastApproverWarnings(ctx, []int64{4})
+		require.NoError(t, err)
+		assert.Len(t, w, 12)
+		assert.Equal(t, before, count(), "the same number of queries with 12 rules as with 2")
+	})
+}
+
+func keysOf(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}

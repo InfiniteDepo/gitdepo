@@ -2110,6 +2110,12 @@ func ViewIssue(ctx *context.Context) {
 			}
 			if len(approvalRules) > 0 {
 				ctx.Data["ApprovalRules"] = approvalRules
+				if ctx.Repo.CanRead(unit.TypeCode) {
+					// why owners can't approve is shown to readers of the code only
+					if err := pull_service.LoadIneligibleOwners(ctx, pull.BaseRepo, approvalRules); err != nil {
+						log.Error("LoadIneligibleOwners for %-v: %v", pull, err)
+					}
+				}
 				if ctx.Repo.IsAdmin() {
 					// who can approve is shown to repository admins only
 					eligible := make(map[int64]string, len(approvalRules))

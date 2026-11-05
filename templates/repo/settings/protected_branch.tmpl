@@ -21,6 +21,19 @@
 				{{ctx.Locale.Tr "repo.settings.protect_new_rule"}}
 			{{end}}
 		</h4>
+		{{if .RuleWarnings}}
+		<div class="ui attached warning message rule-warnings">
+			<ul class="tw-m-0">
+				{{range .RuleWarnings}}
+					<li>
+						{{if eq .Kind "approvers_short"}}{{ctx.Locale.Tr "repo.settings.rule_warning_approvers_short" .Name .Required .Eligible}}
+						{{else if eq .Kind "owner_line"}}{{ctx.Locale.Tr "repo.settings.rule_warning_owner_line" .Line}}
+						{{else}}{{ctx.Locale.Tr "repo.settings.rule_warning_owner_section" .Name .Required .Eligible}}{{end}}
+					</li>
+				{{end}}
+			</ul>
+		</div>
+		{{end}}
 		<form class="ui form attached segment" action="{{.Link}}" method="post">
 			<input name="rule_id" type="hidden" value="{{.Rule.ID}}">
 			{{if and .IsOrgRule (not .RepoGroup)}}
