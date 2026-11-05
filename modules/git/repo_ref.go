@@ -65,6 +65,15 @@ func parseTags(refs []string) []string {
 	return results
 }
 
+// IsExactRefExist returns true if the full reference (`refs/heads/x`) exists. Unlike a lookup by name (`cat-file`), it
+// never falls back to another ref that git would resolve the name to.
+func (repo *Repository) IsExactRefExist(ref string) bool {
+	if repo == nil || !strings.HasPrefix(ref, "refs/") {
+		return false
+	}
+	return NewCommand(repo.Ctx, "show-ref", "--verify", "--quiet").AddDashesAndList(ref).Run(&RunOpts{Dir: repo.Path}) == nil
+}
+
 // ExpandRef expands any partial reference to its full form
 func (repo *Repository) ExpandRef(ref string) (string, error) {
 	if strings.HasPrefix(ref, "refs/") {

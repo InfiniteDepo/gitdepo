@@ -255,6 +255,8 @@ func CreateBranch(ctx *context.APIContext) {
 			ctx.Error(http.StatusConflict, "", "The branch already exists.")
 		} else if git_model.IsErrBranchNameConflict(err) {
 			ctx.Error(http.StatusConflict, "", "The branch with the same name already exists.")
+		} else if git_model.IsErrBranchNameReserved(err) {
+			ctx.Error(http.StatusUnprocessableEntity, "", "The branch name is reserved.")
 		} else {
 			ctx.Error(http.StatusInternalServerError, "CreateNewBranchFromCommit", err)
 		}

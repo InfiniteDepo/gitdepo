@@ -303,6 +303,12 @@ func preReceiveBranch(ctx *preReceiveContext, oldCommitID, newCommitID string, r
 	repo := ctx.Repo.Repository
 	objectFormat := ctx.Repo.GetObjectFormat()
 
+	// a name that could be read as another ref is never created (an existing one can still be updated and deleted)
+	if oldCommitID == objectFormat.EmptyObjectID().String() && git.IsReservedRefName(branchName) {
+		ctx.refuse(http.StatusForbidden, "reserved_name", refFullName.String(), fmt.Sprintf("branch name %s is reserved", branchName))
+		return
+	}
+
 	if branchName == repo.DefaultBranch && newCommitID == objectFormat.EmptyObjectID().String() {
 		log.Warn("Forbidden: Branch: %s is the default branch in %-v and cannot be deleted", branchName, repo)
 		ctx.refuse(http.StatusForbidden, "protected_branch", refFullName.String(), fmt.Sprintf("branch %s is the default branch and cannot be deleted", branchName))
@@ -606,12 +612,17 @@ func preReceiveMergeForwardStep(ctx *preReceiveContext, protectBranch *git_model
 	return true
 }
 
-func preReceiveTag(ctx *preReceiveContext, oldCommitID, newCommitID string, refFullName git.RefName) { //nolint:unparam
+func preReceiveTag(ctx *preReceiveContext, oldCommitID, newCommitID string, refFullName git.RefName) {
 	if !ctx.assertCanWriteCode() {
 		return
 	}
 
 	tagName := refFullName.TagName()
+
+	if oldCommitID == ctx.Repo.GetObjectFormat().EmptyObjectID().String() && git.IsReservedRefName(tagName) {
+		ctx.refuse(http.StatusForbidden, "reserved_name", refFullName.String(), fmt.Sprintf("tag name %s is reserved", tagName))
+		return
+	}
 
 	if !ctx.gotProtectedTags {
 		var err error
