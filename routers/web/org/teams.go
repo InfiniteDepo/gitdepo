@@ -503,8 +503,6 @@ func NewTeamPost(ctx *context.Context) {
 		switch {
 		case org_model.IsErrTeamAlreadyExist(err):
 			ctx.RenderWithErr(ctx.Tr("form.team_name_been_taken"), tplTeamNew, &form)
-		case errors.Is(err, util.ErrPermissionDenied):
-			ctx.RenderWithErr(ctx.Tr("org.teams.rename_not_own_act"), tplTeamNew, &form)
 		default:
 			ctx.ServerError("NewTeam", err)
 		}
@@ -774,6 +772,8 @@ func EditTeamPost(ctx *context.Context) {
 		switch {
 		case org_model.IsErrTeamAlreadyExist(err):
 			ctx.RenderWithErr(ctx.Tr("form.team_name_been_taken"), tplTeamNew, &form)
+		case errors.Is(err, util.ErrPermissionDenied):
+			ctx.RenderWithErr(ctx.Tr("org.teams.rename_not_own_act"), tplTeamNew, &form)
 		default:
 			ctx.ServerError("UpdateTeam", err)
 		}
