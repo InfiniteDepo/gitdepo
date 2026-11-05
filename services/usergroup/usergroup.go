@@ -49,8 +49,13 @@ var (
 	ErrAlreadyLinked = errors.New("user group is already linked to the team")
 )
 
-// AddMember adds a user to a user group and to every team the group is linked to.
+// AddMember adds a user to a user group and to every team the group is linked to. It is an admin's request, so like
+// every other way of adding someone to the Owners team or a reviewer team (org_model.CheckMemberAddIsOwnAct), it must be
+// the admin's own act (audit_model.CheckOwnAct); the sync of a login source uses addMember.
 func AddMember(ctx context.Context, group *org_model.UserGroup, user *user_model.User) error {
+	if err := audit_model.CheckOwnAct(ctx); err != nil {
+		return err
+	}
 	return addMember(ctx, group, user, 0)
 }
 
@@ -186,8 +191,13 @@ func loadGroupsForSync(ctx context.Context, names container.Set[string]) ([]*org
 	return groups, nil
 }
 
-// LinkTeam links a user group to a team and adds the members of the group to the team.
+// LinkTeam links a user group to a team and adds the members of the group to the team. Linking adds members, so for
+// the Owners team or a reviewer team it is only the doer's own act (org_model.CheckMemberAddIsOwnAct): the sync that
+// follows is exempt from that check only because the link itself was checked here.
 func LinkTeam(ctx context.Context, group *org_model.UserGroup, team *org_model.Team) error {
+	if err := org_model.CheckMemberAddIsOwnAct(ctx, team); err != nil {
+		return err
+	}
 	return db.WithTx(ctx, func(ctx context.Context) error {
 		if org, err := org_model.GetOrgByID(ctx, team.OrgID); err != nil {
 			return err
@@ -248,8 +258,13 @@ func CreateOrganization(ctx context.Context, org *org_model.Organization, owner 
 }
 
 // CreateGroup creates a user group. A group granting the org-admin role is
-// linked to the Owners team of every organization right away.
+// linked to the Owners team of every organization right away, so creating one is only the admin's own act.
 func CreateGroup(ctx context.Context, group *org_model.UserGroup) error {
+	if group.GrantsOrgAdmin {
+		if err := audit_model.CheckOwnAct(ctx); err != nil {
+			return err
+		}
+	}
 	return db.WithTx(ctx, func(ctx context.Context) error {
 		if err := org_model.InsertUserGroup(ctx, group); err != nil {
 			return err
@@ -265,12 +280,18 @@ func CreateGroup(ctx context.Context, group *org_model.UserGroup) error {
 }
 
 // UpdateGroup updates the name, description and roles of a user group, and
-// the role flags of its members.
+// the role flags of its members. Turning on the org-admin role adds owners, and a new name retargets the login
+// sources that map a directory group to that name onto the group's teams, so both are only the admin's own act.
 func UpdateGroup(ctx context.Context, group *org_model.UserGroup) error {
 	return db.WithTx(ctx, func(ctx context.Context) error {
 		old, err := org_model.GetUserGroupByID(ctx, group.ID)
 		if err != nil {
 			return err
+		}
+		if (group.GrantsOrgAdmin && !old.GrantsOrgAdmin) || !strings.EqualFold(strings.TrimSpace(group.Name), old.Name) {
+			if err := audit_model.CheckOwnAct(ctx); err != nil {
+				return err
+			}
 		}
 		if err := org_model.UpdateUserGroup(ctx, group); err != nil {
 			return err
@@ -601,7 +622,8 @@ func syncOrgAdminLinks(ctx context.Context, orgID int64, groups []*org_model.Use
 }
 
 // SetOrgAdminExclusions replaces the organizations excluded from the org-admin
-// role and updates the links of the organizations that changed.
+// role and updates the links of the organizations that changed. Lifting an exclusion adds owners, so it is only the
+// admin's own act; adding one only removes owners.
 func SetOrgAdminExclusions(ctx context.Context, orgIDs []int64) error {
 	return db.WithTx(ctx, func(ctx context.Context) error {
 		old, err := org_model.GetOrgAdminExclusionOrgIDs(ctx)
@@ -613,6 +635,11 @@ func SetOrgAdminExclusions(ctx context.Context, orgIDs []int64) error {
 		for id := range old {
 			if !next.Contains(id) {
 				changed = append(changed, id)
+			}
+		}
+		if len(changed) > 0 { // lifted
+			if err := audit_model.CheckOwnAct(ctx); err != nil {
+				return err
 			}
 		}
 		for id := range next {

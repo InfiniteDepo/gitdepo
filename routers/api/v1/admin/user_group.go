@@ -11,6 +11,7 @@ import (
 	org_model "forgejo.org/models/organization"
 	user_model "forgejo.org/models/user"
 	api "forgejo.org/modules/structs"
+	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
 	"forgejo.org/routers/api/v1/utils"
 	"forgejo.org/services/context"
@@ -126,6 +127,8 @@ func CreateUserGroup(ctx *context.APIContext) {
 	if err := usergroup_service.CreateGroup(ctx, group); err != nil {
 		if org_model.IsErrUserGroupAlreadyExist(err) {
 			ctx.Error(http.StatusConflict, "", err)
+		} else if errors.Is(err, util.ErrPermissionDenied) {
+			ctx.Error(http.StatusForbidden, "", err)
 		} else {
 			ctx.Error(http.StatusInternalServerError, "InsertUserGroup", err)
 		}
@@ -223,6 +226,8 @@ func EditUserGroup(ctx *context.APIContext) {
 	if err := usergroup_service.UpdateGroup(ctx, group); err != nil {
 		if org_model.IsErrUserGroupAlreadyExist(err) || models.IsErrDeleteLastAdminUser(err) || org_model.IsErrLastOrgOwner(err) {
 			ctx.Error(http.StatusConflict, "", err)
+		} else if errors.Is(err, util.ErrPermissionDenied) {
+			ctx.Error(http.StatusForbidden, "", err)
 		} else {
 			ctx.Error(http.StatusInternalServerError, "UpdateGroup", err)
 		}
@@ -359,6 +364,8 @@ func AddUserGroupMember(ctx *context.APIContext) {
 		ctx.Status(http.StatusNoContent)
 	case errors.Is(err, usergroup_service.ErrOrganizationCannotBeMember):
 		ctx.Error(http.StatusUnprocessableEntity, "", err)
+	case errors.Is(err, util.ErrPermissionDenied):
+		ctx.Error(http.StatusForbidden, "", err)
 	default:
 		ctx.Error(http.StatusInternalServerError, "AddMember", err)
 	}

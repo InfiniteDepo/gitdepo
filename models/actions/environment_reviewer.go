@@ -26,7 +26,7 @@ type ActionEnvironmentReviewer struct {
 	ID            int64
 	EnvironmentID int64 `xorm:"INDEX UNIQUE(environment_user_team) NOT NULL DEFAULT 0"`
 	UserID        int64 `xorm:"UNIQUE(environment_user_team) NOT NULL DEFAULT 0"`
-	TeamID        int64 `xorm:"UNIQUE(environment_user_team) NOT NULL DEFAULT 0"`
+	TeamID        int64 `xorm:"INDEX UNIQUE(environment_user_team) NOT NULL DEFAULT 0"`
 }
 
 func init() {

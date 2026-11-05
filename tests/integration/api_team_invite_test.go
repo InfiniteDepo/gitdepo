@@ -27,7 +27,7 @@ func TestAPITeamInviteInTeam(t *testing.T) {
 	user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
 	user5 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5})
 
-	invite, err := organization.CreateTeamInviteForUser(db.DefaultContext, user2, user5, team)
+	invite, err := organization.CreateTeamInviteForUser(ownActCtx(t), user2, user5, team)
 	require.NoError(t, err)
 
 	t.Run("Not org owner PoV", func(t *testing.T) {
@@ -92,9 +92,9 @@ func TestAPIMyTeamInvites(t *testing.T) {
 	user5 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5})
 	user8 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 8})
 
-	invite, err := organization.CreateTeamInviteForUser(db.DefaultContext, user2, user5, team)
+	invite, err := organization.CreateTeamInviteForUser(ownActCtx(t), user2, user5, team)
 	require.NoError(t, err)
-	invite8, err := organization.CreateTeamInviteForUser(db.DefaultContext, user2, user8, team)
+	invite8, err := organization.CreateTeamInviteForUser(ownActCtx(t), user2, user8, team)
 	require.NoError(t, err)
 
 	t.Run("Different user PoV", func(t *testing.T) {

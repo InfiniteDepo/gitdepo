@@ -401,6 +401,8 @@ func Rename(ctx *context.APIContext) {
 	if err := user_service.RenameUser(ctx, orgUser, form.NewName); err != nil {
 		if user_model.IsErrUserAlreadyExist(err) || db.IsErrNameReserved(err) || db.IsErrNamePatternNotAllowed(err) || db.IsErrNameCharsNotAllowed(err) {
 			ctx.Error(http.StatusUnprocessableEntity, "RenameOrg", err)
+		} else if errors.Is(err, util.ErrPermissionDenied) {
+			ctx.Error(http.StatusForbidden, "RenameOrg", err)
 		} else {
 			ctx.ServerError("RenameOrg", err)
 		}

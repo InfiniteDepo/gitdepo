@@ -185,12 +185,19 @@ func MembersAction(ctx *context.Context) {
 			ctx.ServerError("GetTeams", err)
 			return
 		}
+		// a team that refuses the request refuses it before any team is changed
+		for _, team := range teams {
+			if ctx.FormBool(fmt.Sprintf("team_%d", team.ID)) && flashTeamAddRefusal(ctx, organization.CheckMemberAddIsOwnAct(ctx, team), u.Name) {
+				ctx.Redirect(ctx.Org.OrgLink + "/members")
+				return
+			}
+		}
 		addedToTeam := false
 		for _, team := range teams {
 			addToTeam := ctx.FormBool(fmt.Sprintf("team_%d", team.ID))
 			if addToTeam {
 				err = org_service.InviteOrAddTeamMember(ctx, ctx.Doer, u, team)
-				if flashVerifiedDomainError(ctx, err, u.Name) {
+				if flashTeamAddRefusal(ctx, err, u.Name) {
 					ctx.Redirect(ctx.Org.OrgLink + "/members")
 					return
 				} else if err != nil {

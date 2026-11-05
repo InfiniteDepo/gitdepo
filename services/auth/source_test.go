@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"forgejo.org/models"
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	org_model "forgejo.org/models/organization"
@@ -25,7 +26,7 @@ func TestDeleteSourceCleansUpMembershipProvenance(t *testing.T) {
 	user28 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 28})
 	team1 := unittest.AssertExistsAndLoadBean(t, &org_model.Team{ID: 1})
 
-	require.NoError(t, models.AddTeamMemberByLoginSource(db.DefaultContext, team1, user28.ID, loginSource.ID))
+	require.NoError(t, models.AddTeamMemberByLoginSource(audit_model.WithLoginSource(db.DefaultContext, loginSource.ID, loginSource.Name), team1, user28.ID, loginSource.ID))
 
 	require.NoError(t, DeleteSource(db.DefaultContext, &loginSource))
 

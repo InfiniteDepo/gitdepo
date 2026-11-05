@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"forgejo.org/models"
-	"forgejo.org/models/db"
 	org_model "forgejo.org/models/organization"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
@@ -23,7 +22,7 @@ import (
 func newRoleGroup(t *testing.T, name string, admin, createOrg bool) *org_model.UserGroup {
 	t.Helper()
 	g := &org_model.UserGroup{Name: name, GrantsSiteAdmin: admin, GrantsCreateOrganization: createOrg}
-	require.NoError(t, org_model.InsertUserGroup(db.DefaultContext, g))
+	require.NoError(t, org_model.InsertUserGroup(ownCtx(), g))
 	return g
 }
 
@@ -43,12 +42,12 @@ func setUserFlags(t *testing.T, uid int64, admin, createOrg bool) {
 	t.Helper()
 	u := loadUser(t, uid)
 	u.IsAdmin, u.AllowCreateOrganization = admin, createOrg
-	require.NoError(t, user_model.UpdateUserCols(db.DefaultContext, u, "is_admin", "allow_create_organization"))
+	require.NoError(t, user_model.UpdateUserCols(ownCtx(), u, "is_admin", "allow_create_organization"))
 }
 
 func TestRolesGrantAndRevoke(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 
 	// user 5 is neither admin nor allowed to create organizations
 	assertRoles(t, 5, false, false)
@@ -65,7 +64,7 @@ func TestRolesGrantAndRevoke(t *testing.T) {
 
 func TestRolesManualFlagIsKept(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 
 	setUserFlags(t, 5, true, true)
 	group := newRoleGroup(t, "admins", true, true)
@@ -79,7 +78,7 @@ func TestRolesManualFlagIsKept(t *testing.T) {
 
 func TestRolesSeveralGroups(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 
 	a, b := newRoleGroup(t, "admins-a", true, false), newRoleGroup(t, "admins-b", true, false)
 	require.NoError(t, AddMember(ctx, a, loadUser(t, 5)))
@@ -97,7 +96,7 @@ func TestRolesSeveralGroups(t *testing.T) {
 
 func TestRolesChangeAndDeleteGroup(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 
 	group := newRoleGroup(t, "staff", false, false)
 	require.NoError(t, AddMember(ctx, group, loadUser(t, 5)))
@@ -118,7 +117,7 @@ func TestRolesChangeAndDeleteGroup(t *testing.T) {
 
 func TestRolesLastAdminGuard(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 
 	group := newRoleGroup(t, "admins", true, false)
 	require.NoError(t, AddMember(ctx, group, loadUser(t, 5)))
@@ -148,7 +147,7 @@ func TestRolesLastAdminGuard(t *testing.T) {
 }
 
 func TestRolesLastUsableAdminGuard(t *testing.T) {
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 	for _, col := range []string{"is_active", "prohibit_login"} {
 		t.Run(col, func(t *testing.T) {
 			require.NoError(t, unittest.PrepareTestDatabase())
@@ -175,7 +174,7 @@ func TestRolesLastUsableAdminGuard(t *testing.T) {
 
 func TestRolesLastAdminGuardSameTransaction(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 
 	// users 1 and 5 are the only admins, both through the same group
 	setUserFlags(t, 1, false, false)
@@ -192,7 +191,7 @@ func TestRolesLastAdminGuardSameTransaction(t *testing.T) {
 
 func TestRolesUserDeletionRemovesGrants(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 
 	group := newRoleGroup(t, "admins", true, false)
 	require.NoError(t, AddMember(ctx, group, loadUser(t, 9)))
@@ -204,7 +203,7 @@ func TestRolesUserDeletionRemovesGrants(t *testing.T) {
 
 func TestDirectoryAdmin(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 
 	check := func(uid int64, directoryIsAdmin, expected bool) {
 		t.Helper()
@@ -226,7 +225,7 @@ func TestDirectoryAdmin(t *testing.T) {
 
 func TestDirectoryAdminWithoutGrantRow(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 
 	// user 2 is already an admin through the directory when they join the group,
 	// so the group records no grant
@@ -243,7 +242,7 @@ func TestDirectoryAdminWithoutGrantRow(t *testing.T) {
 
 func TestRolesAuditor(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 
 	group := &org_model.UserGroup{Name: "auditors", GrantsAuditor: true}
 	require.NoError(t, org_model.InsertUserGroup(ctx, group))
@@ -271,6 +270,6 @@ func TestRolesUnknownRole(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	defer test.MockVariableValue(&org_model.UserGroupRoles, append(slices.Clone(org_model.UserGroupRoles), "unknown"))()
 
-	require.Error(t, syncRoles(db.DefaultContext, 0, 5))
+	require.Error(t, syncRoles(ownCtx(), 0, 5))
 	assertRoles(t, 5, false, false)
 }

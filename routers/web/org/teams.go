@@ -26,6 +26,7 @@ import (
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/templates"
+	"forgejo.org/modules/util"
 	"forgejo.org/modules/validation"
 	"forgejo.org/modules/web"
 	shared_user "forgejo.org/routers/web/shared/user"
@@ -160,7 +161,7 @@ func TeamsAction(ctx *context.Context) {
 							ctx.Flash.Error(ctx.Tr("form.duplicate_invite_to_team"))
 						} else if org_model.IsErrUserEmailAlreadyAdded(err) {
 							ctx.Flash.Error(ctx.Tr("org.teams.add_duplicate_users"))
-						} else {
+						} else if !flashTeamAddRefusal(ctx, err, uname) {
 							ctx.ServerError("CreateTeamInvite", err)
 							return
 						}
@@ -189,7 +190,7 @@ func TeamsAction(ctx *context.Context) {
 				ctx.Flash.Error(ctx.Tr("members.user_already_invited_to_team"))
 				ctx.Redirect(ctx.Org.OrgLink + "/teams/" + url.PathEscape(ctx.Org.Team.LowerName))
 				return
-			} else if flashVerifiedDomainError(ctx, err, u.Name) {
+			} else if flashTeamAddRefusal(ctx, err, u.Name) {
 				ctx.Redirect(ctx.Org.OrgLink + "/teams/" + url.PathEscape(ctx.Org.Team.LowerName))
 				return
 			} else if err != nil {
@@ -223,7 +224,7 @@ func TeamsAction(ctx *context.Context) {
 	if err != nil {
 		if org_model.IsErrLastOrgOwner(err) {
 			ctx.Flash.Error(ctx.Tr("form.last_org_owner"))
-		} else if !flashVerifiedDomainError(ctx, err, ctx.Doer.Name) { // an admin joining a team
+		} else if !flashTeamAddRefusal(ctx, err, ctx.Doer.Name) { // an admin joining a team
 			log.Error("Action(%s): %v", ctx.Params(":action"), err)
 			ctx.JSON(http.StatusOK, map[string]any{
 				"ok":  false,
@@ -312,6 +313,10 @@ func TeamsUserGroupAction(ctx *context.Context) {
 	if err != nil {
 		if org_model.IsErrLastOrgOwner(err) {
 			ctx.Flash.Error(ctx.Tr("form.last_org_owner"))
+			ctx.Redirect(teamLink)
+			return
+		}
+		if flashTeamAddRefusal(ctx, err, "") {
 			ctx.Redirect(teamLink)
 			return
 		}
@@ -767,6 +772,8 @@ func EditTeamPost(ctx *context.Context) {
 		switch {
 		case org_model.IsErrTeamAlreadyExist(err):
 			ctx.RenderWithErr(ctx.Tr("form.team_name_been_taken"), tplTeamNew, &form)
+		case errors.Is(err, util.ErrPermissionDenied):
+			ctx.RenderWithErr(ctx.Tr("org.teams.rename_not_own_act"), tplTeamNew, &form)
 		default:
 			ctx.ServerError("UpdateTeam", err)
 		}
@@ -839,7 +846,7 @@ func TeamInvitePost(ctx *context.Context) {
 			ctx.NotFound("ErrTeamInviteNotFound", err)
 		} else if org_model.IsErrOrgArchived(err) {
 			ctx.Error(http.StatusForbidden, ctx.Locale.TrString("org.archived.readonly"))
-		} else if flashVerifiedDomainError(ctx, err, ctx.Doer.Name) {
+		} else if flashTeamAddRefusal(ctx, err, ctx.Doer.Name) {
 			ctx.Redirect("/org/invite/" + invite.Token)
 		} else {
 			ctx.ServerError("AcceptInvite", err)

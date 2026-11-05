@@ -108,10 +108,16 @@ type TeamInvite struct {
 	CreatedUnix timeutil.TimeStamp                  `xorm:"INDEX created"`
 	UpdatedUnix timeutil.TimeStamp                  `xorm:"INDEX updated"`
 	ExpiryUnix  optional.Option[timeutil.TimeStamp] `xorm:"expiry_unix"`
+	// OwnAct is whether the inviter acted with a credential of their own; accepting an invitation to a protected team
+	// needs it (CheckInviteIsOwnAct), as the team may have become protected after the invitation
+	OwnAct bool `xorm:"NOT NULL DEFAULT false"`
 }
 
 // CreateTeamInviteByEmail creates a TeamInvite for someone who does not have an account yet.
 func CreateTeamInviteByEmail(ctx context.Context, doer *user_model.User, team *Team, email string) (invite *TeamInvite, err error) {
+	if err := CheckMemberAddIsOwnAct(ctx, team); err != nil {
+		return nil, err
+	}
 	err = db.WithTx(ctx, func(ctx context.Context) error {
 		invite, err = createTeamInviteByEmail(ctx, doer, team, email)
 		return err
@@ -170,6 +176,7 @@ func createTeamInviteByEmail(ctx context.Context, doer *user_model.User, team *T
 		TeamID:     team.ID,
 		Email:      email,
 		ExpiryUnix: getInviteExpiry(),
+		OwnAct:     audit_model.IsOwnAct(ctx),
 	}
 
 	return invite, insertInvite(ctx, team, invite)
@@ -177,6 +184,9 @@ func createTeamInviteByEmail(ctx context.Context, doer *user_model.User, team *T
 
 // CreateTeamInviteForUser creates a TeamInvite for someone who already has an account on the instance.
 func CreateTeamInviteForUser(ctx context.Context, doer, invited *user_model.User, team *Team) (invite *TeamInvite, err error) {
+	if err := CheckMemberAddIsOwnAct(ctx, team); err != nil {
+		return nil, err
+	}
 	err = db.WithTx(ctx, func(ctx context.Context) error {
 		invite, err = createTeamInviteForUser(ctx, doer, invited, team)
 		return err
@@ -236,6 +246,7 @@ func createTeamInviteForUser(ctx context.Context, doer, invited *user_model.User
 		InvitedID:   optional.Some(invited.ID),
 		InvitedUser: invited,
 		ExpiryUnix:  getInviteExpiry(),
+		OwnAct:      audit_model.IsOwnAct(ctx),
 	}
 
 	return invite, insertInvite(ctx, team, invite)

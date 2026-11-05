@@ -89,7 +89,7 @@ func TestOAuth2GroupUserGroupSync(t *testing.T) {
 	assert.False(t, isMember(ops, source.ID))
 
 	// an admin adds the user to ops by hand
-	require.NoError(t, usergroup_service.AddMember(db.DefaultContext, ops, user))
+	require.NoError(t, usergroup_service.AddMember(ownActCtx(t), ops, user))
 
 	t.Run("admin page shows the source", func(t *testing.T) {
 		req := NewRequest(t, "GET", fmt.Sprintf("/admin/groups/%d", devs.ID))
