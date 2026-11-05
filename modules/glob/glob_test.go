@@ -16,12 +16,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A pattern means the same as it does to gobwas, except where a gobwas matcher deviates from its own syntax.
+// A pattern means the same as it does to gobwas, except that `**` as a whole path segment also matches no directory
+// and where a gobwas matcher deviates from its own syntax.
 func TestCompileMatchesGobwas(t *testing.T) {
-	// gobwas defects, pattern -> name: a prefix and suffix around `**` may overlap, and a row of `?` with two separators ignores them
+	// known differences, pattern -> name, both not matched here: in gobwas a prefix and suffix around `**` may
+	// overlap, and a row of `?` with two separators ignores them
 	gobwasDefects := map[[2]string]bool{
-		{"a/**/b", "a/b"}: true, {"ab**bc", "abc"}: true,
-		{"??", "//"}: true, {"??", "a/"}: true, {"??", "/a"}: true,
+		{"ab**bc", "abc"}: true,
+		{"??", "//"}:      true, {"??", "a/"}: true, {"??", "/a"}: true,
+	}
+	// a leading `**/` or a `/**/` (once in these patterns) may also match no directory: gobwas without that segment
+	noDirs := func(p string, seps []rune) gobwas.Glob {
+		if q := strings.Replace(strings.TrimPrefix(p, "**/"), "/**/", "/", 1); q != p {
+			return gobwas.MustCompile(q, seps...)
+		}
+		return nil
 	}
 	patterns := []string{
 		"", "*", "**", "***", "?", "a", "a.b", "a+b(c)|$^",
@@ -54,12 +63,44 @@ func TestCompileMatchesGobwas(t *testing.T) {
 				if gobwasDefects[[2]string{p, n}] {
 					continue
 				}
-				assert.Equal(t, want.Match(n), got.MatchString(n), "pattern %q, separators %q, name %q", p, string(seps), n)
+				match := want.Match(n)
+				if g := noDirs(p, seps); g != nil {
+					match = match || g.Match(n)
+				}
+				assert.Equal(t, match, got.MatchString(n), "pattern %q, separators %q, name %q", p, string(seps), n)
 			}
 		}
 	}
 	for d := range gobwasDefects {
 		assert.False(t, mustCompile(t, d[0]).MatchString(d[1]), "%q doesn't match %q", d[0], d[1])
+	}
+}
+
+// `**` as a whole path segment matches zero or more directories; a trailing `/**` matches everything below.
+func TestCompileDoubleStarSegment(t *testing.T) {
+	for _, c := range []struct {
+		pattern, name string
+		match         bool
+	}{
+		{"docs/**/README.md", "docs/README.md", true},
+		{"docs/**/README.md", "docs/a/b/README.md", true},
+		{"docs/**/README.md", "docsREADME.md", false},
+		{"docs/**/README.md", "xdocs/README.md", false},
+		{"**/x.go", "x.go", true},
+		{"**/x.go", "a/b/x.go", true},
+		{"**/x.go", "ax.go", false},
+		{"src/**/*.go", "src/x.go", true},
+		{"src/**/*.go", "src/a/x.go", true},
+		{"a/**/b", "a/b", true},
+		{"a/**/b/**/c", "a/b/c", true},
+		{"{docs,api}/**/*.md", "api/x.md", true},
+		{"docs/**", "docs/a/b", true},
+		{"docs/**", "docs", false},
+		{"a**/b", "a/b", true},
+		{"a**/b", "b", false},
+		{"x{**/a,b}", "xa", false},
+	} {
+		assert.Equal(t, c.match, mustCompile(t, c.pattern).MatchString(c.name), "%q against %q", c.pattern, c.name)
 	}
 }
 

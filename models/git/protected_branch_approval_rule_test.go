@@ -35,6 +35,11 @@ func TestApprovalRuleAppliesTo(t *testing.T) {
 		{"*.sql", []string{"db/a.sql"}, false}, // `*` doesn't cross '/'
 		{"DB/**", []string{"db/a.sql"}, true},  // case-insensitive, like protected files
 		{" ; ", []string{"src/main.go"}, true}, // patterns that compile to nothing apply
+		// `**` as a whole segment also matches no directory
+		{"docs/**/README.md", []string{"docs/README.md"}, true},
+		{"docs/**/README.md", []string{"docs/a/b/README.md"}, true},
+		{"**/x.go", []string{"x.go"}, true},
+		{"src/**/*.go", []string{"src/x.go"}, true},
 	} {
 		r := &git_model.ApprovalRule{PathPatterns: c.patterns}
 		assert.Equal(t, c.applies, r.AppliesTo(c.files), "%q %v", c.patterns, c.files)
