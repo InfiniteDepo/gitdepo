@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"testing"
 
+	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unittest"
@@ -85,4 +86,34 @@ func TestSetApprovalRules(t *testing.T) {
 	rules, err = git_model.GetApprovalRules(t.Context(), pb.ID)
 	require.NoError(t, err)
 	assert.Empty(t, rules)
+}
+
+// A user in very many teams must not make the lookup fail: the IDs are matched in chunks, and an ID that is only
+// part of another one matches nothing.
+func TestFindApprovalRulesListingManyTeams(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := t.Context()
+	rule := &git_model.ProtectedBranch{RepoID: 1, RuleName: "listing"}
+	require.NoError(t, db.Insert(ctx, rule))
+	require.NoError(t, db.Insert(ctx, &git_model.ApprovalRule{ProtectedBranchID: rule.ID, Name: "Teams", RequiredCount: 1, TeamIDs: []int64{250, 15}, UserIDs: []int64{77}}))
+
+	teams := make([]int64, 400)
+	for i := range teams {
+		teams[i] = int64(1000 + i)
+	}
+	found, err := git_model.FindApprovalRulesListing(ctx, nil, teams)
+	require.NoError(t, err)
+	assert.Empty(t, found)
+
+	found, err = git_model.FindApprovalRulesListing(ctx, []int64{1}, append(teams, 250))
+	require.NoError(t, err)
+	require.Len(t, found, 1, "found through the team, once, though the chunks repeat nothing")
+	assert.Equal(t, "Teams", found[0].Name)
+
+	found, err = git_model.FindApprovalRulesListing(ctx, []int64{7, 5}, []int64{25})
+	require.NoError(t, err)
+	assert.Empty(t, found, "7 is not 77, 25 is not 250 or 15")
+	found, err = git_model.FindApprovalRulesListing(ctx, nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, found)
 }

@@ -455,11 +455,12 @@ func renderFile(ctx *context.Context, entry *git.TreeEntry) {
 			if len(owners.Warnings) > 0 {
 				ctx.Data["FileWarning"] = strings.Join(owners.Warnings, "\n")
 			}
-			// owners who can't approve, for readers of the code (this page is one)
-			if marks, err := pull_service.CodeOwnerLineMarks(ctx, ctx.Repo.Repository, owners.Rules); err != nil {
+			// owners who can't approve, with the reasons the viewer may see
+			viewer := pull_service.NewOwnerViewer(ctx, ctx.Doer, ctx.Repo.Repository, ctx.Repo.IsAdmin())
+			if marks, more, err := pull_service.CodeOwnerLineMarks(ctx, ctx.Repo.Repository, viewer, owners.Rules); err != nil {
 				log.Error("CodeOwnerLineMarks: %v", err)
 			} else {
-				ctx.Data["CodeOwnerMarks"] = marks
+				ctx.Data["CodeOwnerMarks"], ctx.Data["CodeOwnerMarksMore"] = marks, more
 			}
 		}
 	} else if ctx.Repo.TreePath == ".gitmodules" {

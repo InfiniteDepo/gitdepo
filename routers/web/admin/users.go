@@ -12,7 +12,6 @@ import (
 	"math"
 	"net/http"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -27,6 +26,7 @@ import (
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/optional"
 	"forgejo.org/modules/setting"
+	"forgejo.org/modules/util"
 	"forgejo.org/modules/validation"
 	"forgejo.org/modules/web"
 	"forgejo.org/routers/web/explore"
@@ -399,14 +399,15 @@ func EditUserPost(ctx *context.Context) {
 	}
 
 	form := web.GetForm(ctx).(*forms.AdminEditUserForm)
-	// read before the update changes u: the warnings are for a user who is leaving
-	leaving := loadLastApproverWarnings(ctx, u)
-	leaving = slices.DeleteFunc(leaving, func(user_service.LastApproverWarning) bool {
-		return form.Active && (!form.ProhibitLogin || ctx.Doer.ID == u.ID)
-	})
 	if ctx.HasError() {
+		loadLastApproverWarnings(ctx, u)
 		ctx.HTML(http.StatusOK, tplUserEdit)
 		return
+	}
+	// the checks run only for a save that deactivates the user or suspends them, and before the update changes u
+	var leaving []user_service.LastApproverWarning
+	if u.IsActive && !u.ProhibitLogin && (!form.Active || form.ProhibitLogin && ctx.Doer.ID != u.ID) {
+		leaving = loadLastApproverWarnings(ctx, u)
 	}
 	sizeLimit := u.PersonalRepoSizeLimit // no mode sent: unchanged
 	switch form.PersonalRepoSizeLimitMode {
@@ -647,24 +648,14 @@ func DeleteAvatar(ctx *context.Context) {
 	ctx.JSONRedirect(setting.AppSubURL + "/admin/users/" + strconv.FormatInt(u.ID, 10))
 }
 
-// lastApproverKindText is the name of a kind of last approver warning; a kind of another check shows as it is.
-func lastApproverKindText(ctx *context.Context, kind string) string {
-	switch kind {
-	case user_service.LastApproverRepoRule:
-		return ctx.Locale.TrString("admin.users.last_approver_repo_rule")
-	case user_service.LastApproverProjectRule:
-		return ctx.Locale.TrString("admin.users.last_approver_project_rule")
-	case user_service.LastApproverOrgRule:
-		return ctx.Locale.TrString("admin.users.last_approver_org_rule")
-	}
-	return kind
-}
+// Limits of the flash after a save, which travels in a cookie.
+const (
+	maxFlashedWarnings = 5
+	maxFlashedName     = 80
+)
 
-// maxFlashedWarnings is how many warnings the flash after a save names; it travels in a cookie.
-const maxFlashedWarnings = 5
-
-// loadLastApproverWarnings lists on the edit page what deactivating the user or prohibiting their login would
-// break. Nothing is listed for a user who can't sign in already. It never blocks the save.
+// loadLastApproverWarnings lists on the edit page what deactivating the user or suspending them would break. Nothing
+// is listed for a user who can't sign in already. It never blocks the save.
 func loadLastApproverWarnings(ctx *context.Context, u *user_model.User) []user_service.LastApproverWarning {
 	if !u.IsActive || u.ProhibitLogin {
 		return nil
@@ -674,25 +665,33 @@ func loadLastApproverWarnings(ctx *context.Context, u *user_model.User) []user_s
 		log.Error("LastApproverWarnings for user %d: %v", u.ID, err)
 		return nil
 	}
-	type view struct{ Kind, Link, Name string }
-	views := make([]view, len(warnings))
-	for i, w := range warnings {
-		views[i] = view{lastApproverKindText(ctx, w.Kind), w.Link, w.Name}
-	}
-	ctx.Data["LastApproverWarnings"] = views
+	ctx.Data["LastApproverWarnings"] = warnings
 	return warnings
 }
 
-// flashLastApproverWarnings tells the admin, after a save, what the user leaving would break. Kind, link and name
-// are escaped.
+func flashName(s string) string {
+	if t := util.TruncateRunes(s, maxFlashedName); t != s {
+		return t + "…"
+	}
+	return s
+}
+
+// flashLastApproverWarnings tells the admin, after a save, what the user leaving would break: a short list of
+// truncated names. Everything is escaped, and a link is used only if it is relative.
 func flashLastApproverWarnings(ctx *context.Context, warnings []user_service.LastApproverWarning) {
-	var items []string
+	var b strings.Builder
+	b.WriteString(html.EscapeString(ctx.Locale.TrString("admin.users.last_approver_flash")) + "<ul>")
 	for i, w := range warnings {
 		if i == maxFlashedWarnings {
-			items = append(items, html.EscapeString(ctx.Locale.TrString("admin.users.last_approver_more", len(warnings)-i)))
+			b.WriteString("<li>" + html.EscapeString(ctx.Locale.TrString("admin.users.last_approver_more", len(warnings)-i)) + "</li>")
 			break
 		}
-		items = append(items, fmt.Sprintf(`<a href="%s">%s</a> (%s)`, html.EscapeString(w.Link), html.EscapeString(w.Name), html.EscapeString(lastApproverKindText(ctx, w.Kind))))
+		name := html.EscapeString(flashName(w.Name))
+		if strings.HasPrefix(w.Link, "/") && !strings.HasPrefix(w.Link, "//") {
+			name = fmt.Sprintf(`<a href="%s">%s</a>`, html.EscapeString(w.Link), name)
+		}
+		b.WriteString("<li>" + name + " (" + html.EscapeString(flashName(w.Kind)) + ")</li>")
 	}
-	ctx.Flash.Warning(template.HTML(html.EscapeString(ctx.Locale.TrString("admin.users.last_approver_flash")) + " " + strings.Join(items, ", ")))
+	b.WriteString("</ul>")
+	ctx.Flash.Warning(template.HTML(b.String()))
 }

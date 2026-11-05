@@ -5,19 +5,22 @@ package pull
 
 import (
 	"context"
+	"html/template"
 	"slices"
+	"strconv"
 	"strings"
 
+	auth_model "forgejo.org/models/auth"
 	issues_model "forgejo.org/models/issues"
 	"forgejo.org/models/organization"
 	repo_model "forgejo.org/models/repo"
-	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/translation"
-	"forgejo.org/services/accessreport"
+	"forgejo.org/services/approvers"
 )
 
-// OwnerReason is why an owner or listed approver can't approve in a repository.
+// OwnerReason is why a named owner can't approve in a repository. The empty reason is the neutral "can't approve",
+// all that a viewer without the right to know more is told.
 type OwnerReason string
 
 const (
@@ -40,132 +43,253 @@ func (r OwnerReason) Text(l translation.Locale) string {
 	return l.TrString("repo.codeowners.reason_no_write")
 }
 
-// OwnerMark is an owner who can't approve.
+// OwnerViewer says how much of the reasons a viewer sees: the specific reasons are for repository and site admins,
+// and the two-factor reason for site admins and the acting owners of the organization that requires it (as the
+// members page of #147 does). Everyone else sees the neutral mark.
+type OwnerViewer struct{ Details, TwoFactor bool }
+
+// NewOwnerViewer returns what doer may see in repo. repoAdmin is whether they administer it (site admins do).
+func NewOwnerViewer(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, repoAdmin bool) OwnerViewer {
+	v := OwnerViewer{Details: repoAdmin}
+	if doer == nil {
+		return OwnerViewer{}
+	}
+	if doer.IsAdmin {
+		v.Details, v.TwoFactor = true, true
+	} else if repo.Owner != nil && repo.Owner.IsOrganization() {
+		owner, err := organization.GetOrgByID(ctx, repo.OwnerID)
+		if err == nil {
+			v.TwoFactor, _ = owner.IsActingOwner(ctx, doer)
+		}
+	}
+	return v
+}
+
+func (v OwnerViewer) reason(r OwnerReason) OwnerReason {
+	if !v.Details || r == OwnerTwoFactor && !v.TwoFactor {
+		return ""
+	}
+	return r
+}
+
+// OwnerMark is a named owner, or a team, who can't approve. A user has a Reason (maybe neutral); a team is one
+// mark with the number of its members who can, and is never expanded.
 type OwnerMark struct {
-	Name   string
-	Reason OwnerReason
+	Name     string
+	Reason   OwnerReason
+	Team     bool
+	Foreign  bool // a team of another organization, which can never grant write
+	Eligible int  // the members of a team who can approve
+}
+
+// Text renders the mark.
+func (m OwnerMark) Text(l translation.Locale) template.HTML {
+	switch {
+	case m.Foreign:
+		return l.Tr("repo.codeowners.team_foreign", m.Name)
+	case m.Team && m.Eligible == 0:
+		return l.Tr("repo.codeowners.team_none", m.Name)
+	case m.Team:
+		return l.TrPluralString(m.Eligible, "repo.codeowners.team_only", m.Name, m.Eligible)
+	case m.Reason == "":
+		return l.Tr("repo.codeowners.owner_neutral", m.Name)
+	}
+	return l.Tr("repo.codeowners.owner_reason", m.Name, m.Reason.Text(l))
 }
 
 // OwnerSet is the users and teams named on a CODEOWNERS line or an approval rule.
-type OwnerSet struct{ UserIDs, TeamIDs []int64 }
+type OwnerSet struct {
+	UserIDs []int64
+	Teams   []*organization.Team
+}
 
 // CodeOwnerSet returns the owners named on the line.
 func CodeOwnerSet(line *issues_model.CodeOwnerRule) OwnerSet {
-	var s OwnerSet
+	s := OwnerSet{Teams: line.Teams}
 	for _, u := range line.Users {
 		s.UserIDs = append(s.UserIDs, u.ID)
-	}
-	for _, t := range line.Teams {
-		s.TeamIDs = append(s.TeamIDs, t.ID)
 	}
 	return s
 }
 
-// OwnerCheck is the result for one OwnerSet: the users who can approve and those who can't.
+// OwnerCheck is the result for one set: how many distinct people can approve and who can't.
 type OwnerCheck struct {
-	Eligible []int64
-	Marks    []OwnerMark // by name
+	Eligible int
+	Marks    []OwnerMark
 }
 
-// IneligibleOwners checks, for each set, the users named in it (directly or as members of its teams) who can't
-// approve in the repository: inactive, login prohibited, without write access to the code, or kept out of the
-// owner organization by its two-factor requirement. It loads teams, members and users once for all sets, and the
-// repository's access once, so the queries don't grow with the number of sets.
-func IneligibleOwners(ctx context.Context, repo *repo_model.Repository, sets []OwnerSet) ([]OwnerCheck, error) {
-	var teamIDs []int64
+// The work of one call is bounded by what it shows: at most this many teams are expanded and this many people
+// looked at, and it stops once limit marks are found.
+const (
+	maxOwnerTeams      = 100
+	maxOwnerCandidates = 2000
+)
+
+// IneligibleOwners checks every set against the repository, with the access, users, teams and two-factor
+// enrolment loaded once for all sets (IDs deduplicated first), so the work depends on the people named, not on the
+// number of lines naming them. Teams of the repository owner's organization are counted but never listed; any
+// other team can't grant write and is a mark of its own. It stops after limit marks and reports more=true if it
+// left sets or people out (their check is then empty). The reasons shown follow v.
+func IneligibleOwners(ctx context.Context, repo *repo_model.Repository, writers *approvers.Writers, v OwnerViewer, sets []OwnerSet, limit int) (checks []OwnerCheck, more bool, err error) {
+	if err := repo.LoadOwner(ctx); err != nil {
+		return nil, false, err
+	}
+	var teamIDs, userIDs []int64
 	for _, s := range sets {
-		teamIDs = append(teamIDs, s.TeamIDs...)
+		userIDs = append(userIDs, s.UserIDs...)
+		for _, t := range s.Teams {
+			if t.OrgID == repo.OwnerID {
+				teamIDs = append(teamIDs, t.ID)
+			}
+		}
+	}
+	teamIDs = uniqIDs(teamIDs)
+	if len(teamIDs) > maxOwnerTeams {
+		teamIDs, more = teamIDs[:maxOwnerTeams], true
 	}
 	members, err := organization.GetTeamsMemberIDs(ctx, teamIDs)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	var ids []int64
-	for _, s := range sets {
-		ids = append(ids, s.UserIDs...)
-		for _, t := range s.TeamIDs {
-			ids = append(ids, members[t]...)
+	candidates := uniqIDs(userIDs)
+	known := map[int64]bool{}
+	for _, id := range candidates {
+		known[id] = true
+	}
+	for _, id := range teamIDs { // a team that doesn't fit is left out whole
+		fresh := 0
+		for _, m := range members[id] {
+			if !known[m] {
+				fresh++
+			}
+		}
+		if len(candidates)+fresh > maxOwnerCandidates {
+			delete(members, id)
+			more = true
+			continue
+		}
+		for _, m := range members[id] {
+			if !known[m] {
+				known[m] = true
+				candidates = append(candidates, m)
+			}
 		}
 	}
-	users, err := user_model.GetUserByIDs(ctx, ids)
+	if len(candidates) > maxOwnerCandidates {
+		candidates, more = candidates[:maxOwnerCandidates], true
+	}
+	users, err := user_model.GetUserByIDs(ctx, candidates)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	byID := make(map[int64]*user_model.User, len(users))
-	for _, u := range users {
-		byID[u.ID] = u
-	}
-
-	// access is loaded when the first active owner needs it
-	var writers map[int64]bool
-	reasons := map[int64]OwnerReason{}
-	reason := func(u *user_model.User) (OwnerReason, error) {
-		if r, ok := reasons[u.ID]; ok {
-			return r, nil
+	var enrolled map[int64]bool // only where the owner requires two-factor
+	if repo.Owner.IsOrganization() && repo.Owner.RequireTwoFactor {
+		set, err := auth_model.UserIDsWithTwoFactor(ctx, candidates)
+		if err != nil {
+			return nil, false, err
 		}
-		r := OwnerReason("")
+		enrolled = map[int64]bool{}
+		for id := range set {
+			enrolled[id] = true
+		}
+	}
+	if err := writers.Load(ctx, repo.ID); err != nil {
+		return nil, false, err
+	}
+	reasons := make(map[int64]OwnerReason, len(users)) // the real reason, "-" for a person who can approve
+	for _, u := range users {
 		switch {
 		case !u.IsActive:
-			r = OwnerInactive
+			reasons[u.ID] = OwnerInactive
 		case u.ProhibitLogin:
-			r = OwnerProhibited
+			reasons[u.ID] = OwnerProhibited
+		case writers.Can(repo.ID, u.ID):
+			reasons[u.ID] = "-"
+		case enrolled != nil && !u.IsAdmin && !enrolled[u.ID]:
+			reasons[u.ID] = OwnerTwoFactor
 		default:
-			if writers == nil {
-				rows, err := accessreport.Compute(ctx, accessreport.Options{RepoIDs: []int64{repo.ID}})
-				if err != nil {
-					return "", err
-				}
-				writers = map[int64]bool{}
-				for _, row := range rows {
-					if row.User != nil && row.Perm.CanWrite(unit.TypeCode) {
-						writers[row.User.ID] = true
-					}
-				}
-			}
-			if !writers[u.ID] {
-				r = OwnerNoWrite
-				if err := repo.LoadOwner(ctx); err != nil {
-					return "", err
-				}
-				if blocked, err := u.TwoFactorBlocked(ctx, repo.Owner); err != nil {
-					return "", err
-				} else if blocked {
-					r = OwnerTwoFactor
-				}
-			}
+			reasons[u.ID] = OwnerNoWrite
 		}
-		reasons[u.ID] = r
-		return r, nil
+	}
+	names := make(map[int64]string, len(users))
+	for _, u := range users {
+		names[u.ID] = u.Name
 	}
 
-	out := make([]OwnerCheck, len(sets))
+	checks = make([]OwnerCheck, len(sets))
+	cache := map[string]OwnerCheck{} // lines of one section share their owners
+	total := 0
 	for i, s := range sets {
-		owners := slices.Clone(s.UserIDs)
-		for _, t := range s.TeamIDs {
-			owners = append(owners, members[t]...)
+		if total >= limit {
+			more = true
+			break
 		}
-		slices.Sort(owners)
-		for _, id := range slices.Compact(owners) {
-			u := byID[id]
-			if u == nil {
+		key := setKey(s)
+		if c, ok := cache[key]; ok {
+			checks[i] = c
+			total += len(c.Marks)
+			continue
+		}
+		c := OwnerCheck{}
+		eligible := map[int64]bool{}
+		ids := uniqIDs(s.UserIDs)
+		slices.SortFunc(ids, func(a, b int64) int { return strings.Compare(names[a], names[b]) })
+		for _, id := range ids {
+			switch r, ok := reasons[id]; {
+			case !ok: // unknown or left out
+			case r == "-":
+				eligible[id] = true
+			default:
+				c.Marks = append(c.Marks, OwnerMark{Name: names[id], Reason: v.reason(r)})
+			}
+		}
+		for _, t := range s.Teams {
+			if t.OrgID != repo.OwnerID {
+				c.Marks = append(c.Marks, OwnerMark{Name: "@" + t.Name, Team: true, Foreign: true})
 				continue
 			}
-			r, err := reason(u)
-			if err != nil {
-				return nil, err
+			ms, ok := members[t.ID]
+			if !ok {
+				continue
 			}
-			if r != "" {
-				out[i].Marks = append(out[i].Marks, OwnerMark{Name: u.Name, Reason: r})
-			} else {
-				out[i].Eligible = append(out[i].Eligible, id)
+			n := 0
+			for _, m := range ms {
+				if reasons[m] == "-" {
+					eligible[m] = true
+					n++
+				}
+			}
+			if n < len(ms) || len(ms) == 0 {
+				c.Marks = append(c.Marks, OwnerMark{Name: "@" + t.Name, Team: true, Eligible: n})
 			}
 		}
-		slices.SortFunc(out[i].Marks, func(a, b OwnerMark) int { return strings.Compare(a.Name, b.Name) })
+		c.Eligible = len(eligible)
+		cache[key] = c
+		checks[i] = c
+		total += len(c.Marks)
 	}
-	return out, nil
+	return checks, more, nil
 }
 
-// maxOwnerMarks is how many owners a CODEOWNERS view lists; the rest are cut off.
+func uniqIDs(ids []int64) []int64 {
+	ids = slices.Clone(ids)
+	slices.Sort(ids)
+	return slices.Compact(ids)
+}
+
+func setKey(s OwnerSet) string {
+	var b strings.Builder
+	for _, id := range uniqIDs(s.UserIDs) {
+		b.WriteString(strconv.FormatInt(id, 10) + ",")
+	}
+	b.WriteString("|")
+	for _, t := range s.Teams {
+		b.WriteString(strconv.FormatInt(t.ID, 10) + ",")
+	}
+	return b.String()
+}
+
+// maxOwnerMarks is how many owners a CODEOWNERS view lists.
 const maxOwnerMarks = 200
 
 // LineOwnerMarks are the owners of one CODEOWNERS line who can't approve.
@@ -174,26 +298,22 @@ type LineOwnerMarks struct {
 	Marks []OwnerMark
 }
 
-// CodeOwnerLineMarks returns the lines of a CODEOWNERS file that name an owner who can't approve, in file order.
-func CodeOwnerLineMarks(ctx context.Context, repo *repo_model.Repository, lines []*issues_model.CodeOwnerRule) ([]LineOwnerMarks, error) {
+// CodeOwnerLineMarks returns the lines of a CODEOWNERS file that name an owner who can't approve, in file order,
+// and whether more were left out.
+func CodeOwnerLineMarks(ctx context.Context, repo *repo_model.Repository, v OwnerViewer, lines []*issues_model.CodeOwnerRule) ([]LineOwnerMarks, bool, error) {
 	sets := make([]OwnerSet, len(lines))
 	for i, l := range lines {
 		sets[i] = CodeOwnerSet(l)
 	}
-	marks, err := IneligibleOwners(ctx, repo, sets)
+	checks, more, err := IneligibleOwners(ctx, repo, approvers.NewWriters(), v, sets, maxOwnerMarks)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var out []LineOwnerMarks
-	total := 0
-	for i, c := range marks {
-		m := c.Marks
-		if len(m) == 0 || total >= maxOwnerMarks {
-			continue
+	for i, c := range checks {
+		if len(c.Marks) > 0 {
+			out = append(out, LineOwnerMarks{Line: lines[i].Line, Marks: c.Marks})
 		}
-		m = m[:min(len(m), maxOwnerMarks-total)]
-		total += len(m)
-		out = append(out, LineOwnerMarks{Line: lines[i].Line, Marks: m})
 	}
-	return out, nil
+	return out, more, nil
 }

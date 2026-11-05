@@ -21,8 +21,44 @@ import (
 // is counted without the write check: the people it lists count when they are active and can sign in.
 const MaxCheckedRepos = 50
 
+// Writers holds who can write which repositories, loaded once and shared by every computation of a request.
+type Writers struct{ by map[int64]map[int64]bool }
+
+// NewWriters returns an empty set; Load fills it.
+func NewWriters() *Writers { return &Writers{by: map[int64]map[int64]bool{}} }
+
+// Load computes the access of the repositories that are not loaded yet, in a fixed number of queries.
+func (w *Writers) Load(ctx context.Context, repoIDs ...int64) error {
+	var missing []int64
+	for _, id := range repoIDs {
+		if _, ok := w.by[id]; !ok {
+			missing = append(missing, id)
+			w.by[id] = map[int64]bool{}
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	rows, err := accessreport.Compute(ctx, accessreport.Options{RepoIDs: missing})
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if row.User != nil && row.Perm.CanWrite(unit.TypeCode) {
+			w.by[row.Repo.ID][row.User.ID] = true
+		}
+	}
+	return nil
+}
+
+// Can reports whether the user can write the loaded repository.
+func (w *Writers) Can(repoID, uid int64) bool { return w.by[repoID][uid] }
+
 // Result is the eligible approvers of one approval rule.
 type Result struct {
+	// WriteChecked is false when the rule covers too many repositories for the write check: its people count when
+	// they are active and can sign in.
+	WriteChecked bool
 	// Remaining counts the eligible listed approvers (directly or through a team) who are not leaving.
 	Remaining int64
 	// Leaving is one of the leaving users who is eligible now, 0 if none is.
@@ -40,7 +76,7 @@ type Checked struct {
 // rule on the repositories it covers: a user counts if they can write at least one of them (exact counting per
 // repository would multiply the work). The queries don't grow with the number of rules; the access of at most
 // MaxCheckedRepos repositories is loaded, repository rules first. leaving users are left out of Remaining.
-func Check(ctx context.Context, rules []*git_model.ApprovalRule, leaving []int64) (*Checked, error) {
+func Check(ctx context.Context, rules []*git_model.ApprovalRule, leaving []int64, writers *Writers) (*Checked, error) {
 	out := &Checked{Results: map[int64]*Result{}}
 	if len(rules) == 0 {
 		return out, nil
@@ -49,14 +85,14 @@ func Check(ctx context.Context, rules []*git_model.ApprovalRule, leaving []int64
 	for _, r := range rules {
 		pbIDs, teamIDs, ids = append(pbIDs, r.ProtectedBranchID), append(teamIDs, r.TeamIDs...), append(ids, r.UserIDs...)
 	}
-	members, err := organization.GetTeamsMemberIDs(ctx, teamIDs)
+	members, err := organization.GetTeamsMemberIDs(ctx, uniq(teamIDs))
 	if err != nil {
 		return nil, err
 	}
 	for _, m := range members {
 		ids = append(ids, m...)
 	}
-	users, err := user_model.GetUserByIDs(ctx, ids)
+	users, err := user_model.GetUserByIDs(ctx, uniq(ids))
 	if err != nil {
 		return nil, err
 	}
@@ -64,10 +100,10 @@ func Check(ctx context.Context, rules []*git_model.ApprovalRule, leaving []int64
 	for _, u := range users {
 		usable[u.ID] = u.IsActive && !u.ProhibitLogin
 	}
-	if out.Branches, err = db.GetByIDs(ctx, "id", pbIDs, &git_model.ProtectedBranch{}); err != nil {
+	if out.Branches, err = db.GetByIDs(ctx, "id", uniq(pbIDs), &git_model.ProtectedBranch{}); err != nil {
 		return nil, err
 	}
-	covered, writers, err := loadWriters(ctx, out.Branches)
+	covered, err := coveredRepos(ctx, out.Branches, writers)
 	if err != nil {
 		return nil, err
 	}
@@ -82,9 +118,10 @@ func Check(ctx context.Context, rules []*git_model.ApprovalRule, leaving []int64
 			candidates = append(candidates, members[t]...)
 		}
 		slices.Sort(candidates)
-		res := &Result{}
+		repoIDs, checked := covered[pb.ID]
+		res := &Result{WriteChecked: checked}
 		for _, id := range slices.Compact(candidates) {
-			if !usable[id] || !canWrite(covered[pb.ID], writers, id) {
+			if !usable[id] || !canWrite(repoIDs, writers, id) {
 				continue
 			}
 			if slices.Contains(leaving, id) {
@@ -99,16 +136,22 @@ func Check(ctx context.Context, rules []*git_model.ApprovalRule, leaving []int64
 }
 
 // canWrite is true for a rule without a checked repository (too many, or none covered).
-func canWrite(repoIDs []int64, writers map[int64]map[int64]bool, uid int64) bool {
+func canWrite(repoIDs []int64, writers *Writers, uid int64) bool {
 	if len(repoIDs) == 0 {
 		return true
 	}
-	return slices.ContainsFunc(repoIDs, func(id int64) bool { return writers[id][uid] })
+	return slices.ContainsFunc(repoIDs, func(id int64) bool { return writers.Can(id, uid) })
 }
 
-// loadWriters returns the repositories each rule covers, left out when they were not checked, and who can write
-// each checked repository.
-func loadWriters(ctx context.Context, pbs map[int64]*git_model.ProtectedBranch) (map[int64][]int64, map[int64]map[int64]bool, error) {
+func uniq(ids []int64) []int64 {
+	ids = slices.Clone(ids)
+	slices.Sort(ids)
+	return slices.Compact(ids)
+}
+
+// coveredRepos returns the repositories each rule covers, left out when they were not checked, and loads who can
+// write the checked ones into writers.
+func coveredRepos(ctx context.Context, pbs map[int64]*git_model.ProtectedBranch, writers *Writers) (map[int64][]int64, error) {
 	var groupIDs, orgIDs, selectedIDs []int64
 	for _, pb := range pbs {
 		switch {
@@ -125,7 +168,7 @@ func loadWriters(ctx context.Context, pbs map[int64]*git_model.ProtectedBranch) 
 	var repos []*repo_model.Repository
 	if len(groupIDs) > 0 {
 		if err := db.GetEngine(ctx).Cols("id", "group_id").In("group_id", groupIDs).And(repo_model.NotTrashedCond("id")).Find(&repos); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		for _, r := range repos {
 			byGroup[r.GroupID] = append(byGroup[r.GroupID], r.ID)
@@ -134,7 +177,7 @@ func loadWriters(ctx context.Context, pbs map[int64]*git_model.ProtectedBranch) 
 	if len(orgIDs) > 0 {
 		repos = nil
 		if err := db.GetEngine(ctx).Cols("id", "owner_id").In("owner_id", orgIDs).And(repo_model.NotTrashedCond("id")).Find(&repos); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		for _, r := range repos {
 			byOrg[r.OwnerID] = append(byOrg[r.OwnerID], r.ID)
@@ -143,7 +186,7 @@ func loadWriters(ctx context.Context, pbs map[int64]*git_model.ProtectedBranch) 
 	if len(selectedIDs) > 0 {
 		var rows []*git_model.ProtectedBranchRepo
 		if err := db.GetEngine(ctx).In("protected_branch_id", selectedIDs).Find(&rows); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		for _, r := range rows {
 			bySelected[r.ProtectedBranchID] = append(bySelected[r.ProtectedBranchID], r.RepoID)
@@ -198,25 +241,9 @@ func loadWriters(ctx context.Context, pbs map[int64]*git_model.ProtectedBranch) 
 		}
 		covered[pb.ID] = ids
 	}
-	writers := map[int64]map[int64]bool{}
-	if len(checked) == 0 {
-		return covered, writers, nil
-	}
 	repoIDs := make([]int64, 0, len(checked))
 	for id := range checked {
 		repoIDs = append(repoIDs, id)
 	}
-	rows, err := accessreport.Compute(ctx, accessreport.Options{RepoIDs: repoIDs})
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, row := range rows {
-		if row.User != nil && row.Perm.CanWrite(unit.TypeCode) {
-			if writers[row.Repo.ID] == nil {
-				writers[row.Repo.ID] = map[int64]bool{}
-			}
-			writers[row.Repo.ID][row.User.ID] = true
-		}
-	}
-	return covered, writers, nil
+	return covered, writers.Load(ctx, repoIDs...)
 }

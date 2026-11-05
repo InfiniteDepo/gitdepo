@@ -107,12 +107,12 @@ func SettingsProtectedBranch(ctx *context.Context) {
 			return
 		}
 		rows = convert.ToOrgBranchProtection(ctx, rule, nil).ApprovalRules
-		warnings, err := pull_service.BranchRuleWarnings(ctx, nil, rule)
+		report, err := pull_service.BranchRuleWarnings(ctx, nil, rule, pull_service.OwnerViewer{})
 		if err != nil {
 			ctx.ServerError("BranchRuleWarnings", err)
 			return
 		}
-		ctx.Data["RuleWarnings"] = warnings
+		ctx.Data["RuleReport"] = report
 	}
 
 	ids := func(list []int64) string { return strings.Join(base.Int64sToStrings(list), ",") }

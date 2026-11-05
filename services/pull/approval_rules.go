@@ -9,6 +9,7 @@ import (
 	"maps"
 	"slices"
 
+	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
 	issues_model "forgejo.org/models/issues"
 	"forgejo.org/models/organization"
@@ -21,6 +22,7 @@ import (
 	"forgejo.org/modules/gitrepo"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/util"
+	"forgejo.org/services/approvers"
 	issue_service "forgejo.org/services/issue"
 )
 
@@ -39,10 +41,13 @@ type ApprovalRuleStatus struct {
 	CodeOwnersErrorLine int
 	CodeOwnersFile      string // the path of that file on the base branch
 	Satisfied           bool
-	// Ineligible are the owners and listed approvers of an unsatisfied rule who can't approve; only
-	// LoadIneligibleOwners sets it, for viewers who can read the code.
-	Ineligible []OwnerMark
-	owners     OwnerSet
+	// Ineligible are the owners (and for a repository admin the listed approvers) of an unsatisfied rule who can't
+	// approve; only LoadIneligibleOwners sets it, for viewers who can read the code.
+	Ineligible     []OwnerMark
+	IneligibleMore bool
+	// what LoadIneligibleOwners needs, kept so that the enforcement path computes nothing for it
+	files      []string
+	codeOwners *issues_model.CodeOwners
 }
 
 // SectionShortfall is a CODEOWNERS section with fewer approving owners than it needs.
@@ -213,7 +218,7 @@ func EvaluateApprovalRules(ctx context.Context, pb *git_model.ProtectedBranch, p
 			}
 		}
 		if !s.Satisfied {
-			s.owners = ruleOwners(rule, codeOwners, files)
+			s.files, s.codeOwners = files, codeOwners
 		}
 		statuses = append(statuses, s)
 	}
@@ -418,45 +423,84 @@ func ApprovalRulesFromAPI(ctx context.Context, owner *user_model.User, apiRules 
 	return rules, nil
 }
 
-// ruleOwners returns the users and teams listed by the rule and, for a code owner rule, those on the CODEOWNERS
-// lines that match a changed file in its scope.
-func ruleOwners(rule *git_model.ApprovalRule, codeOwners *issues_model.CodeOwners, files []string) OwnerSet {
-	set := OwnerSet{UserIDs: slices.Clone(rule.UserIDs), TeamIDs: slices.Clone(rule.TeamIDs)}
-	if rule.RequireCodeOwners && codeOwners != nil {
-		for _, f := range files {
-			if !rule.AppliesTo([]string{f}) {
-				continue
-			}
-			for _, line := range issue_service.CodeOwnerRulesOfFile(codeOwners.Rules, f) {
-				l := CodeOwnerSet(line)
-				set.UserIDs, set.TeamIDs = append(set.UserIDs, l.UserIDs...), append(set.TeamIDs, l.TeamIDs...)
-			}
-		}
-	}
-	return set
-}
+// maxMergeBoxMarks is how many owners a rule of the merge box names; maxCoveredLines how many CODEOWNERS lines are
+// checked for an approving owner (beyond it, covered lines are named too).
+const (
+	maxMergeBoxMarks = 20
+	maxCoveredLines  = 100
+)
 
-// maxMergeBoxMarks is how many owners a rule of the merge box names.
-const maxMergeBoxMarks = 20
-
-// LoadIneligibleOwners sets Ineligible of the unsatisfied statuses. Call it only for viewers who can read the code.
-func LoadIneligibleOwners(ctx context.Context, repo *repo_model.Repository, statuses []*ApprovalRuleStatus) error {
+// LoadIneligibleOwners sets Ineligible of the unsatisfied statuses, for a viewer who can read the code. The
+// approvers a rule lists are named only to v.Details (repository admins, as "Can approve" is), the owners on the
+// CODEOWNERS lines of its changed files that no approval covers yet to every code reader, with the reasons v may see.
+func LoadIneligibleOwners(ctx context.Context, repo *repo_model.Repository, v OwnerViewer, statuses []*ApprovalRuleStatus) error {
 	var todo []*ApprovalRuleStatus
 	var sets []OwnerSet
+	var teamIDs []int64
 	for _, s := range statuses {
-		if !s.Satisfied && (len(s.owners.UserIDs) > 0 || len(s.owners.TeamIDs) > 0) {
-			todo, sets = append(todo, s), append(sets, s.owners)
+		if !s.Satisfied && s.Rule != nil && (s.codeOwners != nil || v.Details && s.Rule.HasApprovers()) {
+			todo = append(todo, s)
+			if v.Details {
+				teamIDs = append(teamIDs, s.Rule.TeamIDs...)
+			}
 		}
 	}
 	if len(todo) == 0 {
 		return nil
 	}
-	marks, err := IneligibleOwners(ctx, repo, sets)
+	teams, err := db.GetByIDs(ctx, "id", uniqIDs(teamIDs), &organization.Team{})
+	if err != nil {
+		return err
+	}
+	for _, s := range todo {
+		set := OwnerSet{}
+		if v.Details {
+			set.UserIDs = slices.Clone(s.Rule.UserIDs)
+			for _, id := range s.Rule.TeamIDs {
+				if t := teams[id]; t != nil {
+					set.Teams = append(set.Teams, t)
+				}
+			}
+		}
+		if s.Rule.RequireCodeOwners && s.codeOwners != nil {
+			for _, line := range s.unmetLines(ctx) {
+				l := CodeOwnerSet(line)
+				set.UserIDs, set.Teams = append(set.UserIDs, l.UserIDs...), append(set.Teams, l.Teams...)
+			}
+		}
+		sets = append(sets, set)
+	}
+	checks, more, err := IneligibleOwners(ctx, repo, approvers.NewWriters(), v, sets, maxMergeBoxMarks*len(todo))
 	if err != nil {
 		return err
 	}
 	for i, s := range todo {
-		s.Ineligible = marks[i].Marks[:min(len(marks[i].Marks), maxMergeBoxMarks)]
+		s.Ineligible, s.IneligibleMore = checks[i].Marks[:min(len(checks[i].Marks), maxMergeBoxMarks)], more || len(checks[i].Marks) > maxMergeBoxMarks
 	}
 	return nil
+}
+
+// unmetLines returns the CODEOWNERS lines matching the changed files in the scope of the rule that none of its
+// approvers is an owner of. Past maxCoveredLines lines every line counts: a check per line costs queries.
+func (s *ApprovalRuleStatus) unmetLines(ctx context.Context) []*issues_model.CodeOwnerRule {
+	seen := map[*issues_model.CodeOwnerRule]bool{}
+	var lines []*issues_model.CodeOwnerRule
+	for _, f := range s.files {
+		if !s.Rule.AppliesTo([]string{f}) {
+			continue
+		}
+		for _, line := range issue_service.CodeOwnerRulesOfFile(s.codeOwners.Rules, f) {
+			if !seen[line] {
+				seen[line] = true
+				lines = append(lines, line)
+			}
+		}
+	}
+	if len(lines) > maxCoveredLines {
+		return lines
+	}
+	return slices.DeleteFunc(lines, func(line *issues_model.CodeOwnerRule) bool {
+		ids, err := lineApprovers(ctx, line, s.Approvers)
+		return err == nil && len(ids) > 0
+	})
 }

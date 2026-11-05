@@ -32,13 +32,13 @@ test('Admin: deactivating the only approver shows a warning and still saves', as
     await page.goto(`/admin/users/${user.id}/edit`);
     const warning = page.locator('.last-approver-warnings');
     await expect(warning).toBeVisible();
-    await expect(warning.getByRole('link', {name: `${org}/${repo} main: Leads`})).toHaveAttribute('href', `/${org}/${repo}/settings/branches/edit?rule_name=main`);
+    await expect(warning.getByRole('link', {name: `Rule "main" in ${org}/${repo}: Leads`})).toHaveAttribute('href', `/${org}/${repo}/settings/branches/edit?rule_name=main`);
 
     // the save is not blocked: it deactivates the account and says what it broke
     await page.locator('.ui.checkbox', {has: page.locator('input[name="active"]')}).click();
     await page.getByRole('button', {name: 'Update user account'}).click();
     await expect(page.locator('.flash-success')).toBeVisible();
-    await expect(page.locator('.flash-warning').getByRole('link', {name: `${org}/${repo} main: Leads`})).toBeVisible();
+    await expect(page.locator('.flash-warning').getByRole('link', {name: `Rule "main" in ${org}/${repo}: Leads`})).toBeVisible();
   } finally {
     await data.cleanup();
   }

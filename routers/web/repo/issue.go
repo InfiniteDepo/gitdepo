@@ -2112,7 +2112,7 @@ func ViewIssue(ctx *context.Context) {
 				ctx.Data["ApprovalRules"] = approvalRules
 				if ctx.Repo.CanRead(unit.TypeCode) {
 					// why owners can't approve is shown to readers of the code only
-					if err := pull_service.LoadIneligibleOwners(ctx, pull.BaseRepo, approvalRules); err != nil {
+					if err := pull_service.LoadIneligibleOwners(ctx, pull.BaseRepo, pull_service.NewOwnerViewer(ctx, ctx.Doer, pull.BaseRepo, ctx.Repo.IsAdmin()), approvalRules); err != nil {
 						log.Error("LoadIneligibleOwners for %-v: %v", pull, err)
 					}
 				}

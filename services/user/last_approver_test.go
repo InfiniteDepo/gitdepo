@@ -70,8 +70,8 @@ func TestLastApproverWarnings(t *testing.T) {
 
 	got := kinds(4)
 	assert.Equal(t, map[string]string{
-		"user2/repo1 main: Lead": "repository_approval_rule /user2/repo1/settings/branches/edit?rule_name=main",
-		"org3 release: Team":     "organization_approval_rule /org/org3/settings/branches/edit?rule_name=release",
+		`Rule "main" in user2/repo1: Lead`: "Repository approval rule /user2/repo1/settings/branches/edit?rule_name=main",
+		`Rule "release" in org3: Team`:     "Organization approval rule /org/org3/settings/branches/edit?rule_name=release",
 	}, got, "the shared rule keeps user 5, so it is no warning")
 
 	// user 5 loses write access to the repository: they no longer count as remaining approver of the pair
@@ -79,12 +79,12 @@ func TestLastApproverWarnings(t *testing.T) {
 	require.NoError(t, err)
 	_, err = db.GetEngine(ctx).Where("repo_id = 1 AND user_id = 5").Delete(&access_model.Access{})
 	require.NoError(t, err)
-	assert.Contains(t, kinds(4), "user2/repo1 dev: Pair")
+	assert.Contains(t, kinds(4), `Rule "dev" in user2/repo1: Pair`)
 	grantWrite(t, 5)
-	assert.NotContains(t, kinds(4), "user2/repo1 dev: Pair")
+	assert.NotContains(t, kinds(4), `Rule "dev" in user2/repo1: Pair`)
 
 	// via team: user 2 is in team 2 as well
-	assert.Equal(t, []string{"org3 release: Team"}, keysOf(kinds(2)))
+	assert.Equal(t, []string{`Rule "release" in org3: Team`}, keysOf(kinds(2)))
 	// both users leave: the pair is empty too
 	assert.Len(t, kinds(4, 5), 3)
 	assert.Empty(t, kinds(8), "a user no rule lists")
@@ -108,16 +108,31 @@ func TestLastApproverWarnings(t *testing.T) {
 			require.NoError(t, err)
 			return h.n.Load()
 		}
+		// one rule of every level first: each kind of rule adds its fixed queries once
+		require.NoError(t, db.Insert(ctx, &repo_model.RepoGroup{OwnerID: 3, Name: "proj", LowerName: "proj"}))
+		group := unittest.AssertExistsAndLoadBean(t, &repo_model.RepoGroup{OwnerID: 3, LowerName: "proj"})
+		more := func(i int) {
+			addRule(t, &git_model.ProtectedBranch{RepoID: 1, RuleName: fmt.Sprintf("extra-%d", i)}, &git_model.ApprovalRule{Name: "Extra", RequiredCount: 1, UserIDs: []int64{4}})
+			addRule(t, &git_model.ProtectedBranch{RepoID: 3, RuleName: fmt.Sprintf("extra-%d", i)}, &git_model.ApprovalRule{Name: "Extra", RequiredCount: 1, UserIDs: []int64{4}})
+			addRule(t, &git_model.ProtectedBranch{OrgID: 3, GroupID: group.ID, RuleName: fmt.Sprintf("proj-%d", i)}, &git_model.ApprovalRule{Name: "Extra", RequiredCount: 1, UserIDs: []int64{4}})
+			addRule(t, &git_model.ProtectedBranch{OrgID: 3, RuleName: fmt.Sprintf("org-%d", i)}, &git_model.ApprovalRule{Name: "Extra", RequiredCount: 1, UserIDs: []int64{4}})
+		}
+		more(0)
 		count() // warm up
 		before := count()
-		for i := range 10 {
-			addRule(t, &git_model.ProtectedBranch{RepoID: 1, RuleName: fmt.Sprintf("extra-%d", i)}, &git_model.ApprovalRule{Name: "Extra", RequiredCount: 1, UserIDs: []int64{4}})
+		for i := 1; i < 5; i++ {
+			more(i)
 		}
 		h.n.Store(0)
 		w, err := LastApproverWarnings(ctx, []int64{4})
 		require.NoError(t, err)
-		assert.Len(t, w, 12)
-		assert.Equal(t, before, count(), "the same number of queries with 12 rules as with 2")
+		assert.Greater(t, len(w), 12)
+		names := map[string]string{}
+		for _, x := range w {
+			names[x.Name] = x.Kind
+		}
+		assert.Equal(t, "Project approval rule", names[`Rule "proj-0" in org3/proj: Extra`], "a project rule names its project")
+		assert.Equal(t, before, count(), "the same number of queries with more rules, repositories and levels")
 	})
 }
 

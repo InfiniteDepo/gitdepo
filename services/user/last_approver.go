@@ -5,6 +5,7 @@ package user
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"slices"
 	"strconv"
@@ -31,7 +32,8 @@ var (
 	lastApproverChecks []func(ctx context.Context, userIDs []int64) ([]LastApproverWarning, error)
 )
 
-// RegisterLastApproverCheck adds a check that LastApproverWarnings runs.
+// RegisterLastApproverCheck adds a check that LastApproverWarnings runs. It reports what the users leaving would
+// leave without enough approvers; Kind is a readable label, Link a relative URL beginning with "/".
 func RegisterLastApproverCheck(check func(ctx context.Context, userIDs []int64) ([]LastApproverWarning, error)) {
 	lastApproverMu.Lock()
 	defer lastApproverMu.Unlock()
@@ -54,11 +56,12 @@ func LastApproverWarnings(ctx context.Context, userIDs []int64) ([]LastApproverW
 	return all, nil
 }
 
-// Kinds of the warnings of the approval rule check.
+// Kinds of the warnings of the approval rule check. A Kind is a short label a person reads as it is, so that the
+// admin page needs no table of the kinds of every check.
 const (
-	LastApproverRepoRule    = "repository_approval_rule"
-	LastApproverProjectRule = "project_approval_rule"
-	LastApproverOrgRule     = "organization_approval_rule"
+	LastApproverRepoRule    = "Repository approval rule"
+	LastApproverProjectRule = "Project approval rule"
+	LastApproverOrgRule     = "Organization approval rule"
 )
 
 func init() { RegisterLastApproverCheck(approvalRuleWarnings) }
@@ -77,15 +80,18 @@ func approvalRuleWarnings(ctx context.Context, userIDs []int64) ([]LastApproverW
 	if err != nil || len(rules) == 0 {
 		return nil, err
 	}
-	checked, err := approvers.Check(ctx, rules, userIDs)
+	checked, err := approvers.Check(ctx, rules, userIDs, approvers.NewWriters())
 	if err != nil {
 		return nil, err
 	}
-	var repoIDs, ownerIDs []int64
+	var repoIDs, ownerIDs, groupIDs []int64
 	for _, pb := range checked.Branches {
-		if pb.RepoID != 0 {
+		switch {
+		case pb.RepoID != 0:
 			repoIDs = append(repoIDs, pb.RepoID)
-		} else {
+		case pb.GroupID != 0:
+			ownerIDs, groupIDs = append(ownerIDs, pb.OrgID), append(groupIDs, pb.GroupID)
+		default:
 			ownerIDs = append(ownerIDs, pb.OrgID)
 		}
 	}
@@ -97,6 +103,10 @@ func approvalRuleWarnings(ctx context.Context, userIDs []int64) ([]LastApproverW
 	if err != nil {
 		return nil, err
 	}
+	groups, err := db.GetByIDs(ctx, "id", groupIDs, &repo_model.RepoGroup{})
+	if err != nil {
+		return nil, err
+	}
 
 	var warnings []LastApproverWarning
 	for _, r := range rules {
@@ -105,7 +115,8 @@ func approvalRuleWarnings(ctx context.Context, userIDs []int64) ([]LastApproverW
 		if pb == nil || res == nil || res.Leaving == 0 || res.Remaining >= r.RequiredCount {
 			continue
 		}
-		w := LastApproverWarning{UserID: res.Leaving, Name: pb.RuleName + ": " + r.Name}
+		w := LastApproverWarning{UserID: res.Leaving}
+		name := func(where string) string { return fmt.Sprintf("Rule %q in %s: %s", pb.RuleName, where, r.Name) }
 		edit := "/settings/branches/edit?rule_name=" + url.QueryEscape(pb.RuleName)
 		switch {
 		case pb.RepoID != 0:
@@ -113,19 +124,19 @@ func approvalRuleWarnings(ctx context.Context, userIDs []int64) ([]LastApproverW
 			if repo == nil {
 				continue
 			}
-			w.Kind, w.Link, w.Name = LastApproverRepoRule, repo.Link()+edit, repo.FullName()+" "+w.Name
+			w.Kind, w.Link, w.Name = LastApproverRepoRule, repo.Link()+edit, name(repo.FullName())
 		case pb.GroupID != 0:
-			owner := owners[pb.OrgID]
-			if owner == nil {
+			owner, group := owners[pb.OrgID], groups[pb.GroupID]
+			if owner == nil || group == nil {
 				continue
 			}
-			w.Kind, w.Link, w.Name = LastApproverProjectRule, setting.AppSubURL+"/org/"+url.PathEscape(owner.Name)+"/groups/"+strconv.FormatInt(pb.GroupID, 10)+edit, owner.Name+" "+w.Name
+			w.Kind, w.Link, w.Name = LastApproverProjectRule, setting.AppSubURL+"/org/"+url.PathEscape(owner.Name)+"/groups/"+strconv.FormatInt(pb.GroupID, 10)+edit, name(owner.Name+"/"+group.Name)
 		default:
 			owner := owners[pb.OrgID]
 			if owner == nil {
 				continue
 			}
-			w.Kind, w.Link, w.Name = LastApproverOrgRule, setting.AppSubURL+"/org/"+url.PathEscape(owner.Name)+edit, owner.Name+" "+w.Name
+			w.Kind, w.Link, w.Name = LastApproverOrgRule, setting.AppSubURL+"/org/"+url.PathEscape(owner.Name)+edit, name(owner.Name)
 		}
 		warnings = append(warnings, w)
 	}

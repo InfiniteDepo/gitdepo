@@ -133,26 +133,48 @@ func MatchesAnyGlob(patterns []glob.Glob, path string) bool {
 	return slices.ContainsFunc(patterns, func(g glob.Glob) bool { return g.Match(lpath) })
 }
 
+// listingChunk is how many IDs one query of FindApprovalRulesListing matches: every ID is four LIKE terms, and the
+// query builder refuses a condition that is too deep.
+const listingChunk = 50
+
 // FindApprovalRulesListing returns the approval rules, of every level, that list one of the users or one of the
-// teams, in one query. The JSON lists are matched as text first (they are stored as `[1,2,3]`) and checked exactly
-// after, so a rule can't be missed or matched by an ID that is only part of another one.
+// teams. The JSON lists are matched as text first (they are stored as `[1,2,3]`), in queries of listingChunk IDs
+// each, and checked exactly after, so a rule can't be matched by an ID that is only part of another one.
 func FindApprovalRulesListing(ctx context.Context, userIDs, teamIDs []int64) ([]*ApprovalRule, error) {
-	cond := builder.NewCond()
-	like := func(col string, ids []int64) {
-		for _, id := range ids {
-			s := strconv.FormatInt(id, 10)
-			cond = cond.Or(builder.Like{col, "[" + s + ","}).Or(builder.Like{col, "," + s + ","}).
-				Or(builder.Like{col, "," + s + "]"}).Or(builder.Eq{col: "[" + s + "]"})
+	type term struct {
+		col string
+		id  int64
+	}
+	var terms []term
+	for _, id := range userIDs {
+		terms = append(terms, term{"user_i_ds", id})
+	}
+	for _, id := range teamIDs {
+		terms = append(terms, term{"team_i_ds", id})
+	}
+	byID := map[int64]*ApprovalRule{}
+	for chunk := range slices.Chunk(terms, listingChunk) {
+		cond := builder.NewCond()
+		for _, t := range chunk {
+			s := strconv.FormatInt(t.id, 10)
+			cond = cond.Or(builder.Like{t.col, "[" + s + ","}).Or(builder.Like{t.col, "," + s + ","}).
+				Or(builder.Like{t.col, "," + s + "]"}).Or(builder.Eq{t.col: "[" + s + "]"})
+		}
+		var found []*ApprovalRule
+		if err := db.GetEngine(ctx).Where(cond).Find(&found); err != nil {
+			return nil, err
+		}
+		for _, r := range found {
+			byID[r.ID] = r
 		}
 	}
-	like("user_i_ds", userIDs)
-	like("team_i_ds", teamIDs)
-	var found []*ApprovalRule
-	if err := db.GetEngine(ctx).Where(cond).OrderBy("id").Find(&found); err != nil {
-		return nil, err
+	rules := make([]*ApprovalRule, 0, len(byID))
+	for _, r := range byID {
+		if slices.ContainsFunc(userIDs, func(id int64) bool { return slices.Contains(r.UserIDs, id) }) ||
+			slices.ContainsFunc(teamIDs, func(id int64) bool { return slices.Contains(r.TeamIDs, id) }) {
+			rules = append(rules, r)
+		}
 	}
-	return slices.DeleteFunc(found, func(r *ApprovalRule) bool {
-		return !slices.ContainsFunc(userIDs, func(id int64) bool { return slices.Contains(r.UserIDs, id) }) &&
-			!slices.ContainsFunc(teamIDs, func(id int64) bool { return slices.Contains(r.TeamIDs, id) })
-	}), nil
+	slices.SortFunc(rules, func(a, b *ApprovalRule) int { return int(a.ID - b.ID) })
+	return rules, nil
 }
