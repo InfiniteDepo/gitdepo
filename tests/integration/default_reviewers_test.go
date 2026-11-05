@@ -8,7 +8,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +22,8 @@ import (
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/git"
+	"forgejo.org/modules/process"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/services/forms"
 	repo_service "forgejo.org/services/repository"
@@ -35,6 +40,7 @@ type drEnv struct {
 	owner  APITestContext
 	repoID int64
 	api    string
+	last   *api.PullRequest // the last pull request opened
 }
 
 func newDREnv(t *testing.T, repoID int64, user ...string) *drEnv {
@@ -82,6 +88,7 @@ func (e *drEnv) open(base, head, title string) int64 {
 	e.t.Helper()
 	var pr api.PullRequest
 	DecodeJSON(e.t, e.do("POST", "/pulls", &api.CreatePullRequestOption{Base: base, Head: head, Title: title}, http.StatusCreated), &pr)
+	e.last = &pr
 	return pr.Index
 }
 
@@ -122,6 +129,11 @@ func (e *drEnv) pushComments(index int64) int64 {
 	return n
 }
 
+func teamID(t *testing.T, name string) string {
+	team := unittest.AssertExistsAndLoadBean(t, &organization.Team{OrgID: 3, Name: name})
+	return fmt.Sprint(team.ID)
+}
+
 func (e *drEnv) merge(index int64, expected int) string {
 	e.t.Helper()
 	return e.do("POST", fmt.Sprintf("/pulls/%d/merge", index), &forms.MergePullRequestForm{Do: "merge"}, expected).Body.String()
@@ -131,6 +143,11 @@ func (e *drEnv) approvals(index int64) []*api.PullApprovalRule {
 	var rules []*api.PullApprovalRule
 	DecodeJSON(e.t, e.do("GET", fmt.Sprintf("/pulls/%d/approvals", index), nil, http.StatusOK), &rules)
 	return rules
+}
+
+func pullTaskRunning() bool {
+	processes, _ := process.GetManager().Processes(true, true)
+	return slices.ContainsFunc(processes, func(p *process.Process) bool { return strings.HasPrefix(p.Description, "AddTestPullRequestTask") })
 }
 
 func requestRule(name string, count int64, source string, users ...string) *api.ApprovalRule {
@@ -219,8 +236,8 @@ func TestDefaultReviewersPathsOnPush(t *testing.T) {
 		e.do("DELETE", fmt.Sprintf("/pulls/%d/requested_reviewers", index), &api.PullReviewRequestOptions{Reviewers: []string{"user4"}}, http.StatusNoContent)
 		before := e.pushComments(index)
 		e.change("head-path", "", create("db/y.txt", "y"))
-		require.Eventually(t, func() bool { return e.pushComments(index) > before }, 15*time.Second, 100*time.Millisecond)
-		time.Sleep(time.Second) // the request, if it were sent, follows the push comment
+		// the push comment is made by the task that sends the requests: wait until that task is over
+		require.Eventually(t, func() bool { return e.pushComments(index) > before && !pullTaskRunning() }, 15*time.Second, 50*time.Millisecond)
 		assert.Empty(t, e.requested(index))
 	})
 }
@@ -299,6 +316,24 @@ func TestDefaultReviewersOrgAndProject(t *testing.T) {
 		orgRule("/api/v1/orgs/org3/branch_protections", "dr-org-base", requestRule("Org", 0, "", "user4"))
 		index := e.pr("dr-org-base", "head-org", "o", create("o.txt", "o"))
 		assert.Equal(t, []string{"team:team1", "user4"}, e.requested(index))
+		assert.Len(t, e.last.RequestedReviewersTeams, 1, "a team is listed once")
+
+		t.Run("TeamWithoutPullRequestsOrRepo", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+			team := func(name string, units []string) {
+				MakeRequest(t, NewRequestWithJSON(t, "POST", "/api/v1/orgs/org3/teams", &api.CreateTeamOption{Name: name, Permission: "read", Units: units}).AddTokenAuth(owner.Token), http.StatusCreated)
+			}
+			team("dr-nopulls", []string{"repo.code"})
+			team("dr-norepo", []string{"repo.code", "repo.pulls"})
+			MakeRequest(t, NewRequest(t, "PUT", "/api/v1/teams/"+teamID(t, "dr-nopulls")+"/repos/org3/dr-org").AddTokenAuth(owner.Token), http.StatusNoContent)
+			e.branch("dr-org-teams")
+			body := &api.CreateOrgBranchProtectionOption{CreateBranchProtectionOption: api.CreateBranchProtectionOption{RuleName: "dr-org-teams", ApprovalRules: []*api.ApprovalRule{{
+				Name: "Teams", Teams: []string{"team1", "dr-nopulls", "dr-norepo"}, RequestReviews: true,
+			}}}}
+			MakeRequest(t, NewRequestWithJSON(t, "POST", "/api/v1/orgs/org3/branch_protections", body).AddTokenAuth(owner.Token), http.StatusCreated)
+			index := e.pr("dr-org-teams", "head-teams", "tm", create("tm.txt", "tm"))
+			assert.Equal(t, []string{"team:team1"}, e.requested(index), "no team without the repository or its pull requests")
+		})
 
 		t.Run("TwoFactorBlocked", func(t *testing.T) {
 			defer tests.PrintCurrentTest(t)()
@@ -335,6 +370,32 @@ func TestDefaultReviewersFields(t *testing.T) {
 			e.do("POST", "/branch_protections", &api.CreateBranchProtectionOption{RuleName: "df-bad-count", ApprovalRules: []*api.ApprovalRule{{Name: "Zero", RequiredCount: 0, Usernames: []string{"user2"}, SourceBranchPattern: "x/*"}}}, http.StatusUnprocessableEntity)
 			e.do("POST", "/branch_protections", &api.CreateBranchProtectionOption{RuleName: "df-bad-glob", ApprovalRules: []*api.ApprovalRule{requestRule("Bad", 1, "[a", "user2")}}, http.StatusUnprocessableEntity)
 			e.do("POST", "/branch_protections", &api.CreateBranchProtectionOption{RuleName: "df-bad-count", ApprovalRules: []*api.ApprovalRule{requestRule("Neg", -1, "", "user2")}}, http.StatusUnprocessableEntity)
+
+			bad := func(rule *api.ApprovalRule) {
+				t.Helper()
+				e.do("POST", "/branch_protections", &api.CreateBranchProtectionOption{RuleName: "df-bad", ApprovalRules: []*api.ApprovalRule{rule}}, http.StatusUnprocessableEntity)
+			}
+			codeOwners := requestRule("Owners", 0, "", "user2")
+			codeOwners.RequireCodeOwners = true
+			bad(codeOwners) // a rule without a count can't enforce code owners
+			bad(requestRule("Ctl", 1, "a\u0001b", "user2"))
+			bad(requestRule("Bidi", 1, "a\u202eb", "user2"))
+			bad(requestRule("Complex", 1, strings.Repeat("*aa", 16)+"*c", "user2"))
+			path := requestRule("Paths", 1, "", "user2")
+			path.PathPatterns = strings.Repeat("*a", 8) + "*"
+			bad(path)
+			path.PathPatterns = "src/**/*.go;{docs,api}/**"
+			e.do("POST", "/branch_protections", &api.CreateBranchProtectionOption{RuleName: "df-paths", ApprovalRules: []*api.ApprovalRule{path}}, http.StatusCreated)
+
+			// a source pattern is trimmed, and dropped without review requests
+			trimmed := requestRule("Trim", 0, " release/** ", "user2")
+			noRequest := &api.ApprovalRule{Name: "NoRequest", RequiredCount: 1, Usernames: []string{"user2"}, SourceBranchPattern: "x/*"}
+			e.do("POST", "/branch_protections", &api.CreateBranchProtectionOption{RuleName: "df-trim", ApprovalRules: []*api.ApprovalRule{trimmed, noRequest}}, http.StatusCreated)
+			var tbp api.BranchProtection
+			DecodeJSON(t, e.do("GET", "/branch_protections/df-trim", nil, http.StatusOK), &tbp)
+			require.Len(t, tbp.ApprovalRules, 2)
+			assert.Equal(t, "release/**", tbp.ApprovalRules[0].SourceBranchPattern)
+			assert.Empty(t, tbp.ApprovalRules[1].SourceBranchPattern)
 
 			e.do("POST", "/branch_protections", &api.CreateBranchProtectionOption{RuleName: "df-repo", ApprovalRules: []*api.ApprovalRule{rule}}, http.StatusCreated)
 			var bp api.BranchProtection
@@ -379,6 +440,14 @@ func TestDefaultReviewersFields(t *testing.T) {
 				return url.Values{"rule_name": {"df-web"}, "approval_rule_name": {"Web"}, "approval_rule_count": {count}, "approval_rule_users": {"user2"}, "approval_rule_request_reviews": {request}, "approval_rule_source_branch": {source}}
 			}
 			// refused: nothing is saved
+			for _, count := range []string{"", "1x", "99999999999999999999"} {
+				e.owner.Session.MakeRequest(t, NewRequestWithURLValues(t, "POST", edit, form(count, "true", "")), http.StatusSeeOther)
+				assert.Empty(t, saved(), "count %q", count)
+			}
+			withOwners := form("0", "true", "")
+			withOwners.Set("approval_rule_code_owners", "true")
+			e.owner.Session.MakeRequest(t, NewRequestWithURLValues(t, "POST", edit, withOwners), http.StatusSeeOther)
+			assert.Empty(t, saved())
 			e.owner.Session.MakeRequest(t, NewRequestWithURLValues(t, "POST", edit, form("0", "false", "")), http.StatusSeeOther)
 			assert.Empty(t, saved())
 			e.owner.Session.MakeRequest(t, NewRequestWithURLValues(t, "POST", edit, form("1", "true", "[a")), http.StatusSeeOther)
@@ -394,6 +463,114 @@ func TestDefaultReviewersFields(t *testing.T) {
 			page := NewHTMLParser(t, resp.Body)
 			assert.Equal(t, "true", page.Find(`select[name="approval_rule_request_reviews"] option[selected]`).AttrOr("value", ""))
 			assert.Equal(t, "feature/*", page.Find(`input[name="approval_rule_source_branch"]`).AttrOr("value", ""))
+		})
+	})
+}
+
+// A request of a rule without a count is no official request and can't block a merge; one of a rule with a count is official.
+func TestDefaultReviewersOfficial(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		e := newDREnv(t, 1)
+		e.collaborator("user4", "write")
+		e.collaborator("user5", "write")
+		official := func(index int64, user string) bool {
+			var r issues_model.Review
+			has, err := db.GetEngine(db.DefaultContext).Where("issue_id = ? AND type = ? AND reviewer_id = ?", e.issueID(index), issues_model.ReviewTypeRequest, unittest.AssertExistsAndLoadBean(t, &user_model.User{Name: user}).ID).Get(&r)
+			require.NoError(t, err)
+			require.True(t, has)
+			return r.Official
+		}
+		protect := func(base string, rule *api.ApprovalRule) {
+			e.branch(base)
+			e.do("POST", "/branch_protections", &api.CreateBranchProtectionOption{RuleName: base, RequiredApprovals: 1, BlockOnOfficialReviewRequests: true, ApprovalRules: []*api.ApprovalRule{rule}}, http.StatusCreated)
+		}
+
+		protect("dr-off0", requestRule("Ask", 0, "", "user4"))
+		index := e.pr("dr-off0", "head-off0", "z", create("z.txt", "z"))
+		assert.False(t, official(index, "user4"))
+		user5 := NewAPITestContext(t, "user5", "", auth_model.AccessTokenScopeWriteRepository)
+		MakeRequest(t, NewRequestWithJSON(t, "POST", fmt.Sprintf("%s/pulls/%d/reviews", e.api, index), &api.CreatePullReviewOptions{Event: api.ReviewStateApproved}).AddTokenAuth(user5.Token), http.StatusOK)
+		e.merge(index, http.StatusOK) // the pending request of user4 doesn't block
+
+		protect("dr-off1", requestRule("Gate", 1, "", "user4"))
+		index = e.pr("dr-off1", "head-off1", "z1", create("z1.txt", "z1"))
+		assert.True(t, official(index, "user4"))
+	})
+}
+
+// A closed pull request gets no requests when its WIP prefix goes.
+func TestDefaultReviewersClosed(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		e := newDREnv(t, 1)
+		e.collaborator("user4", "write")
+		e.branch("dr-closed")
+		e.protect("dr-closed", requestRule("Ask", 0, "", "user4"))
+		index := e.pr("dr-closed", "head-closed", "WIP: c", create("c.txt", "c"))
+		e.do("PATCH", fmt.Sprintf("/pulls/%d", index), &api.EditPullRequestOption{State: new("closed")}, http.StatusCreated)
+		e.do("PATCH", fmt.Sprintf("/pulls/%d", index), &api.EditPullRequestOption{Title: "c"}, http.StatusCreated)
+		assert.Empty(t, e.requested(index))
+	})
+}
+
+// Pull requests from a fork and with AGit (whose source is "<pusher>/<topic>") are asked on a push too.
+func TestDefaultReviewersForkAndAGit(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		e := newDREnv(t, 1)
+		e.collaborator("user4", "write")
+		e.collaborator("user5", "write")
+		docs := requestRule("Docs", 0, "", "user5")
+		docs.PathPatterns = "docs/**"
+
+		t.Run("Fork", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+			e.branch("dr-fork")
+			e.protect("dr-fork", docs)
+			user4 := NewAPITestContext(t, "user4", "repo1", auth_model.AccessTokenScopeWriteRepository)
+			req := NewRequestWithJSON(t, "POST", "/api/v1/repos/user2/repo1/forks", &api.CreateForkOption{Name: new("dr-fork-repo")}).AddTokenAuth(user4.Token)
+			var fork api.Repository
+			DecodeJSON(t, user4.Session.MakeRequest(t, req, http.StatusAccepted), &fork)
+			change := func(branch, newBranch, path string) {
+				req := NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/repos/user4/dr-fork-repo/contents"), &api.ChangeFilesOptions{
+					FileOptions: api.FileOptions{BranchName: branch, NewBranchName: newBranch, Message: "change"}, Files: []*api.ChangeFileOperation{create(path, path)},
+				}).AddTokenAuth(user4.Token)
+				user4.Session.MakeRequest(t, req, http.StatusCreated)
+			}
+			change("master", "fork-head", "src/f.txt")
+			req = NewRequestWithJSON(t, "POST", e.api+"/pulls", &api.CreatePullRequestOption{Base: "dr-fork", Head: "user4:fork-head", Title: "f"}).AddTokenAuth(user4.Token)
+			var pr api.PullRequest
+			DecodeJSON(t, user4.Session.MakeRequest(t, req, http.StatusCreated), &pr)
+			assert.Empty(t, e.requested(pr.Index))
+			change("fork-head", "", "docs/f.md")
+			require.Eventually(t, func() bool { return len(e.requested(pr.Index)) == 1 }, 15*time.Second, 100*time.Millisecond)
+			assert.Equal(t, []string{"user5"}, e.requested(pr.Index))
+		})
+
+		t.Run("AGit", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+			e.branch("dr-agit")
+			agit := requestRule("Docs", 0, "user4/*", "user5") // matched against the stored head "<pusher>/<topic>"
+			agit.PathPatterns = "docs/**"
+			e.protect("dr-agit", agit)
+			dst := t.TempDir()
+			remote := *u
+			remote.Path = "/user2/repo1.git"
+			remote.User = url.UserPassword("user4", userPassword)
+			t.Run("Clone", doGitClone(dst, &remote))
+			require.NoError(t, git.NewCommand(git.DefaultContext, "checkout", "-b", "agit-work", "origin/dr-agit").Run(&git.RunOpts{Dir: dst}))
+			push := func(path string) {
+				require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(dst, path)), 0o777))
+				require.NoError(t, os.WriteFile(filepath.Join(dst, path), []byte(path), 0o666))
+				require.NoError(t, git.AddChanges(dst, true))
+				sig := &git.Signature{Email: "user4@example.com", Name: "user4", When: time.Now()}
+				require.NoError(t, git.CommitChanges(dst, git.CommitChangesOptions{Committer: sig, Author: sig, Message: "agit " + path}))
+				require.NoError(t, git.NewCommand(git.DefaultContext, "push", "origin", "HEAD:refs/for/dr-agit", "-o", "topic=t1", "-o", "title=agit").Run(&git.RunOpts{Dir: dst}))
+			}
+			push("src/a.txt")
+			pr := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{Flow: issues_model.PullRequestFlowAGit, BaseRepoID: 1, HeadBranch: "user4/t1"})
+			assert.Empty(t, e.requested(pr.Index))
+			push("docs/a.md")
+			require.Eventually(t, func() bool { return len(e.requested(pr.Index)) == 1 }, 15*time.Second, 100*time.Millisecond)
+			assert.Equal(t, []string{"user5"}, e.requested(pr.Index))
 		})
 	})
 }

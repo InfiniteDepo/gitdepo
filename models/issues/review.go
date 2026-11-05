@@ -793,6 +793,12 @@ func InsertReviews(ctx context.Context, reviews []*Review) error {
 	return committer.Commit()
 }
 
+// ClearReviewOfficial makes a review request unofficial, so that it can't block a merge.
+func ClearReviewOfficial(ctx context.Context, reviewID int64) error {
+	_, err := db.GetEngine(ctx).Exec("UPDATE `review` SET official = ? WHERE id = ?", false, reviewID)
+	return err
+}
+
 // AddReviewRequest add a review request from one reviewer
 func AddReviewRequest(ctx context.Context, issue *Issue, reviewer, doer *user_model.User) (*Comment, error) {
 	ctx, committer, err := db.TxContext(ctx)

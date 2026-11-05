@@ -70,7 +70,7 @@ func storedBranchRule(ctx context.Context, id int64) (map[string]any, error) {
 	for _, r := range rules {
 		name := fmt.Sprintf("%s:%d", r.Name, r.RequiredCount)
 		if r.RequestReviews {
-			name += ":requests:" + r.SourceBranchPattern
+			name += fmt.Sprintf(":requests:%q", r.SourceBranchPattern)
 		}
 		names = append(names, name)
 	}

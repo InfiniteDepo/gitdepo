@@ -152,7 +152,10 @@ function initApprovalRules() {
   // the source branch only matters when reviews are requested; the field stays in the form (hidden, not disabled) so the rows keep their order
   list.addEventListener('change', (e) => {
     if (e.target.name === 'approval_rule_request_reviews') {
-      toggleElem(e.target.closest('.approval-rule-card').querySelector('.approval-rule-source'), e.target.value === 'true');
+      const card = e.target.closest('.approval-rule-card');
+      toggleElem(card.querySelector('.approval-rule-source'), e.target.value === 'true');
+      // the count error depends on the option: let the next save check again
+      if (e.target.value === 'true') toggleElem(card.querySelector('.approval-rule-error[data-error="count"]'), false);
     }
   });
 
@@ -173,6 +176,7 @@ function initApprovalRules() {
       if (!name || new TextEncoder().encode(name).length > 255) [error, invalid] = ['name', ['approval_rule_name']];
       else if (seen.has(name)) [error, invalid] = ['duplicate', ['approval_rule_name']];
       else if (!(Number.isInteger(Number(value('approval_rule_count'))) && Number(value('approval_rule_count')) >= (value('approval_rule_request_reviews') === 'true' ? 0 : 1))) [error, invalid] = ['count', ['approval_rule_count']];
+      else if (value('approval_rule_count') === '0' && value('approval_rule_code_owners') === 'true') [error, invalid] = ['codeowners0', ['approval_rule_count', 'approval_rule_code_owners']];
       else if (!hasApprovers) [error, invalid] = ['approvers', ['approval_rule_users', 'approval_rule_teams']];
       seen.add(name);
       for (const el of card.querySelectorAll('.field')) el.classList.remove('error');

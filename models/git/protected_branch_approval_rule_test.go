@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	git_model "forgejo.org/models/git"
 	repo_model "forgejo.org/models/repo"
@@ -14,6 +15,7 @@ import (
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/util"
 
+	"github.com/gobwas/glob"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -52,6 +54,9 @@ func TestApprovalRuleMatchesSourceBranch(t *testing.T) {
 		{"feature/*", "bugfix/a", false},
 		{"feature/*", "Feature/a", false}, // branch names are case-sensitive
 		{"[a", "a", false},                // a pattern that can't compile matches nothing: it only limits requests
+		{"user5/*", "user5/topic", true},  // AGit pull requests are stored as "<pusher>/<topic>"
+		{"feature/*", "user5/feature/x", false},
+		{strings.Repeat("*aa", 16) + "*c", "aaa", false}, // beyond the limits: nobody is asked
 	} {
 		r := &git_model.ApprovalRule{SourceBranchPattern: c.pattern}
 		assert.Equal(t, c.matches, r.MatchesSourceBranch(c.branch), "%q %q", c.pattern, c.branch)
@@ -88,6 +93,7 @@ func TestSetApprovalRules(t *testing.T) {
 		require.ErrorIs(t, err, util.ErrInvalidArgument, name)
 	}
 	// 0 approvals is a request-only rule
+	require.ErrorIs(t, git_model.SetApprovalRules(t.Context(), repo, pb.ID, []*git_model.ApprovalRule{{Name: "Ask", RequestReviews: true, RequireCodeOwners: true, UserIDs: []int64{user2.ID}}}), util.ErrInvalidArgument)
 	require.NoError(t, git_model.SetApprovalRules(t.Context(), repo, pb.ID, []*git_model.ApprovalRule{{Name: "Ask", RequiredCount: 0, RequestReviews: true, SourceBranchPattern: "feature/*", UserIDs: []int64{user2.ID}}}))
 	rules, err = git_model.GetApprovalRules(t.Context(), pb.ID)
 	require.NoError(t, err)
@@ -115,4 +121,47 @@ func TestSetApprovalRules(t *testing.T) {
 	rules, err = git_model.GetApprovalRules(t.Context(), pb.ID)
 	require.NoError(t, err)
 	assert.Empty(t, rules)
+}
+
+func TestValidateGlobPattern(t *testing.T) {
+	for _, ok := range []string{"", "feature/*", "release/**", "src/**/*.go", "{docs,api}/**", "docs/**", "a?b", strings.Repeat("a", 255)} {
+		require.NoError(t, git_model.ValidateGlobPattern(ok, '.', '/'), "%q", ok)
+	}
+	for name, bad := range map[string]string{
+		"compile":     "[a",
+		"too long":    strings.Repeat("a", 256),
+		"wildcards":   strings.Repeat("*a", 7) + "*b",
+		"alternation": "{a,b}/{c,d}/{e,f}/{g,h}",
+		"nested":      "{a,{b,c}}",
+		"nul":         "a\x00b",
+		"newline":     "a\nb",
+		"c1":          "a\u0085b",
+		"bidi":        "a\u202eb",
+	} {
+		require.ErrorIs(t, git_model.ValidateGlobPattern(bad, '.', '/'), util.ErrInvalidArgument, name)
+	}
+}
+
+// Matching a glob with many wildcards takes polynomial time of a high degree in the length of the name; the limits
+// refuse such patterns, and what they allow stays fast.
+func TestGlobPatternComplexityBound(t *testing.T) {
+	name := strings.Repeat("a", 250) + "x"
+	slow := strings.Repeat("*aa", 14) + "*c"
+	require.Error(t, git_model.ValidateGlobPattern(slow, '/'), "refused when saved")
+
+	g := glob.MustCompile(slow, '/')
+	start := time.Now()
+	g.Match(name)
+	t.Logf("without the limit, %d wildcards against %d characters take %v", 15, len(name), time.Since(start))
+
+	worst := strings.Repeat("*aa", 6)
+	require.NoError(t, git_model.ValidateGlobPattern(worst, '/'))
+	start = time.Now()
+	glob.MustCompile(worst, '/').Match(name)
+	assert.Less(t, time.Since(start), 100*time.Millisecond)
+
+	// a stored pattern beyond the limits fails closed
+	r := &git_model.ApprovalRule{PathPatterns: slow}
+	assert.True(t, r.AppliesTo([]string{"unrelated.txt"}))
+	assert.False(t, (&git_model.ApprovalRule{SourceBranchPattern: slow}).MatchesSourceBranch(name))
 }

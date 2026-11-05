@@ -573,7 +573,10 @@ func approvalRulesFromForm(ctx *context.Context, owner *user_model.User) ([]*git
 		if strings.TrimSpace(name) == "" {
 			continue
 		}
-		count, _ := strconv.ParseInt(field("approval_rule_count", i), 10, 64)
+		count, err := strconv.ParseInt(field("approval_rule_count", i), 10, 64)
+		if err != nil {
+			return nil, util.NewInvalidArgumentErrorf("approval rule %q needs a number of approvals", name)
+		}
 		rules = append(rules, &api.ApprovalRule{
 			Name: name, RequiredCount: count,
 			Usernames:           list(field("approval_rule_users", i)),

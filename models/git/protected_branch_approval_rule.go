@@ -7,6 +7,7 @@ import (
 	"context"
 	"slices"
 	"strings"
+	"unicode"
 
 	"forgejo.org/models/db"
 	"forgejo.org/models/organization"
@@ -80,16 +81,21 @@ func setApprovalRules(ctx context.Context, protectedBranchID int64, rules []*App
 			return util.NewInvalidArgumentErrorf("approval rule %q exists twice", r.Name)
 		case r.RequiredCount < 0 || (r.RequiredCount == 0 && !r.RequestReviews):
 			return util.NewInvalidArgumentErrorf("approval rule %q needs at least 1 approval, or 0 with review requests", r.Name)
-		case len(r.SourceBranchPattern) > 255:
-			return util.NewInvalidArgumentErrorf("approval rule %q: the source branch pattern is too long", r.Name)
+		case r.RequiredCount == 0 && r.RequireCodeOwners:
+			// a rule without a count is never applicable, so it could not enforce the code owners
+			return util.NewInvalidArgumentErrorf("approval rule %q: a rule that only requests reviews can't require code owners", r.Name)
 		}
-		if _, err := glob.Compile(r.SourceBranchPattern, '/'); err != nil {
-			return util.NewInvalidArgumentErrorf("approval rule %q: invalid source branch pattern %q", r.Name, r.SourceBranchPattern)
+		r.SourceBranchPattern = strings.TrimSpace(r.SourceBranchPattern)
+		if !r.RequestReviews {
+			r.SourceBranchPattern = "" // it only limits requests
+		}
+		if err := ValidateGlobPattern(r.SourceBranchPattern, '/'); err != nil {
+			return util.NewInvalidArgumentErrorf("approval rule %q: source branch pattern: %v", r.Name, err)
 		}
 		names[r.Name] = true
 		for expr := range strings.SplitSeq(r.PathPatterns, ";") {
-			if _, err := glob.Compile(strings.TrimSpace(expr), '.', '/'); err != nil {
-				return util.NewInvalidArgumentErrorf("approval rule %q: invalid path pattern %q", r.Name, expr)
+			if err := ValidateGlobPattern(strings.TrimSpace(expr), '.', '/'); err != nil {
+				return util.NewInvalidArgumentErrorf("approval rule %q: invalid path pattern %q: %v", r.Name, expr, err)
 			}
 		}
 		if err := checkApprovers(r); err != nil {
@@ -128,6 +134,12 @@ func (r *ApprovalRule) IsApprover(ctx context.Context, userID int64) (bool, erro
 
 // AppliesTo returns true if the rule has no path patterns or one of the changed files matches.
 func (r *ApprovalRule) AppliesTo(changedFiles []string) bool {
+	// a stored pattern beyond the limits is never matched: the rule applies (fails closed)
+	for expr := range strings.SplitSeq(r.PathPatterns, ";") {
+		if ValidateGlobPattern(strings.TrimSpace(expr), '.', '/') != nil {
+			return true
+		}
+	}
 	patterns := getFilePatterns(r.PathPatterns)
 	// patterns that don't compile to any glob must not switch the rule off
 	if len(patterns) == 0 {
@@ -143,11 +155,55 @@ func MatchesAnyGlob(patterns []glob.Glob, path string) bool {
 }
 
 // MatchesSourceBranch returns true if the rule has no source branch pattern or the branch matches it. It only decides
-// who is asked for a review.
+// who is asked for a review. A pattern beyond the limits of ValidateGlobPattern matches nothing: nobody is asked.
+// For an AGit pull request the branch is "<pusher>/<topic>", as stored.
 func (r *ApprovalRule) MatchesSourceBranch(branch string) bool {
 	if r.SourceBranchPattern == "" {
 		return true
 	}
+	if ValidateGlobPattern(r.SourceBranchPattern, '/') != nil {
+		return false
+	}
 	g, err := glob.Compile(r.SourceBranchPattern, '/')
 	return err == nil && g.Match(branch)
+}
+
+// Limits of a glob pattern of an approval rule. Matching a glob with many wildcards takes polynomial time of a high
+// degree in the length of the name, and the name of the source branch is chosen by the author of a pull request.
+const (
+	maxGlobLength    = 255
+	maxGlobWildcards = 6 // `*` and `?` characters, `**` counts 2
+	maxGlobBraces    = 3 // `{a,b}` groups, which can't be nested
+)
+
+// ValidateGlobPattern checks that expr compiles with the separators and stays within the limits that bound pattern
+// complexity: its length, its wildcards and its `{...}` alternations. It refuses control and bidirectional
+// control characters.
+func ValidateGlobPattern(expr string, separators ...rune) error {
+	if len(expr) > maxGlobLength {
+		return util.NewInvalidArgumentErrorf("pattern is longer than %d bytes", maxGlobLength)
+	}
+	wildcards, braces, depth := 0, 0, 0
+	for _, c := range expr {
+		switch {
+		case unicode.IsControl(c) || strings.ContainsRune("\u061C\u200E\u200F\u202A\u202B\u202C\u202D\u202E\u2066\u2067\u2068\u2069", c):
+			return util.NewInvalidArgumentErrorf("pattern holds a control character")
+		case c == '*' || c == '?':
+			wildcards++
+		case c == '{':
+			braces++
+			if depth++; depth > 1 {
+				return util.NewInvalidArgumentErrorf("alternations can't be nested")
+			}
+		case c == '}':
+			depth--
+		}
+	}
+	if wildcards > maxGlobWildcards || braces > maxGlobBraces {
+		return util.NewInvalidArgumentErrorf("pattern has more than %d wildcards or %d alternations", maxGlobWildcards, maxGlobBraces)
+	}
+	if _, err := glob.Compile(expr, separators...); err != nil {
+		return util.NewInvalidArgumentErrorf("%v", err)
+	}
+	return nil
 }

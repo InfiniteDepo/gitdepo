@@ -10,6 +10,7 @@ import (
 	git_model "forgejo.org/models/git"
 	issues_model "forgejo.org/models/issues"
 	org_model "forgejo.org/models/organization"
+	"forgejo.org/models/perm"
 	access_model "forgejo.org/models/perm/access"
 	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
@@ -26,7 +27,7 @@ import (
 // organization's two-factor requirement, can't read pull requests or already has a review or request is asked, and a
 // failure for one reviewer is logged and doesn't stop the others.
 func DefaultReviewerRequests(ctx context.Context, issue *issues_model.Issue, pr *issues_model.PullRequest, oldHead string) ([]*ReviewRequestNotifier, error) {
-	if pr.IsWorkInProgress(ctx) {
+	if issue.IsClosed || pr.HasMerged || pr.IsWorkInProgress(ctx) {
 		return nil, nil
 	}
 	if err := pr.LoadBaseRepo(ctx); err != nil {
@@ -57,16 +58,17 @@ func DefaultReviewerRequests(ctx context.Context, issue *issues_model.Issue, pr 
 	if files, oldFiles, err = changedFiles(ctx, pr, oldHead); err != nil {
 		return nil, err
 	}
+	// the value says whether a rule with a count asks: only then the request is official and can block
 	userIDs, teamIDs := map[int64]bool{}, map[int64]bool{}
 	for _, r := range rules {
 		if !r.AppliesTo(files) || (oldHead != "" && r.AppliesTo(oldFiles)) {
 			continue
 		}
 		for _, id := range r.UserIDs {
-			userIDs[id] = true
+			userIDs[id] = userIDs[id] || r.RequiredCount > 0
 		}
 		for _, id := range r.TeamIDs {
-			teamIDs[id] = true
+			teamIDs[id] = teamIDs[id] || r.RequiredCount > 0
 		}
 	}
 	if len(userIDs)+len(teamIDs) == 0 {
@@ -93,25 +95,38 @@ func DefaultReviewerRequests(ctx context.Context, issue *issues_model.Issue, pr 
 
 	var notifiers []*ReviewRequestNotifier
 	for _, u := range users {
+		// a check that fails is no permission
 		if ok, err := mayRequestReview(ctx, issue, pr, u); err != nil {
 			log.Error("%-v default reviewer %d: %v", pr, u.ID, err)
+			continue
 		} else if !ok {
 			continue
 		}
 		comment, err := issues_model.AddReviewRequest(ctx, issue, u, issue.Poster)
+		if err == nil && comment != nil && !userIDs[u.ID] {
+			err = issues_model.ClearReviewOfficial(ctx, comment.ReviewID)
+		}
 		if err != nil {
 			log.Error("%-v AddReviewRequest of %d: %v", pr, u.ID, err)
 		} else if comment != nil {
 			notifiers = append(notifiers, &ReviewRequestNotifier{Comment: comment, IsAdd: true, Reviewer: u})
 		}
 	}
-	for id := range teamIDs {
+	for id, official := range teamIDs {
 		team, err := org_model.GetTeamByID(ctx, id)
-		// teams only exist in organizations; a team must have the repository, or its members would learn of a pull request they can't see
-		if err != nil || team.OrgID != pr.BaseRepo.OwnerID || !org_model.HasTeamRepo(ctx, team.OrgID, team.ID, pr.BaseRepoID) {
+		if err != nil {
+			log.Error("%-v default reviewer team %d: %v", pr, id, err)
+			continue
+		}
+		// teams only exist in organizations; a team must have the repository and its pull requests, or its members would learn of a pull request they can't see
+		if team.OrgID != pr.BaseRepo.OwnerID || !org_model.HasTeamRepo(ctx, team.OrgID, team.ID, pr.BaseRepoID) ||
+			team.UnitAccessMode(ctx, unit.TypePullRequests) < perm.AccessModeRead {
 			continue
 		}
 		comment, err := issues_model.AddTeamReviewRequest(ctx, issue, team, issue.Poster)
+		if err == nil && comment != nil && !official {
+			err = issues_model.ClearReviewOfficial(ctx, comment.ReviewID)
+		}
 		if err != nil {
 			log.Error("%-v AddTeamReviewRequest of %d: %v", pr, id, err)
 		} else if comment != nil {
