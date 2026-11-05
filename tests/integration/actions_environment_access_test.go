@@ -25,6 +25,7 @@ import (
 	"forgejo.org/modules/timeutil"
 	actions_service "forgejo.org/services/actions"
 
+	runnerv1 "code.forgejo.org/forgejo/actions-proto/runner/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -258,26 +259,43 @@ func TestActionsEnvironmentAccess(t *testing.T) {
 			return j.Status
 		}
 
-		t.Run("a wait timer edit never releases a waiting job early", func(t *testing.T) {
+		t.Run("a waiting job's release follows the current wait timer", func(t *testing.T) {
+			released := func(t *testing.T, job *actions_model.ActionRunJob) {
+				t.Helper()
+				require.Eventually(t, func() bool { return jobStatus(job) == actions_model.StatusWaiting }, 10*time.Second, 100*time.Millisecond)
+				assert.Equal(t, actions_model.DeploymentReleased, deployment(job).Status)
+				runner.execTask(t, runner.fetchTask(t), &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
+			}
 			put(owner, "timer", api.CreateOrUpdateEnvironmentOption{WaitTimer: new(60)}, http.StatusCreated)
 			job := pushJob("    environment: timer\n")
 			require.Equal(t, actions_model.DeploymentWaitingTimer, deployment(job).Status)
-			put(owner, "timer", api.CreateOrUpdateEnvironmentOption{WaitTimer: new(0)}, http.StatusOK)
-			require.NoError(t, actions_service.EmitJobsIfReady(job.RunID))
-			assert.Equal(t, actions_model.StatusBlocked, jobStatus(job), "a lowered timer doesn't shorten the wait")
-
-			put(owner, "timer2", api.CreateOrUpdateEnvironmentOption{WaitTimer: new(1)}, http.StatusCreated)
-			raised := pushJob("    environment: timer2\n")
-			put(owner, "timer2", api.CreateOrUpdateEnvironmentOption{WaitTimer: new(600)}, http.StatusOK)
-			// the first minute is over: the raised timer holds the job
-			_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET release_after_unix = ? WHERE job_id = ?", timeutil.TimeStampNow()-1, raised.ID)
+			// the first hour is over (the stored release too), and the timer was raised meanwhile: it holds the job
+			_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET created = created - 3660, release_after_unix = ? WHERE job_id = ?", timeutil.TimeStampNow()-1, job.ID)
 			require.NoError(t, err)
-			require.NoError(t, actions_service.EmitJobsIfReady(raised.RunID))
-			d := deployment(raised)
+			put(owner, "timer", api.CreateOrUpdateEnvironmentOption{WaitTimer: new(600)}, http.StatusOK)
+			require.NoError(t, actions_service.EmitJobsIfReady(job.RunID))
+			d := deployment(job)
 			assert.Equal(t, actions_model.DeploymentWaitingTimer, d.Status)
-			assert.Greater(t, d.ReleaseAfterUnix, timeutil.TimeStampNow()+500*60)
-			assert.Equal(t, actions_model.StatusBlocked, jobStatus(raised))
+			assert.Equal(t, d.Created+600*60, d.ReleaseAfterUnix)
+			assert.Equal(t, actions_model.StatusBlocked, jobStatus(job))
 			assert.Nil(t, runner.maybeFetchTask(t))
+
+			// lowered, but still longer than the job waited: it holds to the new time
+			put(owner, "timer", api.CreateOrUpdateEnvironmentOption{WaitTimer: new(90)}, http.StatusOK)
+			d = deployment(job)
+			assert.Equal(t, actions_model.DeploymentWaitingTimer, d.Status)
+			assert.Equal(t, d.Created+90*60, d.ReleaseAfterUnix)
+			assert.Nil(t, runner.maybeFetchTask(t))
+			// lowered below the time it waited: released at once
+			put(owner, "timer", api.CreateOrUpdateEnvironmentOption{WaitTimer: new(30)}, http.StatusOK)
+			released(t, job)
+
+			// removed: released at once
+			put(owner, "timer2", api.CreateOrUpdateEnvironmentOption{WaitTimer: new(60)}, http.StatusCreated)
+			removed := pushJob("    environment: timer2\n")
+			require.Equal(t, actions_model.DeploymentWaitingTimer, deployment(removed).Status)
+			put(owner, "timer2", api.CreateOrUpdateEnvironmentOption{}, http.StatusOK)
+			released(t, removed)
 		})
 
 		t.Run("an approval by a reviewer removed before the release is revoked", func(t *testing.T) {

@@ -547,7 +547,7 @@ func TestAPIActionsEnvironments(t *testing.T) {
 			assert.Nil(t, runner.maybeFetchTask(t))
 
 			// a stricter PUT keeps it waiting, a PUT without reviewers releases it (the break-glass), audited
-			put(ownerToken, "gated", api.CreateOrUpdateEnvironmentOption{PreventSelfReview: new(true), Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 4}}}, http.StatusOK)
+			put(ownerToken, "gated", api.CreateOrUpdateEnvironmentOption{WaitTimer: new(1), Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 4}}}, http.StatusOK)
 			assert.Equal(t, actions_model.StatusBlocked, jobStatus(job))
 			since := auditNow()
 			put(ownerToken, "gated", api.CreateOrUpdateEnvironmentOption{}, http.StatusOK)

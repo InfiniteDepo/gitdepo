@@ -359,7 +359,7 @@ func TestGateEnvironment(t *testing.T) {
 		start := time.Now().Truncate(time.Second)
 		timeutil.MockSet(start)
 		defer timeutil.MockUnset()
-		env := newEnvironment(t, &actions_model.ActionEnvironment{Name: "slow", WaitTimerMinutes: 5})
+		newEnvironment(t, &actions_model.ActionEnvironment{Name: "slow", WaitTimerMinutes: 5})
 		job := gateJob(t, envWorkflow("    environment: slow\n"), "refs/heads/main")
 
 		b, err := gateEnvironment(t.Context(), job)
@@ -377,13 +377,6 @@ func TestGateEnvironment(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, due)
 
-		// the environment's timer is shortened meanwhile: the deployment keeps the deadline it was given
-		env.WaitTimerMinutes = 1
-		require.NoError(t, actions_model.UpdateEnvironment(audit_model.WithSystem(t.Context(), "test"), env, nil))
-		b, err = gateEnvironment(t.Context(), job)
-		require.NoError(t, err)
-		assert.Equal(t, behaviourHoldJob, b)
-
 		timeutil.MockSet(start.Add(300 * time.Second))
 		due, err = actions_model.FindDueDeploymentRunIDs(t.Context(), timeutil.TimeStampNow(), 10)
 		require.NoError(t, err)
@@ -394,41 +387,54 @@ func TestGateEnvironment(t *testing.T) {
 		assert.Equal(t, actions_model.DeploymentReleased, deploymentOf(t, job).Status)
 	})
 
-	t.Run("a timer raised meanwhile holds a waiting job, a lowered one never releases it earlier", func(t *testing.T) {
-		require.NoError(t, unittest.PrepareTestDatabase())
+	t.Run("a waiting job's release is its ready time plus the current timer: raise holds, lower and remove release", func(t *testing.T) {
 		start := time.Now().Truncate(time.Second)
-		timeutil.MockSet(start)
 		defer timeutil.MockUnset()
-		env := newEnvironment(t, &actions_model.ActionEnvironment{Name: "slow", WaitTimerMinutes: 1})
-		job := gateJob(t, envWorkflow("    environment: slow\n"), "refs/heads/main")
-		b, err := gateEnvironment(t.Context(), job)
-		require.NoError(t, err)
-		require.Equal(t, behaviourHoldJob, b)
-		ready := deploymentOf(t, job).Created // the timer counts from when the job became ready
+		ctx := audit_model.WithSystem(t.Context(), "test")
+		var job *actions_model.ActionRunJob
+		// pass sets the timer to minutes, moves the clock to start+at and runs the gate
+		pass := func(t *testing.T, minutes int, at time.Duration) (behaviour, *actions_model.ActionDeployment) {
+			t.Helper()
+			env, err := actions_model.GetRepoEnvironmentByName(t.Context(), 63, "slow")
+			require.NoError(t, err)
+			if env.WaitTimerMinutes != minutes {
+				env.WaitTimerMinutes = minutes
+				require.NoError(t, actions_model.UpdateEnvironment(ctx, env, nil))
+			}
+			timeutil.MockSet(start.Add(at))
+			b, err := gateEnvironment(t.Context(), job)
+			require.NoError(t, err)
+			return b, deploymentOf(t, job)
+		}
+		setup := func(t *testing.T, minutes int) timeutil.TimeStamp {
+			t.Helper()
+			require.NoError(t, unittest.PrepareTestDatabase())
+			timeutil.MockSet(start)
+			newEnvironment(t, &actions_model.ActionEnvironment{Name: "slow", WaitTimerMinutes: minutes})
+			job = gateJob(t, envWorkflow("    environment: slow\n"), "refs/heads/main")
+			b, d := pass(t, minutes, 0)
+			require.Equal(t, behaviourHoldJob, b)
+			require.Equal(t, actions_model.DeploymentWaitingTimer, d.Status)
+			require.Equal(t, d.Created+timeutil.TimeStamp(minutes)*60, d.ReleaseAfterUnix)
+			return d.Created // the timer counts from when the job became ready
+		}
 
-		env.WaitTimerMinutes = 10
-		require.NoError(t, actions_model.UpdateEnvironment(audit_model.WithSystem(t.Context(), "test"), env, nil))
-		timeutil.MockSet(ready.AsTime().Add(2 * time.Minute)) // the first timer ended
-		b, err = gateEnvironment(t.Context(), job)
-		require.NoError(t, err)
-		assert.Equal(t, behaviourHoldJob, b, "held by the raised timer")
-		d := deploymentOf(t, job)
+		ready := setup(t, 1)
+		b, d := pass(t, 10, 2*time.Minute) // the first timer ended, the raised one holds
+		assert.Equal(t, behaviourHoldJob, b)
 		assert.Equal(t, actions_model.DeploymentWaitingTimer, d.Status)
 		assert.Equal(t, ready+600, d.ReleaseAfterUnix, "stored")
-
-		env.WaitTimerMinutes = 5 // lowered again: the job keeps the time it was given
-		require.NoError(t, actions_model.UpdateEnvironment(audit_model.WithSystem(t.Context(), "test"), env, nil))
-		timeutil.MockSet(ready.AsTime().Add(6 * time.Minute))
-		b, err = gateEnvironment(t.Context(), job)
-		require.NoError(t, err)
+		b, d = pass(t, 5, 3*time.Minute) // lowered: it now runs to ready+5 minutes
 		assert.Equal(t, behaviourHoldJob, b)
-		assert.Equal(t, ready+600, deploymentOf(t, job).ReleaseAfterUnix)
-
-		timeutil.MockSet(ready.AsTime().Add(10 * time.Minute))
-		b, err = gateEnvironment(t.Context(), job)
-		require.NoError(t, err)
+		assert.Equal(t, ready+300, d.ReleaseAfterUnix)
+		b, d = pass(t, 2, 3*time.Minute) // lowered below the time waited: released at once
 		assert.Equal(t, behaviourExecuteJob, b)
-		assert.Equal(t, actions_model.DeploymentReleased, deploymentOf(t, job).Status)
+		assert.Equal(t, actions_model.DeploymentReleased, d.Status)
+
+		setup(t, 60)
+		b, d = pass(t, 0, time.Minute) // removed: released at once
+		assert.Equal(t, behaviourExecuteJob, b)
+		assert.Equal(t, actions_model.DeploymentReleased, d.Status)
 	})
 
 	t.Run("the rules apply to a waiting job as they are when it is looked at again", func(t *testing.T) {

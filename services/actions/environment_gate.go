@@ -202,10 +202,8 @@ func nextDeploymentStatus(d *actions_model.ActionDeployment, env *actions_model.
 		return
 	}
 	timer := now + timeutil.TimeStamp(env.WaitTimerMinutes)*60
-	if d.Status.IsWaiting() && env.WaitTimerMinutes > 0 {
-		// a timer raised meanwhile holds a waiting job too, counted from when it became ready; a lowered one never
-		// releases it before the time it was given
-		d.ReleaseAfterUnix = max(d.ReleaseAfterUnix, d.Created+timeutil.TimeStamp(env.WaitTimerMinutes)*60)
+	if d.Status.IsWaiting() {
+		d.ReleaseAfterUnix = waitingRelease(d, env)
 	}
 	timerRuns := d.ReleaseAfterUnix > now
 	switch prior := d.Status; {
@@ -228,6 +226,16 @@ func nextDeploymentStatus(d *actions_model.ActionDeployment, env *actions_model.
 	default:
 		d.Status = actions_model.DeploymentReleased
 	}
+}
+
+// waitingRelease is the release time of a waiting deployment: always its ready time plus the environment's current
+// timer, recomputed on every pass, so raising the timer holds the job and lowering or removing it releases it at once
+// (editing the rules is the break-glass). The stored value is only this result; 0 means no timer.
+func waitingRelease(d *actions_model.ActionDeployment, env *actions_model.ActionEnvironment) timeutil.TimeStamp {
+	if env.WaitTimerMinutes <= 0 {
+		return 0
+	}
+	return d.Created + timeutil.TimeStamp(env.WaitTimerMinutes)*60
 }
 
 // gateEnvironment is the one place that lets a job with an environment through, called when the job would run. It
@@ -294,17 +302,16 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 		}
 	}
 
-	prior := d.Status
+	prior, priorRelease := d.Status, d.ReleaseAfterUnix
 	now := timeutil.TimeStampNow()
-	if reason == "" && !isNew && prior == actions_model.DeploymentWaitingTimer && d.ReviewedBy != 0 && env != nil && env.ReviewsRequired && d.ReleaseAfterUnix <= now {
+	if reason == "" && !isNew && prior == actions_model.DeploymentWaitingTimer && d.ReviewedBy != 0 && env != nil && env.ReviewsRequired && waitingRelease(d, env) <= now {
 		// about to be released on an approval: the approver must still be one who may review
 		if revoked, err := revokeApprovalIfIneligible(ctx, run, env, d); err != nil {
 			return behaviourError, err
 		} else if revoked {
-			return behaviourHoldJob, nil
+			return behaviourHoldJob, nil // RevokeDeploymentApproval stored the current release time
 		}
 	}
-	priorRelease := d.ReleaseAfterUnix
 	nextDeploymentStatus(d, env, reason, now)
 	if err := saveDeployment(ctx, d, isNew, prior, priorRelease); err != nil {
 		return behaviourError, err
@@ -355,6 +362,7 @@ func revokeApprovalIfIneligible(ctx context.Context, run *actions_model.ActionRu
 	// on the caller's transaction (the emitter's): a nested one that fails would roll it back and leave the rest of the
 	// pass outside it. A lost race is an error, so the pass is repeated, as in saveDeployment.
 	revokedBy := d.ReviewedBy
+	d.ReleaseAfterUnix = waitingRelease(d, env)
 	if moved, err := actions_model.RevokeDeploymentApproval(ctx, d); err != nil {
 		return false, err
 	} else if !moved {

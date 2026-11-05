@@ -139,11 +139,12 @@ func ReviewDeployment(ctx context.Context, d *ActionDeployment, cutoff timeutil.
 }
 
 // RevokeDeploymentApproval puts an approved deployment that still waits for its timer back to waiting for a review,
-// with the review cleared, and reports if it was still approved by the same reviewer (another pass may have moved it).
+// with the review cleared and the release time of d, and reports if it was still approved by the same reviewer (another
+// pass may have moved it).
 func RevokeDeploymentApproval(ctx context.Context, d *ActionDeployment) (bool, error) {
 	n, err := db.GetEngine(ctx).Where("id = ? AND status = ? AND reviewed_by = ?", d.ID, DeploymentWaitingTimer, d.ReviewedBy).
-		Cols("status", "reviewed_by", "reviewed_unix", "review_comment").
-		Update(&ActionDeployment{Status: DeploymentWaitingReview})
+		Cols("status", "release_after_unix", "reviewed_by", "reviewed_unix", "review_comment").
+		Update(&ActionDeployment{Status: DeploymentWaitingReview, ReleaseAfterUnix: d.ReleaseAfterUnix})
 	return n == 1, err
 }
 
