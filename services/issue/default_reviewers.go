@@ -107,6 +107,12 @@ func DefaultReviewerRequests(ctx context.Context, issue *issues_model.Issue, pr 
 
 	var notifiers []*ReviewRequestNotifier
 	for _, u := range users {
+		// a rule with a count makes an advisory request of an earlier rule a normal one
+		if userIDs[u.ID] {
+			if err := issues_model.MakeAdvisoryRequestOfficial(ctx, issue, u, nil); err != nil {
+				log.Error("%-v MakeAdvisoryRequestOfficial of %d: %v", pr, u.ID, err)
+			}
+		}
 		// a check that fails is no permission
 		if ok, err := mayRequestReview(ctx, issue, pr, u); err != nil {
 			log.Error("%-v default reviewer %d: %v", pr, u.ID, err)
@@ -133,6 +139,11 @@ func DefaultReviewerRequests(ctx context.Context, issue *issues_model.Issue, pr 
 		if team.OrgID != pr.BaseRepo.OwnerID || !org_model.HasTeamRepo(ctx, team.OrgID, team.ID, pr.BaseRepoID) ||
 			team.UnitAccessMode(ctx, unit.TypePullRequests) < perm.AccessModeRead {
 			continue
+		}
+		if official {
+			if err := issues_model.MakeAdvisoryRequestOfficial(ctx, issue, nil, team); err != nil {
+				log.Error("%-v MakeAdvisoryRequestOfficial of team %d: %v", pr, id, err)
+			}
 		}
 		comment, err := requestUnofficially(ctx, official, func(ctx context.Context) (*issues_model.Comment, error) {
 			return issues_model.AddTeamReviewRequest(ctx, issue, team, issue.Poster)

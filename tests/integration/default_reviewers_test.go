@@ -693,3 +693,38 @@ func TestDefaultReviewersRemovedNotAskedAgain(t *testing.T) {
 		assert.Equal(t, comments, e.requestComments(index))
 	})
 }
+
+// An advisory request becomes a normal one when a rule with a count starts to ask the same reviewer.
+func TestDefaultReviewersAdvisoryBecomesOfficial(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		e := newDREnv(t, 1)
+		e.collaborator("user4", "write")
+		e.collaborator("user5", "write")
+		e.branch("dr-upgrade")
+		gate := requestRule("Gate", 1, "", "user4", "user5")
+		gate.PathPatterns = "db/**"
+		e.do("POST", "/branch_protections", &api.CreateBranchProtectionOption{
+			RuleName: "dr-upgrade", BlockOnOfficialReviewRequests: true, ApprovalRules: []*api.ApprovalRule{requestRule("Ask", 0, "", "user4"), gate},
+		}, http.StatusCreated)
+		request := func(index int64) *issues_model.Review {
+			r := unittest.AssertExistsAndLoadBean(t, &issues_model.Review{IssueID: e.issueID(index), Type: issues_model.ReviewTypeRequest, ReviewerID: 4})
+			return r
+		}
+
+		index := e.pr("dr-upgrade", "head-upgrade", "up", create("src/a.txt", "a"))
+		require.Equal(t, []string{"user4"}, e.requested(index))
+		assert.True(t, request(index).Advisory)
+
+		before := e.pushComments(index)
+		e.change("head-upgrade", "", create("db/x.txt", "x"))
+		require.Eventually(t, func() bool { return e.pushComments(index) > before && !pullTaskRunning() }, 15*time.Second, 50*time.Millisecond)
+		assert.Equal(t, []string{"user4", "user5"}, e.requested(index))
+		r := request(index)
+		assert.False(t, r.Advisory)
+		assert.True(t, r.Official)
+
+		user5 := NewAPITestContext(t, "user5", "", auth_model.AccessTokenScopeWriteRepository)
+		MakeRequest(t, NewRequestWithJSON(t, "POST", fmt.Sprintf("%s/pulls/%d/reviews", e.api, index), &api.CreatePullReviewOptions{Event: api.ReviewStateApproved}).AddTokenAuth(user5.Token), http.StatusOK)
+		assert.Contains(t, e.merge(index, http.StatusMethodNotAllowed), "There are official review requests")
+	})
+}

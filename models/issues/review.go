@@ -803,6 +803,25 @@ func MarkReviewRequestAdvisory(ctx context.Context, reviewID int64) error {
 	return err
 }
 
+// MakeAdvisoryRequestOfficial turns an advisory review request of the reviewer, or of the team if set, into a normal
+// one, official if they can make official reviews. It is used when a rule with a count starts to ask them.
+func MakeAdvisoryRequestOfficial(ctx context.Context, issue *Issue, reviewer *user_model.User, team *organization.Team) (err error) {
+	cond := builder.Eq{"issue_id": issue.ID, "type": ReviewTypeRequest, "advisory": true}
+	var official bool
+	if team != nil {
+		cond["reviewer_team_id"] = team.ID
+		official, err = IsOfficialReviewerTeam(ctx, issue, team)
+	} else {
+		cond["reviewer_id"] = reviewer.ID
+		official, err = IsOfficialReviewer(ctx, issue, reviewer)
+	}
+	if err != nil {
+		return err
+	}
+	_, err = db.GetEngine(ctx).Table("review").Where(cond).Update(map[string]any{"advisory": false, "official": official})
+	return err
+}
+
 // AddReviewRequest add a review request from one reviewer
 func AddReviewRequest(ctx context.Context, issue *Issue, reviewer, doer *user_model.User) (*Comment, error) {
 	ctx, committer, err := db.TxContext(ctx)
