@@ -400,7 +400,7 @@ func TestStaleOwnersAdminPage(t *testing.T) {
 		}
 		doc = flash()
 		assert.Contains(t, text(doc, ".flash-warning"), "These now lack approvers:")
-		assert.Contains(t, text(doc, ".flash-warning li"), "Approval rule Only <b>user4</b> of branch rule so-admin in user2/repo1 (Repository approval rule)")
+		assert.Contains(t, text(doc, ".flash-warning li"), "Approval rule Only <b>user4</b> of", "the first rule, cut to fit")
 		assert.LessOrEqual(t, doc.Find(".flash-warning li").Length(), maxFlashItems+1, "the list and its \"more\" line")
 		assert.Zero(t, doc.Find(".flash-warning b").Length(), "names are escaped")
 		assert.Contains(t, text(doc, ".flash-warning"), "…", "a long name is cut")
