@@ -920,11 +920,14 @@ func GetGrantedApprovalsCount(ctx context.Context, protectBranch *git_model.Prot
 		return int64(len(approvers))
 	}
 	// before the query is built: in a transaction the engine is one shared session, which a query of its own would consume
-	var pushers map[int64]bool
+	var pushers Pushers
 	if protectBranch.IgnorePusherApprovals {
 		var err error
 		if pushers, err = PullPushers(ctx, pr); err != nil {
 			log.Error("GetGrantedApprovalsCount: %v", err)
+			return 0
+		}
+		if pushers.Blocked() {
 			return 0
 		}
 	}
@@ -1071,6 +1074,13 @@ func MergeBlockedByUnresolvedConversations(ctx context.Context, protectBranch *g
 // a malformed header: it is never lowered, since that would weaken the requirement.
 const MaxCodeOwnerSectionApprovals = 1000
 
+// The CODEOWNERS file is matched against every changed file of every pull request, so its size is bounded: more
+// sections or pattern lines than this make it malformed, which fails every code owner rule closed.
+const (
+	MaxCodeOwnerSections = 200
+	MaxCodeOwnerLines    = 2000
+)
+
 // CodeOwnerSection is a section of a CODEOWNERS file, `[Name]`, `[Name][N]` or the optional `^[Name]` (GitLab syntax).
 // Lines before the first header belong to the default section.
 type CodeOwnerSection struct {
@@ -1086,6 +1096,8 @@ type CodeOwners struct {
 	// ErrorLine is the line of the first malformed section header, 0 if there is none. The file can't be trusted then:
 	// every code owner requirement is unsatisfied.
 	ErrorLine int
+	// File is the path of the CODEOWNERS file in the repository
+	File string
 }
 
 // GetCodeOwnersFromReader returns the code owners configuration
@@ -1107,6 +1119,12 @@ func ParseCodeOwners(ctx context.Context, rc io.ReadCloser, truncated bool) *Cod
 	current := &CodeOwnerSection{Required: 1}
 	var defaults *CodeOwnerRule // the default owners of the current header, in Users and Teams
 	line := 0
+	fail := func(format string, args ...any) { // the file fails closed as a whole
+		if owners.ErrorLine == 0 {
+			owners.ErrorLine = line
+		}
+		owners.Warnings = append(owners.Warnings, fmt.Sprintf("Line: %d: ", line)+fmt.Sprintf(format, args...))
+	}
 	for scanner.Scan() {
 		line++
 
@@ -1114,11 +1132,8 @@ func ParseCodeOwners(ctx context.Context, rc io.ReadCloser, truncated bool) *Cod
 		if strings.HasPrefix(text, "[") || strings.HasPrefix(text, "^[") {
 			section, rest, err := parseCodeOwnersHeader(text)
 			if err != nil {
-				if owners.ErrorLine == 0 {
-					owners.ErrorLine = line
-				}
-				owners.Warnings = append(owners.Warnings, fmt.Sprintf("Line: %d: incorrect section header: %s", line, err))
-				// the lines below are not attributed to any section: the file fails closed as a whole
+				fail("incorrect section header: %s (to write a pattern that starts with [, escape it as \\[)", err)
+				// the lines below are not attributed to any section
 				current, defaults = &CodeOwnerSection{Required: 1}, nil
 				continue
 			}
@@ -1131,6 +1146,10 @@ func ParseCodeOwners(ctx context.Context, rc io.ReadCloser, truncated bool) *Cod
 				known.Optional = known.Optional && section.Optional
 				section = known
 			} else {
+				if len(sections) >= MaxCodeOwnerSections {
+					fail("more than %d sections", MaxCodeOwnerSections)
+					break
+				}
 				sections[key] = section
 			}
 			current, defaults = section, nil
@@ -1175,11 +1194,16 @@ func ParseCodeOwners(ctx context.Context, rc io.ReadCloser, truncated bool) *Cod
 		if rule == nil {
 			continue
 		}
+		if len(owners.Rules) >= MaxCodeOwnerLines {
+			fail("more than %d pattern lines", MaxCodeOwnerLines)
+			break
+		}
 		rule.Section = current
 		owners.Rules = append(owners.Rules, rule)
 	}
 	if err := scanner.Err(); err != nil {
-		owners.Warnings = append(owners.Warnings, err.Error())
+		line++ // a line over the scanner's limit stops the parse: every rule below it would be missing
+		fail("%s", err)
 	}
 	if truncated {
 		owners.Warnings = append(owners.Warnings, fmt.Sprintf("File too big: truncated while on line %d", line))
@@ -1216,6 +1240,9 @@ func parseCodeOwnersHeader(text string) (section *CodeOwnerSection, rest string,
 		}
 		rest = after
 	}
+	if strings.HasPrefix(strings.TrimSpace(rest), "[") {
+		return nil, "", errors.New("the number of approvals goes right after the name, without a space")
+	}
 	if rest != "" && !strings.HasPrefix(rest, " ") && !strings.HasPrefix(rest, "\t") && !strings.HasPrefix(rest, "#") {
 		return nil, "", errors.New("unexpected text after the header")
 	}
@@ -1227,7 +1254,7 @@ type CodeOwnerRule struct {
 	Negative bool
 	Users    []*user_model.User
 	Teams    []*org_model.Team
-	Section  *CodeOwnerSection // nil is the default section
+	Section  *CodeOwnerSection // the default section (Required 1, no name) of a line above every header
 }
 
 // newCodeOwnerRule compiles the pattern of a line.

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -260,6 +261,12 @@ func Merge(ctx context.Context, pr *issues_model.PullRequest, doer *user_model.U
 		return models.ErrInvalidMergeStyle{ID: pr.BaseRepo.ID, Style: mergeStyle}
 	}
 
+	if expectedHeadCommitID == "" {
+		if expectedHeadCommitID, err = headPinnedByPusherRule(ctx, pr); err != nil {
+			return err
+		}
+	}
+
 	defer func() {
 		AddTestPullRequestTask(ctx, doer, pr.BaseRepo.ID, pr.BaseBranch, false, "", "", 0)
 	}()
@@ -269,6 +276,17 @@ func Merge(ctx context.Context, pr *issues_model.PullRequest, doer *user_model.U
 		return err
 	}
 	return afterMerge(ctx, pr, doer, wasAutoMerged)
+}
+
+// headPinnedByPusherRule returns the head the pull request was checked at when a matched rule ignores pusher
+// approvals, "" when none does. Who pushed and who approved were read at that head (the pull ref), so the merge must
+// refuse when the head branch moved since, for instance while the pull request was closed and reopened.
+func headPinnedByPusherRule(ctx context.Context, pr *issues_model.PullRequest) (string, error) {
+	rules, err := git_model.GetMatchedProtectedBranchRules(ctx, pr.BaseRepoID, pr.BaseBranch)
+	if err != nil || !slices.ContainsFunc(rules, func(pb *git_model.ProtectedBranch) bool { return pb.IgnorePusherApprovals }) {
+		return "", err
+	}
+	return git.GetFullCommitID(ctx, pr.BaseRepo.RepoPath(), pr.GetGitRefName())
 }
 
 // afterMerge notifies about the merge of pr, which the post-receive hook recorded, and closes the issues it references
@@ -562,17 +580,31 @@ func CheckPullBranchProtections(ctx context.Context, pr *issues_model.PullReques
 	return nil, nil
 }
 
-// withPusherNote names the approvals that do not count because their authors pushed to the pull request.
+// withPusherNote says why approvals do not count because of who pushed to the pull request.
 func withPusherNote(ctx context.Context, pb *git_model.ProtectedBranch, pr *issues_model.PullRequest, reason string) string {
+	block, err := PusherBlock(ctx, pb, pr)
+	if err != nil {
+		log.Error("PusherBlock for %-v: %v", pr, err)
+		return reason
+	}
+	switch block {
+	case PusherBlockDeployKey:
+		return reason + " (a deploy key with no recorded owner pushed to this pull request, so approvals can't be checked)"
+	case PusherBlockUnchecked:
+		return reason + " (who pushed to this pull request can't be checked, so approvals can't be counted)"
+	}
 	pushed, err := PusherApprovers(ctx, pb, pr)
 	if err != nil {
 		log.Error("PusherApprovers for %-v: %v", pr, err)
 		return reason
 	}
-	if len(pushed) == 0 {
+	switch len(pushed) {
+	case 0:
 		return reason
+	case 1:
+		return reason + " (1 approval of a user who pushed to this pull request does not count)"
 	}
-	return fmt.Sprintf("%s (%d approval(s) of users who pushed to this pull request do not count)", reason, len(pushed))
+	return fmt.Sprintf("%s (%d approvals of users who pushed to this pull request do not count)", reason, len(pushed))
 }
 
 func checkPullBranchProtection(ctx context.Context, pr *issues_model.PullRequest, pb *git_model.ProtectedBranch, skipProtectedFilesCheck, queued bool) (*git_model.ProtectedBranch, error) {

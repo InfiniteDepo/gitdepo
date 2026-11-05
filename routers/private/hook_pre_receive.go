@@ -43,6 +43,9 @@ type preReceiveContext struct {
 	userPerm            access_model.Permission
 	deployKeyAccessMode perm_model.AccessMode
 	deployKeyKeyID      int64 // public key ID of the deploy key in use
+	// the user a branch push is credited to (see recordPusher): the user, the run's trigger user, the creator of the
+	// token or of the deploy key; 0 for a deploy key with no recorded owner, -1 when nobody is to be credited
+	pusherID int64
 	// the pusher is an Actions task whose token has permissions (`permissions:` or a read default)
 	actionTokenPermissions bool
 
@@ -303,6 +306,10 @@ func preReceiveBranch(ctx *preReceiveContext, oldCommitID, newCommitID string, r
 	repo := ctx.Repo.Repository
 	objectFormat := ctx.Repo.GetObjectFormat()
 
+	if newCommitID != objectFormat.EmptyObjectID().String() && !ctx.recordPusher(branchName) {
+		return
+	}
+
 	if branchName == repo.DefaultBranch && newCommitID == objectFormat.EmptyObjectID().String() {
 		log.Warn("Forbidden: Branch: %s is the default branch in %-v and cannot be deleted", branchName, repo)
 		ctx.refuse(http.StatusForbidden, "protected_branch", refFullName.String(), fmt.Sprintf("branch %s is the default branch and cannot be deleted", branchName))
@@ -338,6 +345,24 @@ func preReceiveBranch(ctx *preReceiveContext, oldCommitID, newCommitID string, r
 			return
 		}
 	}
+}
+
+// recordPusher remembers who pushed to the branch for the rules that ignore pusher approvals. It runs before the
+// push is accepted and fails closed: a push that a rule refuses later leaves an extra pusher, which only makes those
+// rules stricter. A deploy key with no recorded owner is recorded as user 0, which no approval can satisfy.
+func (ctx *preReceiveContext) recordPusher(branchName string) bool {
+	if !ctx.loadPusherAndPermission() {
+		return false
+	}
+	if ctx.pusherID < 0 || ctx.pusherID == 0 && ctx.deployKeyKeyID == 0 {
+		return true // the Actions user without a run, a token whose creator is unknown: nothing to credit
+	}
+	if err := git_model.AddBranchPusher(ctx, ctx.Repo.Repository.ID, branchName, ctx.pusherID); err != nil {
+		log.Error("Unable to record the pusher of branch %s in %-v: %v", branchName, ctx.Repo.Repository, err)
+		ctx.JSON(http.StatusInternalServerError, private.Response{Err: "Unable to record the pusher of the branch"})
+		return false
+	}
+	return true
 }
 
 // preReceiveBranchRule checks the push against one protected branch rule. It returns false after
@@ -796,14 +821,23 @@ func (ctx *preReceiveContext) loadPusherAndPermission() bool {
 		ctx.user = repo.Owner
 		ctx.deployKeyAccessMode = deployKey.Mode
 		ctx.deployKeyKeyID = deployKey.KeyID
+		ctx.pusherID = deployKey.CreatorID
 	} else if ctx.opts.UserID == user_model.ActionsUserID {
 		ctx.user = user_model.NewActionsUser()
+		ctx.pusherID = -1
 		// Without a task (a push made by the server as the Actions user), the Actions user may do nothing.
 		if ctx.opts.ActionTaskID != 0 {
 			task, err := actions_model.GetTaskByID(ctx, ctx.opts.ActionTaskID)
 			if err == nil {
 				ctx.userPerm, err = access_model.GetActionRepoPermission(ctx, ctx.Repo.Repository, task)
 				ctx.actionTokenPermissions = task.TokenPermissions != ""
+			}
+			if err == nil {
+				if err = task.LoadJob(ctx); err == nil {
+					if err = task.Job.LoadRun(ctx); err == nil {
+						ctx.pusherID = task.Job.Run.TriggerUserID
+					}
+				}
 			}
 			if err != nil {
 				log.Error("Unable to get the permission of Actions task %d: %v", ctx.opts.ActionTaskID, err)
@@ -832,6 +866,10 @@ func (ctx *preReceiveContext) loadPusherAndPermission() bool {
 			return false
 		}
 		ctx.user = user
+		ctx.pusherID = user.ID
+		if user.IsAccessTokenBot() {
+			ctx.pusherID = user.BotToken.CreatorID
+		}
 		userPerm, err := access_model.GetUserRepoPermission(ctx, ctx.Repo.Repository, user)
 		if err != nil {
 			log.Error("Unable to get Repo permission of repo %s/%s of User %s: %v", ctx.Repo.Repository.OwnerName, ctx.Repo.Repository.Name, user.Name, err)

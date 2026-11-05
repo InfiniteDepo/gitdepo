@@ -36,6 +36,7 @@ func TestCodeOwnerSectionsMerge(t *testing.T) {
 			e.approve("user4", index)
 			assert.Contains(t, e.apiMerge(e.owner, index, false, http.StatusMethodNotAllowed), "needs 2 approvals, has 1")
 			assert.Contains(t, box(index), "CODEOWNERS section Docs needs 2 approvals, has 1")
+			assert.NotContains(t, box(index), "not approved by a code owner", "a section short on its count leaves the files covered")
 
 			req := NewRequestf(t, "GET", "/api/v1/repos/user2/repo1/pulls/%d/approvals", index).AddTokenAuth(e.owner.Token)
 			body := e.owner.Session.MakeRequest(t, req, http.StatusOK).Body.String()
@@ -51,7 +52,7 @@ func TestCodeOwnerSectionsMerge(t *testing.T) {
 			e.approve("user4", index)
 			e.approve("user5", index)
 			assert.Contains(t, e.apiMerge(e.owner, index, false, http.StatusMethodNotAllowed), "only 2 people can approve")
-			assert.Contains(t, box(index), "CODEOWNERS section Docs needs 3 approvals, only 2 people can approve")
+			assert.Contains(t, box(index), "CODEOWNERS section Docs needs 3 approvals, only 2 can approve")
 		})
 
 		t.Run("optional section", func(t *testing.T) {
@@ -65,7 +66,7 @@ func TestCodeOwnerSectionsMerge(t *testing.T) {
 			defer tests.PrintCurrentTest(t)()
 			index := open("cos-default", "[Docs] @user4\ndocs/.*\n")
 			e.approve("user5", index)
-			assert.Contains(t, e.apiMerge(e.owner, index, false, http.StatusMethodNotAllowed), "needs 1 approvals, has 0")
+			assert.Contains(t, e.apiMerge(e.owner, index, false, http.StatusMethodNotAllowed), "1 changed file is not approved by a code owner")
 			e.approve("user4", index)
 			e.apiMerge(e.owner, index, false, http.StatusOK)
 		})
@@ -76,11 +77,14 @@ func TestCodeOwnerSectionsMerge(t *testing.T) {
 			e.approve("user4", index)
 			e.approve("user5", index)
 			assert.Contains(t, e.apiMerge(e.owner, index, false, http.StatusMethodNotAllowed), "CODEOWNERS has an error on line 2")
-			assert.Contains(t, box(index), "CODEOWNERS on cos-bad has an error on line 2")
+			assert.Contains(t, box(index), "CODEOWNERS on cos-bad has an error on line 2, which blocks the merge")
+			href, _ := e.mergeBox(e.owner, index).Find(".codeowners-error a").Attr("href")
+			assert.Equal(t, "/user2/repo1/src/branch/cos-bad/CODEOWNERS#L2", href, "the file on the base branch")
 
 			// the file view warns about it
 			resp := e.owner.Session.MakeRequest(t, NewRequest(t, "GET", "/user2/repo1/src/branch/cos-bad/CODEOWNERS"), http.StatusOK)
 			assert.Contains(t, resp.Body.String(), "Line: 2: incorrect section header")
+			assert.Contains(t, resp.Body.String(), `escape it as \[`)
 		})
 	})
 }

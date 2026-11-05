@@ -31,6 +31,7 @@ type OrgDeployKey struct {
 	Mode             perm.AccessMode    `xorm:"NOT NULL DEFAULT 1"`
 	IncludesAllRepos bool               `xorm:"NOT NULL DEFAULT false"`
 	ExpiresUnix      timeutil.TimeStamp `xorm:"NOT NULL DEFAULT 0"` // 0 = never
+	CreatorID        int64              `xorm:"NOT NULL DEFAULT 0"` // the user who added the key, 0 = not recorded
 
 	CreatedUnix       timeutil.TimeStamp `xorm:"created"`
 	UpdatedUnix       timeutil.TimeStamp `xorm:"updated"`
@@ -129,6 +130,7 @@ func AddOrgDeployKey(ctx context.Context, orgID, groupID int64, name, content st
 			Mode:             mode,
 			IncludesAllRepos: includesAllRepos,
 			ExpiresUnix:      expires,
+			CreatorID:        keyCreatorID(ctx),
 		}
 		if err := db.Insert(ctx, key); err != nil {
 			return err
@@ -170,6 +172,7 @@ type EffectiveDeployKey struct {
 	Name        string
 	Mode        perm.AccessMode
 	ExpiresUnix timeutil.TimeStamp
+	CreatorID   int64 // the user who added the key, 0 = not recorded
 	RepoKey     *DeployKey
 	OrgKey      *OrgDeployKey
 }
@@ -188,14 +191,14 @@ func GetEffectiveDeployKey(ctx context.Context, keyID int64, repo *repo_model.Re
 	if key, has, err := db.Get[DeployKey](ctx, builder.Eq{"key_id": keyID, "repo_id": repo.ID}); err != nil {
 		return nil, err
 	} else if has {
-		candidates = append(candidates, &EffectiveDeployKey{KeyID: keyID, Name: key.Name, Mode: key.Mode, ExpiresUnix: key.ExpiresUnix, RepoKey: key})
+		candidates = append(candidates, &EffectiveDeployKey{KeyID: keyID, Name: key.Name, Mode: key.Mode, ExpiresUnix: key.ExpiresUnix, CreatorID: key.CreatorID, RepoKey: key})
 	}
 	orgKeys := make([]*OrgDeployKey, 0, 2)
 	if err := db.GetEngine(ctx).Where(builder.Eq{"key_id": keyID}.And(orgDeployKeyCoversCond(repo))).OrderBy("group_id DESC").Find(&orgKeys); err != nil {
 		return nil, err
 	}
 	for _, key := range orgKeys { // the project's key before the organization's
-		candidates = append(candidates, &EffectiveDeployKey{KeyID: keyID, Name: key.Name, Mode: key.Mode, ExpiresUnix: key.ExpiresUnix, OrgKey: key})
+		candidates = append(candidates, &EffectiveDeployKey{KeyID: keyID, Name: key.Name, Mode: key.Mode, ExpiresUnix: key.ExpiresUnix, CreatorID: key.CreatorID, OrgKey: key})
 	}
 
 	var best *EffectiveDeployKey

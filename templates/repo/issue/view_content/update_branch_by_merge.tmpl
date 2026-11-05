@@ -9,7 +9,7 @@
 			{{if and $.UpdateAllowed $.UpdateByRebaseAllowed}}
 				<div class="tw-inline-block">
 					<div class="ui buttons update-button">
-						<button class="ui button" data-do="{{$.Link}}/update?style={{$.UpdateStyle}}" data-redirect="{{$.Link}}"{{if $.UpdateBranchConfirm}} data-confirm="{{ctx.Locale.Tr "repo.pulls.update_branch_pusher_confirm"}}"{{end}}>
+						<button class="ui button" data-do="{{$.Link}}/update?style={{$.UpdateStyle}}" data-redirect="{{$.Link}}"{{if $.UpdateBranchConfirm}} data-modal-id="update-branch-confirm"{{end}}>
 							<span class="button-text">
 								{{if eq $.UpdateStyle "rebase"}}
 									{{ctx.Locale.Tr "repo.pulls.update_branch_rebase"}}
@@ -33,7 +33,7 @@
 				</div>
 			{{end}}
 			{{if and $.UpdateAllowed (not $.UpdateByRebaseAllowed)}}
-				<form action="{{$.Link}}/update?style=merge" method="post" class="ui update-branch-form"{{if $.UpdateBranchConfirm}} data-confirm="{{ctx.Locale.Tr "repo.pulls.update_branch_pusher_confirm"}}"{{end}}>
+				<form action="{{$.Link}}/update?style=merge" method="post" class="ui update-branch-form"{{if $.UpdateBranchConfirm}} data-modal-id="update-branch-confirm"{{end}}>
 					<button class="ui compact button">
 						<span class="ui text">{{ctx.Locale.Tr "repo.pulls.update_branch"}}</span>
 					</button>
@@ -41,4 +41,15 @@
 			{{end}}
 		</div>
 	</div>
+{{end}}
+{{if $.UpdateBranchConfirm}}
+	<dialog class="modal" id="update-branch-confirm">
+		<article>
+			<div class="content">{{ctx.Locale.Tr "repo.pulls.update_branch_pusher_confirm"}}</div>
+			<div class="actions">
+				<button type="button" class="ui cancel button">{{ctx.Locale.Tr "settings.cancel"}}</button>
+				<button type="button" class="ui primary button ok">{{ctx.Locale.Tr "modal.confirm"}}</button>
+			</div>
+		</article>
+	</dialog>
 {{end}}

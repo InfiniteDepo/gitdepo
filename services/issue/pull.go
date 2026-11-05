@@ -39,7 +39,9 @@ func LoadCodeOwnerRules(ctx context.Context, commit *git.Commit) (owners *issues
 			return nil, false, err
 		}
 		truncated = size > setting.UI.MaxDisplayFileSize
-		return issues_model.ParseCodeOwners(ctx, rc, truncated), truncated, nil
+		owners = issues_model.ParseCodeOwners(ctx, rc, truncated)
+		owners.File = file
+		return owners, truncated, nil
 	}
 	return &issues_model.CodeOwners{}, false, nil
 }

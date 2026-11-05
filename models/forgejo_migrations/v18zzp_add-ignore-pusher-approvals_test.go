@@ -19,12 +19,29 @@ type v18zzpProtectedBranchBefore struct {
 
 func (v18zzpProtectedBranchBefore) TableName() string { return "protected_branch" }
 
+type v18zzpDeployKeyBefore struct {
+	ID   int64 `xorm:"pk autoincr"`
+	Name string
+}
+
+func (v18zzpDeployKeyBefore) TableName() string { return "deploy_key" }
+
+type v18zzpOrgDeployKeyBefore struct {
+	ID   int64 `xorm:"pk autoincr"`
+	Name string
+}
+
+func (v18zzpOrgDeployKeyBefore) TableName() string { return "org_deploy_key" }
+
 func Test_addIgnorePusherApprovals(t *testing.T) {
-	x, deferable := migration_tests.PrepareTestEnv(t, 0, new(v18zzpProtectedBranchBefore))
+	x, deferable := migration_tests.PrepareTestEnv(t, 0, new(v18zzpProtectedBranchBefore), new(v18zzpDeployKeyBefore), new(v18zzpOrgDeployKeyBefore))
 	defer deferable()
 	require.NotNil(t, x)
 
 	_, err := x.Exec("INSERT INTO protected_branch (rule_name) VALUES ('main')")
+	require.NoError(t, err)
+
+	_, err = x.Exec("INSERT INTO deploy_key (name) VALUES ('k')")
 	require.NoError(t, err)
 
 	require.NoError(t, addIgnorePusherApprovals(x))
@@ -33,4 +50,18 @@ func Test_addIgnorePusherApprovals(t *testing.T) {
 	count, err := x.Table("protected_branch").Where("ignore_pusher_approvals = ? AND rule_name = 'main'", false).Count()
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, count, "existing rules keep counting pushers")
+
+	count, err = x.Table("deploy_key").Where("creator_id = 0 AND name = 'k'").Count()
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, count, "existing deploy keys have no recorded owner")
+	_, err = x.Table("org_deploy_key").Count()
+	require.NoError(t, err)
+
+	const insert = "INSERT INTO branch_pusher (repo_id, branch, user_id, created_unix) VALUES (1, 'b', ?, 1)"
+	_, err = x.Exec(insert, 3)
+	require.NoError(t, err)
+	_, err = x.Exec(insert, 3)
+	require.Error(t, err, "a pusher is recorded once per branch")
+	_, err = x.Exec(insert, 0)
+	require.NoError(t, err, "0 marks a deploy key with no recorded owner")
 }

@@ -113,6 +113,115 @@ func TestPusherApprovals(t *testing.T) {
 			e.apiMerge(e.owner, index, false, http.StatusOK)
 		})
 
+		// a push that left no push comment: made before the pull request existed (its only push comment is the creation's)
+		t.Run("push before the pull request", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+			e.base("pa-pre")
+			e.protectPushers("pa-pre", true)
+			user4 := e.writer["user4"]
+			req := NewRequestWithJSON(t, "POST", "/api/v1/repos/user2/repo1/contents", &api.ChangeFilesOptions{
+				FileOptions: api.FileOptions{BranchName: "pa-pre", NewBranchName: "head-pa-pre", Message: "c", Author: *ident("a@example.org"), Committer: *ident("a@example.org")},
+				Files:       []*api.ChangeFileOperation{create("a.txt", "a")},
+			}).AddTokenAuth(user4.Token)
+			user4.Session.MakeRequest(t, req, http.StatusCreated)
+			pr, err := doAPICreatePullRequest(e.owner, "user2", "repo1", "pa-pre", "head-pa-pre")(t)
+			require.NoError(t, err)
+			e.approve("user4", pr.Index)
+			assert.Contains(t, e.apiMerge(e.owner, pr.Index, false, http.StatusMethodNotAllowed), pusherNote)
+			e.approve("user5", pr.Index)
+			e.apiMerge(e.owner, pr.Index, false, http.StatusOK)
+		})
+
+		// close, push, reopen: the approver's push while the pull request was closed leaves no push comment
+		for _, mode := range []string{"api", "web"} {
+			t.Run("push while closed, reopened by "+mode, func(t *testing.T) {
+				defer tests.PrintCurrentTest(t)()
+				base := "pa-closed-" + mode
+				e.base(base)
+				e.protectPushers(base, true)
+				index := e.pr(base, create("a.txt", "a"))
+				e.approve("user4", index)
+
+				setState := func(state string) {
+					req := NewRequestWithJSON(t, "PATCH", fmt.Sprintf("/api/v1/repos/user2/repo1/pulls/%d", index), &api.EditPullRequestOption{State: &state}).AddTokenAuth(e.owner.Token)
+					e.owner.Session.MakeRequest(t, req, http.StatusCreated)
+				}
+				setState("closed")
+				commentsBefore := e.pushComments(index)
+				user4 := e.writer["user4"]
+				req := NewRequestWithJSON(t, "POST", "/api/v1/repos/user2/repo1/contents", &api.ChangeFilesOptions{
+					FileOptions: api.FileOptions{BranchName: "head-" + base, Message: "c", Author: *ident("a@example.org"), Committer: *ident("a@example.org")},
+					Files:       []*api.ChangeFileOperation{create("evil.txt", "evil")},
+				}).AddTokenAuth(user4.Token)
+				user4.Session.MakeRequest(t, req, http.StatusCreated)
+				assert.Equal(t, commentsBefore, e.pushComments(index), "a closed pull request gets no push comment")
+				if mode == "api" {
+					setState("open")
+				} else {
+					e.owner.Session.MakeRequest(t, NewRequestWithValues(t, "POST", fmt.Sprintf("/user2/repo1/pulls/%d/comments", index), map[string]string{"status": "reopen"}), http.StatusOK)
+				}
+
+				// refused: by the pin when the head ref was not refreshed (API), by the pusher record when it was (web)
+				req = NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/repos/user2/repo1/pulls/%d/merge", index), &forms.MergePullRequestForm{Do: "merge"}).AddTokenAuth(e.owner.Token)
+				code := e.owner.Session.MakeRequest(t, req, NoExpectedStatus).Code
+				assert.NotEqual(t, http.StatusOK, code)
+				pull := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{Index: index, BaseRepoID: 1})
+				assert.False(t, pull.HasMerged)
+				if mode == "web" {
+					assert.Contains(t, e.apiMerge(e.owner, index, false, http.StatusMethodNotAllowed), pusherNote)
+					note := strings.Join(strings.Fields(e.mergeBox(e.owner, index).doc.Find(".pusher-approval").Text()), " ")
+					assert.Equal(t, "The approval of user4 does not count: they pushed to this pull request.", note)
+				}
+			})
+		}
+
+		// the merge is pinned to the head that was checked: a head that moved while the pull request was closed (the
+		// pull ref is not refreshed by an API reopen) is refused until the pull request is updated by a push
+		t.Run("merge pinned to the checked head", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+			e.base("pa-pin")
+			e.protectPushers("pa-pin", true)
+			index := e.pr("pa-pin", create("a.txt", "a"))
+			e.approve("user4", index)
+			setState := func(state string) {
+				req := NewRequestWithJSON(t, "PATCH", fmt.Sprintf("/api/v1/repos/user2/repo1/pulls/%d", index), &api.EditPullRequestOption{State: &state}).AddTokenAuth(e.owner.Token)
+				e.owner.Session.MakeRequest(t, req, http.StatusCreated)
+			}
+			setState("closed")
+			user5 := e.writer["user5"]
+			req := NewRequestWithJSON(t, "POST", "/api/v1/repos/user2/repo1/contents", &api.ChangeFilesOptions{
+				FileOptions: api.FileOptions{BranchName: "head-pa-pin", Message: "c", Author: *ident("a@example.org"), Committer: *ident("a@example.org")},
+				Files:       []*api.ChangeFileOperation{create("unreviewed.txt", "x")},
+			}).AddTokenAuth(user5.Token)
+			user5.Session.MakeRequest(t, req, http.StatusCreated)
+			setState("open")
+			req = NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/repos/user2/repo1/pulls/%d/merge", index), &forms.MergePullRequestForm{Do: "merge"}).AddTokenAuth(e.owner.Token)
+			assert.NotEqual(t, http.StatusOK, e.owner.Session.MakeRequest(t, req, NoExpectedStatus).Code)
+			assert.False(t, unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{Index: index, BaseRepoID: 1}).HasMerged)
+
+			// the head that is merged is the one the pull ref names
+			e.pushAs("user5", index, "head-pa-pin", "again.txt", ident("a@example.org"))
+			assert.Eventually(t, func() bool {
+				req := NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/repos/user2/repo1/pulls/%d/merge", index), &forms.MergePullRequestForm{Do: "merge"}).AddTokenAuth(e.owner.Token)
+				return e.owner.Session.MakeRequest(t, req, NoExpectedStatus).Code == http.StatusOK
+			}, 15*time.Second, 200*time.Millisecond)
+		})
+
+		// a deploy key with no recorded owner pushed: nobody's approval can be checked
+		t.Run("deploy key without owner", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+			e.base("pa-key")
+			e.protectPushers("pa-key", true)
+			index := e.pr("pa-key", create("a.txt", "a"))
+			e.approve("user4", index)
+			require.NoError(t, git_model.AddBranchPusher(t.Context(), 1, "head-pa-key", 0))
+			assert.Contains(t, e.apiMerge(e.owner, index, false, http.StatusMethodNotAllowed), "a deploy key with no recorded owner pushed to this pull request, so approvals can't be checked")
+			text := strings.Join(strings.Fields(e.mergeBox(e.owner, index).doc.Find(".pusher-block").Text()), " ")
+			assert.Equal(t, "A deploy key with no recorded owner pushed to this pull request, so approvals can't be checked.", text)
+			// the line follows the approvals line it explains
+			assert.Contains(t, e.mergeBox(e.owner, index).Find(".pusher-block").Prev().Text(), "approvals")
+		})
+
 		// an approver whose activated email is the committer or author of a commit of the pull request
 		t.Run("commit email", func(t *testing.T) {
 			defer tests.PrintCurrentTest(t)()
@@ -159,10 +268,12 @@ func TestPusherApprovals(t *testing.T) {
 			e.protectPushers("pa-update", true)
 			e.approve("user4", index)
 
-			confirm := func(ctx APITestContext) string {
+			confirm := func(ctx APITestContext) string { // the text of the confirm modal the button opens
 				box := e.mergeBox(ctx, index)
-				text, _ := box.Find("[data-confirm]").Attr("data-confirm")
-				return text
+				if box.Find("[data-modal-id=update-branch-confirm]").Length() == 0 {
+					return ""
+				}
+				return strings.TrimSpace(box.Find("#update-branch-confirm .content").Text())
 			}
 			assert.Equal(t, 1, e.mergeBox(e.owner, index).Find(".update-button, .update-branch-form").Length(), "the update button is shown")
 			assert.Equal(t, "Updating the branch counts as a push: your approval will no longer count toward the required approvals.", confirm(e.writer["user4"]))

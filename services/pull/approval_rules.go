@@ -36,6 +36,7 @@ type ApprovalRuleStatus struct {
 	Shortfalls []*SectionShortfall
 	// CodeOwnersErrorLine is the line of a malformed CODEOWNERS section header, which fails every code owner rule
 	CodeOwnersErrorLine int
+	CodeOwnersFile      string // the path of that file on the base branch
 	Satisfied           bool
 }
 
@@ -47,25 +48,64 @@ type SectionShortfall struct {
 	Eligible int // people who can approve; below Required, the section can't be satisfied
 }
 
+func approvals(n int64) string {
+	if n == 1 {
+		return "1 approval"
+	}
+	return fmt.Sprintf("%d approvals", n)
+}
+
 // Reason says why the rule is not satisfied.
 func (s *ApprovalRuleStatus) Reason() string {
-	if s.CodeOwnersErrorLine != 0 {
-		return fmt.Sprintf("Approval rule %q: CODEOWNERS has an error on line %d", s.Name, s.CodeOwnersErrorLine)
-	}
-	if s.Granted < s.Required {
-		return fmt.Sprintf("Approval rule %q needs %d approval(s), has %d", s.Name, s.Required, s.Granted)
-	}
-	if len(s.Shortfalls) > 0 {
+	switch {
+	case s.CodeOwnersErrorLine != 0:
+		return fmt.Sprintf("Approval rule %q: CODEOWNERS has an error on line %d, which blocks the merge", s.Name, s.CodeOwnersErrorLine)
+	case s.Granted < s.Required:
+		return fmt.Sprintf("Approval rule %q needs %s, has %d", s.Name, approvals(s.Required), s.Granted)
+	case s.UncoveredFiles > 0:
+		if s.UncoveredFiles == 1 {
+			return fmt.Sprintf("Approval rule %q: 1 changed file is not approved by a code owner", s.Name)
+		}
+		return fmt.Sprintf("Approval rule %q: %d changed files are not approved by a code owner", s.Name, s.UncoveredFiles)
+	case len(s.Shortfalls) > 0:
 		return fmt.Sprintf("Approval rule %q: %s", s.Name, s.Shortfalls[0].String())
 	}
-	return fmt.Sprintf("Approval rule %q: %d changed file(s) are not approved by a code owner", s.Name, s.UncoveredFiles)
+	return fmt.Sprintf("Approval rule %q is not satisfied", s.Name)
 }
 
 func (f *SectionShortfall) String() string {
-	if f.Eligible < f.Required {
-		return fmt.Sprintf("CODEOWNERS section %q needs %d approvals, only %d people can approve", f.Name, f.Required, f.Eligible)
+	people := fmt.Sprintf("only %d people can approve", f.Eligible)
+	if f.Eligible == 1 {
+		people = "only 1 person can approve"
 	}
-	return fmt.Sprintf("CODEOWNERS section %q needs %d approvals, has %d", f.Name, f.Required, f.Granted)
+	if f.Eligible < f.Required {
+		return fmt.Sprintf("CODEOWNERS section %q needs %s, %s", f.Name, approvals(int64(f.Required)), people)
+	}
+	return fmt.Sprintf("CODEOWNERS section %q needs %s, has %d", f.Name, approvals(int64(f.Required)), f.Granted)
+}
+
+// The reasons the pushers of a pull request can't be told, which makes a rule that ignores pusher approvals unsatisfiable.
+const (
+	PusherBlockDeployKey = "deploy_key" // a deploy key with no recorded owner pushed to the branch
+	PusherBlockUnchecked = "unchecked"  // the commits are too many or can't be read
+)
+
+// PusherBlock returns why no approval can be checked under pb (a PusherBlock constant), "" when they can.
+func PusherBlock(ctx context.Context, pb *git_model.ProtectedBranch, pr *issues_model.PullRequest) (string, error) {
+	if !pb.IgnorePusherApprovals {
+		return "", nil
+	}
+	pushers, err := issues_model.PullPushers(ctx, pr)
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case pushers[issues_model.PusherUnknownDeployKey]:
+		return PusherBlockDeployKey, nil
+	case pushers[issues_model.PusherTooMany]:
+		return PusherBlockUnchecked, nil
+	}
+	return "", nil
 }
 
 // PusherApprovers returns the users whose approval does not count under pb because they pushed to the pull
@@ -81,8 +121,10 @@ func PusherApprovers(ctx context.Context, pb *git_model.ProtectedBranch, pr *iss
 	if err != nil {
 		return nil, err
 	}
-	// every valid approver, as if the rule counted pushers
-	approvers, err := issues_model.ValidReviewers(ctx, &git_model.ProtectedBranch{}, pr, issues_model.ReviewTypeApprove)
+	// every valid approver of the rule, as if it counted pushers
+	asIfOff := *pb
+	asIfOff.IgnorePusherApprovals = false
+	approvers, err := issues_model.ValidReviewers(ctx, &asIfOff, pr, issues_model.ReviewTypeApprove)
 	if err != nil {
 		return nil, err
 	}
@@ -156,13 +198,13 @@ func EvaluateApprovalRules(ctx context.Context, pb *git_model.ProtectedBranch, p
 		if rule.RequireCodeOwners {
 			if codeOwners.ErrorLine != 0 {
 				// the file can't be trusted: no owner requirement is met
-				s.CodeOwnersErrorLine = codeOwners.ErrorLine
+				s.CodeOwnersErrorLine, s.CodeOwnersFile = codeOwners.ErrorLine, codeOwners.File
 				s.Satisfied = false
 			} else {
 				if s.UncoveredFiles, s.Shortfalls, err = countUncoveredFiles(ctx, pb, pr, rule, files, codeOwners.Rules, s.Approvers); err != nil {
 					return nil, err
 				}
-				s.Satisfied = s.Satisfied && s.UncoveredFiles == 0
+				s.Satisfied = s.Satisfied && s.UncoveredFiles == 0 && len(s.Shortfalls) == 0
 			}
 		}
 		statuses = append(statuses, s)
@@ -222,13 +264,10 @@ func countUncoveredFiles(ctx context.Context, pb *git_model.ProtectedBranch, pr 
 		}
 		covered := true
 		for _, section := range sections {
-			required := 1
-			if section != nil {
-				if section.Optional {
-					continue
-				}
-				required = section.Required
+			if section.Optional {
+				continue
 			}
+			required := section.Required
 			owners := map[int64]bool{}
 			for _, line := range lines[section] {
 				ids, seen := byLine[line]
@@ -244,15 +283,16 @@ func countUncoveredFiles(ctx context.Context, pb *git_model.ProtectedBranch, pr 
 				}
 				maps.Copy(owners, ids)
 			}
-			if len(owners) >= required {
-				continue
-			}
-			covered = false
-			if section != nil && section.Name != "" && !reported[section] {
+			// a section short only on its count leaves the files covered: it is reported as a shortfall of its own
+			if len(owners) < required && section.Name != "" && !reported[section] {
 				reported[section] = true
-				eligible, err := eligibleOwners(ctx, pb, pr, rule, lines[section])
-				if err != nil {
-					return 0, nil, err
+				// the reason a section can't be met is looked up for the first few only: it costs queries per owner
+				eligible := required
+				if len(shortfalls) < maxEligibleLookups {
+					var err error
+					if eligible, err = eligibleOwners(ctx, pb, pr, rule, lines[section], required); err != nil {
+						return 0, nil, err
+					}
 				}
 				shortfalls = append(shortfalls, &SectionShortfall{Name: section.Name, Required: required, Granted: len(owners), Eligible: eligible})
 			}
@@ -285,16 +325,22 @@ func lineApprovers(ctx context.Context, line *issues_model.CodeOwnerRule, approv
 	return ids, nil
 }
 
+// maxEligibleLookups is how many short sections of a rule get their eligible owners counted.
+const maxEligibleLookups = 10
+
 // eligibleOwners counts the people named on the lines who could approve under the rule: they can write the code, are
 // no author of the pull request and, where the protected branch ignores them, no pusher. It only explains a section
-// that is short of approvals, so a number above it can never be met.
-func eligibleOwners(ctx context.Context, pb *git_model.ProtectedBranch, pr *issues_model.PullRequest, rule *git_model.ApprovalRule, lines []*issues_model.CodeOwnerRule) (int, error) {
-	var pushers map[int64]bool
+// that is short of approvals, so it stops counting at limit (the number of approvals the section needs).
+func eligibleOwners(ctx context.Context, pb *git_model.ProtectedBranch, pr *issues_model.PullRequest, rule *git_model.ApprovalRule, lines []*issues_model.CodeOwnerRule, limit int) (int, error) {
+	var pushers issues_model.Pushers
 	if pb.IgnorePusherApprovals {
 		var err error
 		if pushers, err = issues_model.PullPushers(ctx, pr); err != nil {
 			return 0, err
 		}
+	}
+	if pushers.Blocked() {
+		return 0, nil
 	}
 	candidates := map[int64]*user_model.User{}
 	for _, line := range lines {
@@ -328,7 +374,9 @@ func eligibleOwners(ctx context.Context, pb *git_model.ProtectedBranch, pr *issu
 				continue
 			}
 		}
-		eligible++
+		if eligible++; eligible >= limit {
+			break
+		}
 	}
 	return eligible, nil
 }

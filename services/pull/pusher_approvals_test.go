@@ -4,15 +4,19 @@
 package pull_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
 	issues_model "forgejo.org/models/issues"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/setting"
+	"forgejo.org/modules/test"
 	pull_service "forgejo.org/services/pull"
 
 	"github.com/stretchr/testify/assert"
@@ -141,12 +145,73 @@ func TestGetGrantedApprovalsCountIgnorePusherApprovals(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, pushed)
 
-	// the pull request's head can't be read: no approval counts, and the rule can't be evaluated
+	// the pull request's head can't be read (a closed pull request whose base branch is gone): no approval counts,
+	// the page and the API still answer, and the reason says so
 	f.pb.IgnorePusherApprovals = true
 	gitIn(t, f.pr.BaseRepo.RepoPath(), nil, "", "update-ref", "-d", f.pr.GetGitRefName())
 	assert.Zero(t, issues_model.GetGrantedApprovalsCount(t.Context(), f.pb, f.pr))
-	_, err = issues_model.ValidReviewers(t.Context(), f.pb, f.pr, issues_model.ReviewTypeApprove)
-	require.Error(t, err)
+	approvers, err := issues_model.ValidReviewers(t.Context(), f.pb, f.pr, issues_model.ReviewTypeApprove)
+	require.NoError(t, err)
+	assert.Empty(t, approvers)
+	block, err := pull_service.PusherBlock(t.Context(), f.pb, f.pr)
+	require.NoError(t, err)
+	assert.Equal(t, pull_service.PusherBlockUnchecked, block)
+}
+
+func (f *approvalFixture) officialApprovals(t *testing.T, ids ...int64) {
+	for _, id := range ids {
+		_, err := issues_model.CreateReview(t.Context(), issues_model.CreateReviewOptions{
+			Issue: f.pr.Issue, Reviewer: &user_model.User{ID: id}, Type: issues_model.ReviewTypeApprove, Official: true,
+		})
+		require.NoError(t, err)
+	}
+}
+
+// A deploy key with no recorded owner pushed to the head branch (user 0 in branch_pusher): no approval can be checked.
+func TestIgnorePusherApprovalsDeployKeyWithoutOwner(t *testing.T) {
+	f := newApprovalFixture(t, ownersRule())
+	f.officialApprovals(t, 2)
+	f.setHead(t, "", map[string]string{"a.txt": "a"}, "x@example.org", "x@example.org")
+	f.pb.RequiredApprovals = 1
+	f.pb.IgnorePusherApprovals = true
+	assert.EqualValues(t, 1, issues_model.GetGrantedApprovalsCount(t.Context(), f.pb, f.pr))
+
+	require.NoError(t, git_model.AddBranchPusher(t.Context(), f.pr.HeadRepoID, f.pr.HeadBranch, issues_model.PusherUnknownDeployKey))
+	assert.Zero(t, issues_model.GetGrantedApprovalsCount(t.Context(), f.pb, f.pr))
+	block, err := pull_service.PusherBlock(t.Context(), f.pb, f.pr)
+	require.NoError(t, err)
+	assert.Equal(t, pull_service.PusherBlockDeployKey, block)
+
+	f.pb.IgnorePusherApprovals = false
+	assert.EqualValues(t, 1, issues_model.GetGrantedApprovalsCount(t.Context(), f.pb, f.pr), "a rule that counts pushers is unaffected")
+}
+
+// The users of branch_pusher for the head branch don't count, other branches and users do.
+func TestIgnorePusherApprovalsBranchPushers(t *testing.T) {
+	f := newApprovalFixture(t, ownersRule())
+	f.officialApprovals(t, 2, 4)
+	f.setHead(t, "", map[string]string{"a.txt": "a"}, "x@example.org", "x@example.org")
+	f.pb.RequiredApprovals = 2
+	f.pb.IgnorePusherApprovals = true
+	require.NoError(t, git_model.AddBranchPusher(t.Context(), f.pr.HeadRepoID, "other", 4))
+	assert.EqualValues(t, 2, issues_model.GetGrantedApprovalsCount(t.Context(), f.pb, f.pr))
+	require.NoError(t, git_model.AddBranchPusher(t.Context(), f.pr.HeadRepoID, f.pr.HeadBranch, 4))
+	require.NoError(t, git_model.AddBranchPusher(t.Context(), f.pr.HeadRepoID, f.pr.HeadBranch, 4), "recorded once")
+	assert.EqualValues(t, 1, issues_model.GetGrantedApprovalsCount(t.Context(), f.pb, f.pr))
+}
+
+// The commit authors of the no-reply address count like those of an activated email.
+func TestIgnorePusherApprovalsNoReplyEmail(t *testing.T) {
+	defer test.MockVariableValue(&setting.Service.NoReplyAddress, "noreply.example.org")()
+	f := newApprovalFixture(t, ownersRule())
+	f.officialApprovals(t, 2, 4)
+	f.setHead(t, "", map[string]string{"a.txt": "a"}, "User4@noreply.example.org", "X@example.org")
+	f.pb.RequiredApprovals = 2
+	f.pb.IgnorePusherApprovals = true
+	assert.EqualValues(t, 1, issues_model.GetGrantedApprovalsCount(t.Context(), f.pb, f.pr))
+	pushers, err := issues_model.PullPushers(t.Context(), f.pr)
+	require.NoError(t, err)
+	assert.True(t, pushers[4])
 }
 
 // R3 with code owners: a pusher doesn't cover a file as an owner.
@@ -178,13 +243,15 @@ func TestEvaluateApprovalRulesCodeOwnerSections(t *testing.T) {
 		{"no header, one owner of two is enough", "docs/.* @user2 @user4\n", []int64{4}, true, ""},
 		{"no header, no owner", "docs/.* @user2\n", []int64{4}, false, "not approved by a code owner"},
 		{"N=2 with one owner", "[Docs][2]\ndocs/.* @user2 @user4\n", []int64{2}, false, `section "Docs" needs 2 approvals, has 1`},
+		{"N=1 has no plural", "[Docs]\ndocs/.* @user2\n", []int64{4}, false, "1 changed file is not approved by a code owner"},
 		{"N=2 with two owners", "[Docs][2]\ndocs/.* @user2 @user4\n", []int64{2, 4}, true, ""},
 		{"N=3 needs more people than exist", "[Docs][3]\ndocs/.* @user2 @user4\n", []int64{2, 4}, false, "only 2 people can approve"},
 		{"N counts over the matching lines of the section", "[Docs][2]\ndocs/.* @user2\n.*\\.md @user4\n", []int64{2, 4}, true, ""},
 		{"every matching line still needs an owner", "[Docs][1]\ndocs/.* @user2\n.*\\.md @user4\n", []int64{2}, false, "not approved by a code owner"},
 		{"optional never blocks", "^[Docs][5]\ndocs/.* @user2\n", []int64{4}, true, ""},
 		{"default owners", "[Docs] @user2\ndocs/.*\n", []int64{2}, true, ""},
-		{"default owners, other approver", "[Docs] @user2\ndocs/.*\n", []int64{4}, false, `section "Docs" needs 1 approvals, has 0`},
+		{"default owners, other approver", "[Docs] @user2\ndocs/.*\n", []int64{4}, false, "1 changed file is not approved by a code owner"},
+		{"a space before the count is no count", "[Docs] [2]\ndocs/.* @user2\n", []int64{2}, false, "CODEOWNERS has an error on line 1"},
 		{"duplicate sections merge, the larger N counts", "[Docs][1]\ndocs/.* @user2 @user4\n[docs][2]\n.*\\.md @user2 @user4\n", []int64{2}, false, `section "Docs" needs 2`},
 		{"a header isn't a pattern", "[Docs] @user2\ndocs/.* @user2\n", []int64{2}, true, ""},
 		{"malformed header", "[Docs\ndocs/.* @user2\n", []int64{2}, false, "CODEOWNERS has an error on line 1"},
@@ -202,6 +269,9 @@ func TestEvaluateApprovalRulesCodeOwnerSections(t *testing.T) {
 			}
 			s := f.status(t, "Owners")
 			assert.Equal(t, c.satisfied, s.Satisfied, s.Reason())
+			if strings.Contains(c.contains, "needs") {
+				assert.Zero(t, s.UncoveredFiles, "a section short on its count leaves the file covered")
+			}
 			if c.contains != "" {
 				assert.Contains(t, s.Reason(), c.contains)
 			}
@@ -215,4 +285,40 @@ func TestCodeOwnerSectionsReadFromBase(t *testing.T) {
 	f.setHead(t, "docs/.* @user2\n", map[string]string{"docs/a.md": "a", "CODEOWNERS": "[Docs][1]\ndocs/.* @user4\n"}, "x@example.org", "x@example.org")
 	f.review(t, 4, issues_model.ReviewTypeApprove, false)
 	assert.False(t, f.status(t, "Owners").Satisfied, "the owners of the base branch decide")
+}
+
+// The CODEOWNERS caps bound the work of a merge box render: a file at the caps with a pull request of hundreds of files is
+// evaluated in a fraction of the seconds an unbounded one took, and a file past them fails closed at once.
+func TestEvaluateApprovalRulesCodeOwnersBounded(t *testing.T) {
+	files := make(map[string]string, 400)
+	for i := range 400 {
+		files[fmt.Sprintf("docs/%d/f%d.md", i%200, i)] = "x"
+	}
+	var atCap, overCap strings.Builder
+	for i := range issues_model.MaxCodeOwnerSections {
+		fmt.Fprintf(&atCap, "[S%d][2]\n", i)
+		for j := range issues_model.MaxCodeOwnerLines / issues_model.MaxCodeOwnerSections {
+			fmt.Fprintf(&atCap, "docs/%d/f%d.*\\.md @user2 @user4\n", i, j)
+		}
+	}
+	overCap.WriteString(atCap.String())
+	overCap.WriteString("[One more][2]\n")
+
+	f := newApprovalFixture(t, ownersRule())
+	f.setHead(t, atCap.String(), files, "x@example.org", "x@example.org")
+	f.review(t, 2, issues_model.ReviewTypeApprove, false)
+	start := time.Now()
+	s := f.status(t, "Owners")
+	took := time.Since(start)
+	t.Logf("at the caps (%d sections, %d lines, 400 files): %s", issues_model.MaxCodeOwnerSections, issues_model.MaxCodeOwnerLines, took)
+	assert.False(t, s.Satisfied)
+	assert.Less(t, took, 5*time.Second)
+
+	f = newApprovalFixture(t, ownersRule())
+	f.setHead(t, overCap.String(), files, "x@example.org", "x@example.org")
+	start = time.Now()
+	s = f.status(t, "Owners")
+	t.Logf("over the section cap: %s", time.Since(start))
+	assert.False(t, s.Satisfied)
+	assert.NotZero(t, s.CodeOwnersErrorLine)
 }

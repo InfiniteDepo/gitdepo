@@ -641,7 +641,7 @@ func TestParseCodeOwnersHeaderIsNoPattern(t *testing.T) {
 func TestParseCodeOwnersMalformedHeaders(t *testing.T) {
 	for _, header := range []string{
 		"[Docs", "[Docs][0]", "[Docs][x]", "[Docs][-1]", "[Docs][+1]", "[]", "[ ]", "[Docs][2", "[Docs][1001]",
-		"[Docs][99999999999999999999999]", "[Docs]x", "[Docs][2]x", "^[Docs", "^[]", "[Docs][]",
+		"[Docs][99999999999999999999999]", "[Docs]x", "[Docs][2]x", "^[Docs", "^[]", "[Docs][]", "[Docs] [2]",
 	} {
 		owners := parseCodeOwnersText(t, ".* @user2\n"+header+" @user2\n")
 		assert.Equal(t, 2, owners.ErrorLine, header)
@@ -655,6 +655,30 @@ func TestParseCodeOwnersMalformedHeaders(t *testing.T) {
 		}
 		assert.Zero(t, owners.ErrorLine, header)
 	}
+}
+
+// The file is bounded: past the caps, or with a line the scanner can't read, it is malformed (every rule fails closed).
+func TestParseCodeOwnersBounds(t *testing.T) {
+	var sb strings.Builder
+	for i := 0; i <= issues_model.MaxCodeOwnerSections; i++ {
+		fmt.Fprintf(&sb, "[S%d]\n", i)
+	}
+	owners := parseCodeOwnersText(t, sb.String())
+	assert.Equal(t, issues_model.MaxCodeOwnerSections+1, owners.ErrorLine, "the section over the cap")
+	assert.Contains(t, strings.Join(owners.Warnings, "\n"), "more than 200 sections")
+	assert.Zero(t, parseCodeOwnersText(t, strings.TrimSuffix(sb.String(), fmt.Sprintf("[S%d]\n", issues_model.MaxCodeOwnerSections))).ErrorLine, "the cap itself is fine")
+
+	sb.Reset()
+	for i := 0; i <= issues_model.MaxCodeOwnerLines; i++ {
+		fmt.Fprintf(&sb, "f%d/.* @user2\n", i)
+	}
+	owners = parseCodeOwnersText(t, sb.String())
+	assert.Equal(t, issues_model.MaxCodeOwnerLines+1, owners.ErrorLine, "the pattern line over the cap")
+	assert.Len(t, owners.Rules, issues_model.MaxCodeOwnerLines)
+
+	owners = parseCodeOwnersText(t, ".* @user2\n"+strings.Repeat("x", 70*1024)+" @user2\n.* @user4\n")
+	assert.Equal(t, 2, owners.ErrorLine, "a line over 64 KiB stops the parse, which is an error")
+	assert.Len(t, owners.Rules, 1)
 }
 
 func TestParseCodeOwnersNoHeaders(t *testing.T) {
