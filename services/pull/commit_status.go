@@ -140,18 +140,10 @@ func getPullRequestCommitStatuses(ctx context.Context, pr *issues_model.PullRequ
 		return nil, errors.New("head branch does not exist, can not merge")
 	}
 
-	var sha string
-	if pr.Flow == issues_model.PullRequestFlowGithub {
-		sha, err = headGitRepo.GetBranchCommitID(pr.HeadBranch)
-	} else {
-		sha, err = headGitRepo.GetRefCommitID(pr.GetGitRefName())
-	}
+	// the head the merge is pinned to, so the statuses checked are those of the commit that is merged
+	sha, err := issues_model.PullHeadCommitID(ctx, pr)
 	if err != nil {
 		return nil, err
-	}
-
-	if err := pr.LoadBaseRepo(ctx); err != nil {
-		return nil, fmt.Errorf("LoadBaseRepo: %w", err)
 	}
 
 	commitStatuses, _, err := git_model.GetLatestCommitStatus(ctx, pr.BaseRepo.ID, sha, db.ListOptionsAll)

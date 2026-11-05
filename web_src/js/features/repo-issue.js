@@ -8,6 +8,7 @@ import {toAbsoluteUrl} from '../utils.js';
 import {initDropzone} from './common-global.js';
 import {POST, GET} from '../modules/fetch.js';
 import {showErrorToast} from '../modules/toast.js';
+import {showModal} from '../modules/modal.ts';
 
 const {appSubUrl} = window.config;
 
@@ -204,21 +205,27 @@ export function initRepoIssueCodeCommentCancel() {
 }
 
 export function initRepoPullRequestUpdate() {
+  // updating the branch is a push: ask first when it makes the doer's approval stop counting
+  document.querySelector('form.update-branch-form[data-modal-id]')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    showModal(form.getAttribute('data-modal-id'), () => form.submit());
+  });
+
   // Pull Request update button
   const pullUpdateButton = document.querySelector('.update-button > button');
   if (!pullUpdateButton) return;
 
-  pullUpdateButton.addEventListener('click', async function (e) {
-    e.preventDefault();
-    const redirect = this.getAttribute('data-redirect');
-    this.classList.add('is-loading');
+  const update = async () => {
+    const redirect = pullUpdateButton.getAttribute('data-redirect');
+    pullUpdateButton.classList.add('is-loading');
     let response;
     try {
-      response = await POST(this.getAttribute('data-do'));
+      response = await POST(pullUpdateButton.getAttribute('data-do'));
     } catch (error) {
       console.error(error);
     } finally {
-      this.classList.remove('is-loading');
+      pullUpdateButton.classList.remove('is-loading');
     }
     let data;
     try {
@@ -233,6 +240,12 @@ export function initRepoPullRequestUpdate() {
     } else {
       window.location.reload();
     }
+  };
+  pullUpdateButton.addEventListener('click', (e) => {
+    e.preventDefault();
+    const modalID = pullUpdateButton.getAttribute('data-modal-id');
+    if (modalID) showModal(modalID, update);
+    else update();
   });
 
   $('.update-button > .dropdown').dropdown({

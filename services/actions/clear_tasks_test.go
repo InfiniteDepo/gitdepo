@@ -5,10 +5,12 @@ package actions
 
 import (
 	"testing"
+	"time"
 
 	actions_model "forgejo.org/models/actions"
 	"forgejo.org/models/db"
 	"forgejo.org/models/unittest"
+	"forgejo.org/modules/setting"
 	"forgejo.org/modules/timeutil"
 	notify_service "forgejo.org/services/notify"
 
@@ -127,8 +129,33 @@ func TestCancelAbandonedJobsTimerEnded(t *testing.T) {
 	require.NoError(t, CancelAbandonedJobs(t.Context()))
 	assert.Equal(t, actions_model.StatusBlocked, unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRunJob{ID: 601}).Status, "waiting for a review")
 
-	_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET status = ? WHERE job_id = 601", actions_model.DeploymentWaitingTimer)
-	require.NoError(t, err)
+	set := func(updated, releaseAfter int64) {
+		_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET status = ?, updated = ?, release_after_unix = ? WHERE job_id = 601", actions_model.DeploymentWaitingTimer, updated, releaseAfter)
+		require.NoError(t, err)
+	}
+	status := func() actions_model.Status {
+		return unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRunJob{ID: 601}).Status
+	}
+	now := time.Now().Unix()
+	day := int64(setting.Actions.AbandonedJobTimeout.Seconds())
+
+	// approved just now after a long wait for the review, with no timer: the gate has not had its turn yet
+	set(now, 0)
 	require.NoError(t, CancelAbandonedJobs(t.Context()))
-	assert.Equal(t, actions_model.StatusCancelled, unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRunJob{ID: 601}).Status, "the timer ended")
+	assert.Equal(t, actions_model.StatusBlocked, status(), "just approved")
+
+	// a long timer that ended a moment ago
+	set(now-3*day, now-60)
+	require.NoError(t, CancelAbandonedJobs(t.Context()))
+	assert.Equal(t, actions_model.StatusBlocked, status(), "the timer just ended")
+
+	// a timer still running
+	set(now-3*day, now+3600)
+	require.NoError(t, CancelAbandonedJobs(t.Context()))
+	assert.Equal(t, actions_model.StatusBlocked, status(), "the timer runs")
+
+	// nobody acted a whole timeout after the last decision and after the timer ended
+	set(now-3*day, now-2*day)
+	require.NoError(t, CancelAbandonedJobs(t.Context()))
+	assert.Equal(t, actions_model.StatusCancelled, status(), "abandoned")
 }

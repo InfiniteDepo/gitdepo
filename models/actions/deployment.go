@@ -136,6 +136,15 @@ func ReviewDeployment(ctx context.Context, d *ActionDeployment, cutoff timeutil.
 	return n == 1, err
 }
 
+// RevokeDeploymentApproval puts an approved deployment that still waits for its timer back to waiting for a review,
+// with the review cleared, and reports if it was still approved by the same reviewer (another pass may have moved it).
+func RevokeDeploymentApproval(ctx context.Context, d *ActionDeployment) (bool, error) {
+	n, err := db.GetEngine(ctx).Where("id = ? AND status = ? AND reviewed_by = ?", d.ID, DeploymentWaitingTimer, d.ReviewedBy).
+		Cols("status", "reviewed_by", "reviewed_unix", "review_comment").
+		Update(&ActionDeployment{Status: DeploymentWaitingReview})
+	return n == 1, err
+}
+
 // FindExpiredReviews returns at most limit deployments that have waited for a review since before the cutoff, the ones
 // looked at longest ago first (TouchDeployments moves one that failed to the back, so none can block the others).
 func FindExpiredReviews(ctx context.Context, cutoff timeutil.TimeStamp, limit int) ([]*ActionDeployment, error) {

@@ -246,7 +246,8 @@ type ActionArtifact struct {
 // ReviewDeploymentsOption approves or rejects deployments of a workflow run that wait for a review
 // swagger:model
 type ReviewDeploymentsOption struct {
-	// the jobs to review, at most 100; empty means every waiting job the user may review
+	// the jobs to review: at least 1 and at most 100
+	// required: true
 	JobIDs []int64 `json:"job_ids"`
 	// approved or rejected
 	// enum: approved,rejected

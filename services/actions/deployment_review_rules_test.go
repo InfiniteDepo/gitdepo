@@ -307,3 +307,101 @@ func TestReviewIdentity(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
+
+func TestReviewDelegatedCredentials(t *testing.T) {
+	defer unittest.OverrideFixtures("services/actions/TestGetSecretsOfJob")()
+	f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{2}, nil)
+	doer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	as := func(credential string) context.Context {
+		return audit_model.WithActor(t.Context(), &audit_model.Actor{Type: audit_model.ActorUser, ID: 2, Name: "user2", Credential: audit_model.Credential{Type: credential, ID: 7}})
+	}
+	for _, c := range []string{audit_model.CredentialOAuth2Grant, audit_model.CredentialAuthorizedIntegration} {
+		_, err := ReviewDeployments(as(c), doer, f.run, []int64{f.job.ID}, true, "")
+		require.ErrorIs(t, err, ErrReviewForbidden, c)
+		_, err = ReviewDeployments(as(c), doer, f.run, []int64{f.job.ID}, false, "no")
+		require.ErrorIs(t, err, ErrReviewForbidden, c)
+		assert.Equal(t, actions_model.DeploymentWaitingReview, f.status(t), c)
+		checker, err := NewReviewChecker(as(c), doer, f.run)
+		require.NoError(t, err)
+		ok, err := checker.May(as(c), f.deployment(t))
+		require.NoError(t, err)
+		assert.False(t, ok, "can_review follows: %s", c)
+	}
+	// the reviewer's own session or access token
+	for _, c := range []string{audit_model.CredentialSession, audit_model.CredentialAccessToken, audit_model.CredentialPassword} {
+		checker, err := NewReviewChecker(as(c), doer, f.run)
+		require.NoError(t, err)
+		ok, err := checker.May(as(c), f.deployment(t))
+		require.NoError(t, err)
+		assert.True(t, ok, c)
+	}
+	_, err := ReviewDeployments(as(audit_model.CredentialAccessToken), doer, f.run, []int64{f.job.ID}, true, "")
+	require.NoError(t, err)
+}
+
+func TestApprovalRevokedWhenApproverIsNoLongerEligible(t *testing.T) {
+	defer unittest.OverrideFixtures("services/actions/TestGetSecretsOfJob")()
+	setup := func(t *testing.T) *reviewFixture {
+		f := newReviewFixture(t, &actions_model.ActionEnvironment{WaitTimerMinutes: 60}, []int64{2, 4}, nil)
+		grantActionsRead(t, 4)
+		_, err := f.review(t, 4, true, "ship it")
+		require.NoError(t, err)
+		require.Equal(t, actions_model.DeploymentWaitingTimer, f.status(t))
+		return f
+	}
+	timerEnds := func(t *testing.T, f *reviewFixture) {
+		_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET release_after_unix = ? WHERE job_id = ?", time.Now().Add(-time.Minute).Unix(), f.job.ID)
+		require.NoError(t, err)
+	}
+
+	t.Run("an approver who is still eligible releases the job", func(t *testing.T) {
+		f := setup(t)
+		timerEnds(t, f)
+		b, err := gateEnvironment(f.ctx, f.job)
+		require.NoError(t, err)
+		assert.Equal(t, behaviourExecuteJob, b)
+		assert.Equal(t, actions_model.DeploymentReleased, f.status(t))
+	})
+
+	for name, change := range map[string]func(t *testing.T, f *reviewFixture){
+		"removed from the reviewers": func(t *testing.T, f *reviewFixture) {
+			require.NoError(t, SetEnvironmentReviewers(f.ctx, f.env, []int64{2}, nil))
+		},
+		"deactivated": func(t *testing.T, f *reviewFixture) {
+			_, err := db.GetEngine(t.Context()).Exec("UPDATE user SET is_active = ? WHERE id = 4", false)
+			require.NoError(t, err)
+		},
+		"lost access to Actions": func(t *testing.T, f *reviewFixture) {
+			_, err := db.GetEngine(t.Context()).Exec("DELETE FROM collaboration WHERE user_id = 4 AND repo_id = 63")
+			require.NoError(t, err)
+			_, err = db.GetEngine(t.Context()).Exec("DELETE FROM access WHERE user_id = 4 AND repo_id = 63")
+			require.NoError(t, err)
+		},
+	} {
+		t.Run("the approver is "+name+" during the timer", func(t *testing.T) {
+			f := setup(t)
+			change(t, f)
+			since := auditSince(t)
+			timerEnds(t, f)
+			b, err := gateEnvironment(f.ctx, f.job)
+			require.NoError(t, err)
+			assert.Equal(t, behaviourHoldJob, b)
+			d := f.deployment(t)
+			assert.Equal(t, actions_model.DeploymentWaitingReview, d.Status)
+			assert.Zero(t, d.ReviewedBy)
+			assert.Zero(t, d.ReviewedUnix)
+			assert.Empty(t, d.ReviewComment)
+			entries := auditActions(t, since, "repo.actions_deployment.approval_revoked")
+			require.Len(t, entries, 1)
+			assert.Contains(t, entries[0].Data, `"revoked_reviewer_id":4`)
+			// a pass again changes nothing and doesn't record again
+			_, err = gateEnvironment(f.ctx, f.job)
+			require.NoError(t, err)
+			assert.Len(t, auditActions(t, since, "repo.actions_deployment.approval_revoked"), 1)
+			// another reviewer decides it afresh
+			_, err = f.review(t, 2, true, "")
+			require.NoError(t, err)
+			assert.EqualValues(t, 2, f.deployment(t).ReviewedBy)
+		})
+	}
+}

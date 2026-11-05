@@ -216,6 +216,7 @@ func DeleteRepositoryDirectly(ctx context.Context, repoID int64, opts DeleteRepo
 			&git_model.ProtectedBranch{RepoID: repoID},
 			&git_model.ProtectedBranchRepo{RepoID: repoID},
 			&git_model.ProtectedTag{RepoID: repoID},
+			&git_model.BranchPusher{RepoID: repoID},
 			&git_model.PushRule{RepoID: repoID},
 			&repo_model.PushMirror{RepoID: repoID},
 			&repo_model.Release{RepoID: repoID},

@@ -978,6 +978,10 @@ citation-information .tab:not(.active) {
   gap: 0.5em;
 }
 
+.codeowners-error code {
+  white-space: nowrap; /* keep [Name][N] on one line */
+}
+
 .repository.view.issue .comment-list .comment .merge-section .divider {
   margin-inline-start: -1rem;
   width: calc(100% + 2rem);
