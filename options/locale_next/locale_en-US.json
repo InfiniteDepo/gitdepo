@@ -24,6 +24,7 @@
 	"settings.manage_account_links_desc": "These external accounts are linked to your gitdepo account.",
 	"settings.remove_account_link_desc": "Removing a linked account will revoke its access to your gitdepo account. Continue?",
 	"repo.mirror_use_ssh.helper": "gitdepo will mirror the repository via Git over SSH and create a keypair for you when you select this option. You must ensure that the generated public key is authorized to push to the destination repository. You cannot use password-based authorization when selecting this.",
+	"repo.pulls.head_out_of_date": "The head of this pull request was updated, or is still being updated. Try again in a moment, or push again if this doesn't go away.",
 	"repo.pulls.cmd_instruction_merge_desc": "Merge the changes and update on gitdepo.",
 	"repo.settings.org_deploy_keys": "Organization keys",
 	"repo.settings.org_deploy_keys_desc": "Deploy keys of the organization that apply to this repository. Only organization owners can change them.",
