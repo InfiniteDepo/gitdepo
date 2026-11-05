@@ -1023,3 +1023,52 @@ func TestOIDCSubjectOfAnEnvironment(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, extra, "environment")
 }
+
+// A job marked unsupported (an inner job of a reusable workflow whose file wasn't read) is stored with an empty name:
+// the emitter, which parses the stored job again, must fail that job alone, not the run.
+func TestEmitterUnsupportedEnvironmentJobFailsAlone(t *testing.T) {
+	defer unittest.OverrideFixtures("services/actions/TestGetSecretsOfJob")()
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := audit_model.WithSystem(t.Context(), "test")
+
+	caller := "on: push\njobs:\n  call:\n    uses: ./called.yml\n"
+	called := "on: workflow_call\njobs:\n  deploy:\n    runs-on: docker\n    environment: prod\n    steps: [{run: echo}]\n"
+	sws, err := actions_module.ReusableWorkflows{}.JobParser([]byte(caller),
+		// a fetcher that doesn't remember what it read, so the environment of the file is unknown
+		jobparser.ExpandLocalReusableWorkflows(func(*jobparser.Job, string) ([]byte, error) { return []byte(called), nil }),
+		jobparser.EnableNamespaces())
+	require.NoError(t, err)
+	var inner *jobparser.SingleWorkflow
+	for _, sw := range sws {
+		if id, _ := sw.Job(); id == "deploy" {
+			inner = sw
+		}
+	}
+	require.NotNil(t, inner)
+	env, err := actions_module.GetJobEnvironment(inner)
+	require.NoError(t, err)
+	require.Equal(t, &actions_module.JobEnvironment{Unsupported: true}, env, "marked unsupported, with an empty name")
+	job := gateSingle(t, inner, "refs/heads/main")
+
+	sibling := *job
+	sibling.ID, sibling.JobID, sibling.Name, sibling.Handle = 0, "sibling", "sibling", "sibling-handle"
+	siblingWorkflow, err := actions_module.JobParser([]byte(envWorkflow("")))
+	require.NoError(t, err)
+	payload, err := siblingWorkflow[0].Marshal()
+	require.NoError(t, err)
+	sibling.WorkflowPayload, sibling.EnvironmentName = payload, ""
+	require.NoError(t, db.Insert(t.Context(), &sibling))
+
+	require.NoError(t, checkJobsOfRun(ctx, 900, 0))
+
+	failed := unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRunJob{ID: job.ID})
+	assert.Equal(t, actions_model.StatusFailure, failed.Status)
+	d := deploymentOf(t, failed)
+	require.NotNil(t, d)
+	assert.Equal(t, actions_model.DeploymentRefused, d.Status)
+	assert.Equal(t, actions_model.DeploymentReasonUnsupported, d.Reason)
+	ok := unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRunJob{ID: sibling.ID})
+	assert.Equal(t, actions_model.StatusWaiting, ok.Status, "the sibling without an environment is released")
+	run := unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRun{ID: 900})
+	assert.Zero(t, run.PreExecutionErrorCode, "the run has no workflow error")
+}

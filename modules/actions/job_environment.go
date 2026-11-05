@@ -53,7 +53,7 @@ func readRawJobs(content []byte) (map[string]rawJob, error) {
 		return nil, util.NewInvalidArgumentErrorf("invalid environment: %v", err)
 	}
 	for id, job := range raw.Jobs {
-		if job.Environment != nil && job.Environment.Name == "" {
+		if job.Environment != nil && job.Environment.Name == "" && !job.Environment.Unsupported {
 			return nil, util.NewInvalidArgumentErrorf("job %q: the environment needs a name", id)
 		}
 		if job.Uses != "" && job.Environment != nil {
