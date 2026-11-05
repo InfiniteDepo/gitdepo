@@ -80,7 +80,7 @@ func toActionEnvironments(ctx *context.APIContext, envs []*actions_model.ActionE
 	if err != nil {
 		return nil, err
 	}
-	data, err := loadDeploymentData(ctx, slices.Collect(maps.Values(last)))
+	data, err := actions_service.LoadDeploymentData(ctx, ctx.Doer(), repoID, slices.Collect(maps.Values(last)))
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +110,7 @@ func toActionEnvironments(ctx *context.APIContext, envs []*actions_model.ActionE
 			}
 		}
 		if d, ok := last[e.ID]; ok {
-			item.LastDeployment = data.toActionDeployment(ctx, d)
+			item.LastDeployment = toActionDeployment(ctx, data, d)
 		}
 		out = append(out, item)
 	}
@@ -431,19 +431,19 @@ func ListActionDeployments(ctx *context.APIContext) {
 		}
 		environmentID = env.ID
 	}
-	ds, count, err := actions_model.FindRepoDeployments(ctx, repoID, environmentID, utils.GetListOptions(ctx))
+	ds, count, err := actions_model.FindRepoDeployments(ctx, repoID, actions_model.DeploymentFilter{EnvironmentID: environmentID}, utils.GetListOptions(ctx))
 	if err != nil {
 		ctx.InternalServerError(err)
 		return
 	}
-	data, err := loadDeploymentData(ctx, ds)
+	data, err := actions_service.LoadDeploymentData(ctx, ctx.Doer(), repoID, ds)
 	if err != nil {
 		ctx.InternalServerError(err)
 		return
 	}
 	items := make([]*api.ActionDeployment, 0, len(ds))
 	for _, d := range ds {
-		items = append(items, data.toActionDeployment(ctx, d))
+		items = append(items, toActionDeployment(ctx, data, d))
 	}
 	ctx.SetTotalCountHeader(count)
 	ctx.JSON(http.StatusOK, items)

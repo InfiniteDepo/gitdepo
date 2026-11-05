@@ -172,24 +172,25 @@ type ViewState struct {
 }
 
 type ViewRunInfo struct {
-	Link                 string          `json:"link"`
-	Title                string          `json:"title"`
-	TitleHTML            template.HTML   `json:"titleHTML"`
-	Status               string          `json:"status"`
-	EstimatedOutcome     string          `json:"estimatedOutcome"`
-	Description          string          `json:"description"`
-	CanCancel            bool            `json:"canCancel"`
-	CanApprove           bool            `json:"canApprove"` // the run needs an approval and the doer has permission to approve
-	CanRerun             bool            `json:"canRerun"`
-	CanDeleteArtifact    bool            `json:"canDeleteArtifact"`
-	CanDelete            bool            `json:"canDelete"`
-	Keep                 bool            `json:"keep,omitempty"`    // exempt from the automatic cleanup
-	CanKeep              bool            `json:"canKeep,omitempty"` // the doer may change Keep
-	Done                 bool            `json:"done"`
-	Jobs                 []*ViewJob      `json:"jobs"`
-	Commit               ViewCommit      `json:"commit"`
-	PreExecutionError    template.HTML   `json:"preExecutionError"`
-	PreExecutionWarnings []template.HTML `json:"preExecutionWarnings"`
+	Link                 string           `json:"link"`
+	Title                string           `json:"title"`
+	TitleHTML            template.HTML    `json:"titleHTML"`
+	Status               string           `json:"status"`
+	EstimatedOutcome     string           `json:"estimatedOutcome"`
+	Description          string           `json:"description"`
+	CanCancel            bool             `json:"canCancel"`
+	CanApprove           bool             `json:"canApprove"` // the run needs an approval and the doer has permission to approve
+	CanRerun             bool             `json:"canRerun"`
+	CanDeleteArtifact    bool             `json:"canDeleteArtifact"`
+	CanDelete            bool             `json:"canDelete"`
+	Keep                 bool             `json:"keep,omitempty"`    // exempt from the automatic cleanup
+	CanKeep              bool             `json:"canKeep,omitempty"` // the doer may change Keep
+	Done                 bool             `json:"done"`
+	Jobs                 []*ViewJob       `json:"jobs"`
+	Commit               ViewCommit       `json:"commit"`
+	PreExecutionError    template.HTML    `json:"preExecutionError"`
+	PreExecutionWarnings []template.HTML  `json:"preExecutionWarnings"`
+	Deployments          *ViewDeployments `json:"deployments,omitempty"` // nil when no job names an environment
 }
 
 type ViewCurrentJob struct {
@@ -355,6 +356,12 @@ func getViewResponse(ctx *app_context.Context, req *ViewRequest, runIndex, jobIn
 			GroupKey: fmt.Sprintf("%s/%s", v.JobNamespace, v.JobID),
 			Needs:    viewJobNeeds(v, idsByWorkflowJob),
 		})
+	}
+
+	var err error
+	if resp.State.Run.Deployments, err = viewDeployments(ctx, run, jobs); err != nil {
+		ctx.Error(http.StatusInternalServerError, err.Error())
+		return nil
 	}
 
 	pusher := ViewUser{

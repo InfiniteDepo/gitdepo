@@ -302,14 +302,38 @@ func FindDeploymentTasks(ctx context.Context, repoID int64, ds []*ActionDeployme
 	return out, nil
 }
 
-// FindRepoDeployments returns a page of the deployments of the repository, newest first, of one environment
-// (environmentID 0: of every environment), and how many there are.
-func FindRepoDeployments(ctx context.Context, repoID, environmentID int64, opts db.ListOptions) ([]*ActionDeployment, int64, error) {
-	sess := db.GetEngine(ctx).Where("repo_id = ?", repoID)
-	if environmentID != 0 {
-		sess = sess.And("environment_id = ?", environmentID)
+// DeploymentFilter narrows FindRepoDeployments; its zero value takes every deployment of the repository.
+type DeploymentFilter struct {
+	EnvironmentID int64
+	Statuses      []DeploymentStatus
+	TriggerUserID int64
+	Refs          []string // full ref names: a deployment of any of them
+}
+
+// FindRepoDeployments returns a page of the deployments of the repository that the filter takes, newest first, and
+// how many there are.
+func FindRepoDeployments(ctx context.Context, repoID int64, f DeploymentFilter, opts db.ListOptions) ([]*ActionDeployment, int64, error) {
+	cond := builder.NewCond().And(builder.Eq{"repo_id": repoID})
+	if f.EnvironmentID != 0 {
+		cond = cond.And(builder.Eq{"environment_id": f.EnvironmentID})
+	}
+	if len(f.Statuses) > 0 {
+		cond = cond.And(builder.In("status", f.Statuses))
+	}
+	if f.TriggerUserID != 0 {
+		cond = cond.And(builder.Eq{"trigger_user_id": f.TriggerUserID})
+	}
+	if len(f.Refs) > 0 {
+		cond = cond.And(builder.In("ref", f.Refs))
 	}
 	var ds []*ActionDeployment
-	count, err := db.SetSessionPagination(sess, &opts).OrderBy("id DESC").FindAndCount(&ds)
+	count, err := db.SetSessionPagination(db.GetEngine(ctx).Where(cond), &opts).OrderBy("id DESC").FindAndCount(&ds)
 	return ds, count, err
+}
+
+// FindDeploymentTriggerUsers returns the users who triggered a deployment of the environment of the repository.
+func FindDeploymentTriggerUsers(ctx context.Context, repoID, environmentID int64) ([]int64, error) {
+	var ids []int64
+	return ids, db.GetEngine(ctx).Table("action_deployment").Distinct("trigger_user_id").
+		Where("repo_id = ? AND environment_id = ? AND trigger_user_id <> 0", repoID, environmentID).Find(&ids)
 }

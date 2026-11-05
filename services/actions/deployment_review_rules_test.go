@@ -573,7 +573,12 @@ func TestCheckEnvironmentReviewersMatchesIneligibility(t *testing.T) {
 		if repoID != 24 { // org17 requires 2FA, which none of its members has
 			assert.NotEmpty(t, check.Readers, "repo %d", repoID)
 		}
-		assert.Less(t, len(check.Ineligible), len(users), "someone can approve on repo %d", repoID)
+		if repoID == 24 { // org17 requires 2FA: nobody without it approves, the site administrator included
+			assert.Len(t, check.Ineligible, len(users), "nobody can approve on repo %d", repoID)
+			assert.Equal(t, ReviewerTwoFactor, check.Ineligible["user:1"])
+		} else {
+			assert.Less(t, len(check.Ineligible), len(users), "someone can approve on repo %d", repoID)
+		}
 		assert.Equal(t, check.Readers, plain.Readers, "the readers don't depend on the doer")
 		for _, r := range check.Readers {
 			assert.Empty(t, check.Ineligible[fmt.Sprintf("user:%d", r.ID)], "reader %d of repo %d can approve", r.ID, repoID)

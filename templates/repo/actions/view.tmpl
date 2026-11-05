@@ -2,6 +2,7 @@
 
 <div class="page-content repository">
 	{{template "repo/header" .}}
+	{{if .Flash}}<div class="ui container fluid padded">{{template "base/alert" .}}</div>{{end}}
 	<div id="repo-action-view"
 		data-run-index="{{.RunIndex}}"
 		data-run-id="{{.RunID}}"

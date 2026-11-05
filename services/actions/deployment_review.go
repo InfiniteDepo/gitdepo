@@ -14,6 +14,7 @@ import (
 
 	actions_model "forgejo.org/models/actions"
 	audit_model "forgejo.org/models/audit"
+	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	org_model "forgejo.org/models/organization"
 	access_model "forgejo.org/models/perm/access"
@@ -165,7 +166,7 @@ func reviewerIneligibility(ctx context.Context, repo *repo_model.Repository, u *
 	if !usableReviewer(u) {
 		return ReviewerNotUsable, nil
 	}
-	if blocked, err := u.TwoFactorBlocked(ctx, repo.Owner); err != nil || blocked {
+	if missing, err := withoutTwoFactor(ctx, repo.Owner, []int64{u.ID}); err != nil || missing.Contains(u.ID) {
 		return ReviewerTwoFactor, err
 	}
 	perm, err := access_model.GetUserRepoPermission(ctx, repo, u)
@@ -175,6 +176,26 @@ func reviewerIneligibility(ctx context.Context, repo *repo_model.Repository, u *
 		return ReviewerNoAccess, nil
 	}
 	return "", nil
+}
+
+// withoutTwoFactor returns the users among ids who have no two-factor authentication while the owner is an
+// organization that requires it. Deployment approval applies that requirement to everyone, site administrators
+// included (repository access exempts them, user_model.User.TwoFactorBlocked): this is the one place that decides it.
+func withoutTwoFactor(ctx context.Context, owner *user_model.User, ids []int64) (container.Set[int64], error) {
+	missing := container.Set[int64]{}
+	if owner == nil || !owner.IsOrganization() || !owner.RequireTwoFactor || len(ids) == 0 {
+		return missing, nil
+	}
+	has, err := auth_model.UserIDsWithTwoFactor(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range ids {
+		if !has.Contains(id) {
+			missing.Add(id)
+		}
+	}
+	return missing, nil
 }
 
 // usableReviewer tells if u is a person who can sign in.
@@ -195,6 +216,10 @@ type EnvironmentReviewerCheck struct {
 	// Readers are the users with a membership path to the repository (memberPath) who can approve, in name order:
 	// the ones to offer as reviewers.
 	Readers []*user_model.User
+	// Approvers maps an environment ID to the users who can approve its deployments by the rule of May, the listed
+	// users and the members of the listed teams, before the rules of one run (self-review) and whoever the doer is:
+	// the recipients of the review mail and the names on the run page (filtered by what the viewer may see).
+	Approvers map[int64][]int64
 }
 
 // CheckEnvironmentReviewers decides the reviewers of the environments of repo for the doer's settings pages with the
@@ -226,11 +251,24 @@ func CheckEnvironmentReviewers(ctx context.Context, repo *repo_model.Repository,
 			userIDs = append(userIDs, r.UID)
 		}
 	}
+	if err := repo.LoadOwner(ctx); err != nil {
+		return nil, err
+	}
 	rows, err := accessreport.Compute(ctx, accessreport.Options{RepoIDs: []int64{repo.ID}, Users: userIDs, RepoPermission: true})
 	if err != nil {
 		return nil, err
 	}
-	check := &EnvironmentReviewerCheck{Ineligible: map[string]string{}, NoReviewer: map[int64]bool{}, Users: map[int64]*user_model.User{}}
+	var rowUsers []int64
+	for _, row := range rows {
+		if row.User != nil {
+			rowUsers = append(rowUsers, row.User.ID)
+		}
+	}
+	missing, err := withoutTwoFactor(ctx, repo.Owner, rowUsers)
+	if err != nil {
+		return nil, err
+	}
+	check := &EnvironmentReviewerCheck{Ineligible: map[string]string{}, NoReviewer: map[int64]bool{}, Users: map[int64]*user_model.User{}, Approvers: map[int64][]int64{}}
 	// whether an outsider may approve: the pseudo-row of signed-in users (not the one of the members of a private owner
 	// organization) reads the repository's Actions
 	outsiderMay := false
@@ -243,21 +281,18 @@ func CheckEnvironmentReviewers(ctx context.Context, repo *repo_model.Repository,
 	detailed := doer != nil && doer.IsAdmin
 	listed := container.SetOf(listedIDs...)
 	decided := map[int64]string{} // a user without a row is no individual or no longer exists
+	eligible := container.Set[int64]{}
 	for _, row := range rows {
 		if row.User == nil {
 			continue
 		}
 		member := memberPath(row)
-		why := ""
-		switch {
-		case !member && !detailed:
+		why := approverReason(row, missing)
+		if why == "" {
+			eligible.Add(row.User.ID)
+		}
+		if !member && !detailed {
 			why = ReviewerOutsider
-		case !usableReviewer(row.User):
-			why = ReviewerNotUsable
-		case row.TwoFactorStranger:
-			why = ReviewerTwoFactor
-		case !row.Perm.CanRead(unit.TypeActions):
-			why = ReviewerNoAccess
 		}
 		decided[row.User.ID] = why
 		if listed.Contains(row.User.ID) {
@@ -286,19 +321,44 @@ func CheckEnvironmentReviewers(ctx context.Context, repo *repo_model.Repository,
 		return ReviewerNoneInTeam
 	}
 	for _, env := range envs {
-		eligible := false
+		possible := false
+		approvers := container.Set[int64]{}
 		for _, r := range reviewers[env.ID] {
 			why := keyReason(r)
 			if why == "" || (why == ReviewerOutsider && outsiderMay) {
-				eligible = true
+				possible = true
 			}
 			if why != "" {
 				check.Ineligible[r.Key()] = why
 			}
+			ids := []int64{r.UserID}
+			if r.TeamID > 0 {
+				ids = members[r.TeamID]
+			}
+			for _, uid := range ids {
+				if eligible.Contains(uid) {
+					approvers.Add(uid)
+				}
+			}
 		}
-		check.NoReviewer[env.ID] = env.ReviewsRequired && !eligible
+		check.NoReviewer[env.ID] = env.ReviewsRequired && !possible
+		check.Approvers[env.ID] = slices.Sorted(maps.Keys(approvers))
 	}
 	return check, nil
+}
+
+// approverReason is reviewerIneligibility on a row of accessreport.Compute (which replays GetUserRepoPermission),
+// with missing the users withoutTwoFactor returned for the repository's owner.
+func approverReason(row *accessreport.Row, missing container.Set[int64]) string {
+	switch {
+	case !usableReviewer(row.User):
+		return ReviewerNotUsable
+	case missing.Contains(row.User.ID):
+		return ReviewerTwoFactor
+	case !row.Perm.CanRead(unit.TypeActions):
+		return ReviewerNoAccess
+	}
+	return ""
 }
 
 // May decides if the doer may review the deployment d at this moment (its status is not looked at): a listed user, or a
@@ -419,6 +479,9 @@ func ReviewDeployments(ctx context.Context, doer *user_model.User, run *actions_
 			if err := recordDeploymentReview(ctx, run.Repo, env, d, ev, len(comment)); err != nil {
 				return err
 			}
+			if !approve {
+				mailDeploymentDecided(ctx, env, d)
+			}
 		}
 		return nil
 	}); err != nil {
@@ -505,6 +568,7 @@ func expireDeployment(ctx context.Context, d *actions_model.ActionDeployment) er
 		if moved, err := actions_model.SetDeploymentStatus(ctx, d, actions_model.DeploymentWaitingReview); err != nil || !moved {
 			return err // not waiting any more: nothing to do
 		}
+		mailDeploymentDecided(ctx, env, d)
 		return recordDeploymentReview(ctx, repo, env, d, audit_model.Event{Action: "repo.actions_deployment.expired", Result: audit_model.ResultFailure}, 0)
 	})
 }

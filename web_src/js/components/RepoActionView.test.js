@@ -753,3 +753,42 @@ test('keep button and kept marker', async () => {
   expect(wrapper.find('button[data-url="/o/r/actions/runs/10/unkeep"]').text()).toContain('Locale Unkeep');
   expect(wrapper.text()).toContain('Locale Kept');
 });
+
+const testDeployments = (canReview) => ({
+  title: 'Deployments waiting for approval: 1',
+  state: 'waiting',
+  canReview,
+  reviewURL: '/o/r/actions/runs/10/deployments/review',
+  labels: {review: 'Review deployments', title: 'Review pending deployments', choose: '', comment: 'Comment', commentHelp: 'help', commentRequired: 'A comment is required to reject.', approve: 'Approve', reject: 'Reject', cancel: 'Cancel'},
+  items: [{jobID: 5, jobName: '<b>deploy</b>', environment: 'prod', environmentLink: '/o/r/actions/deployments?environment=prod', status: 'blocked', text: 'Waiting for a reviewer: <i>user4</i>', detail: '', comment: '<b>old</b>', gate: true, waiting: true, reviewable: canReview}],
+});
+
+test('deployments panel, review button and dialog', async () => {
+  Object.defineProperty(document.documentElement, 'lang', {value: 'en'});
+
+  let wrapper = mount(RepoActionView, {props: withRun({deployments: testDeployments(false)})});
+  await flushPromises();
+  expect(wrapper.find('.deployments-panel.waiting').exists()).toBe(true);
+  expect(wrapper.find('#review-deployments').exists()).toBe(false);
+  expect(wrapper.find('#review-deployments-modal').exists()).toBe(false);
+  expect(wrapper.find('.deployments-panel').text()).toContain('Waiting for a reviewer: <i>user4</i>');
+  expect(wrapper.find('.deployments-panel').text()).toContain('<b>deploy</b>');
+  expect(wrapper.find('.deployments-panel b, .deployments-panel i').exists()).toBe(false);
+
+  wrapper = mount(RepoActionView, {props: withRun({deployments: testDeployments(true)})});
+  await flushPromises();
+  expect(wrapper.find('#review-deployments').text()).toContain('Review deployments');
+  const form = wrapper.find('#review-deployments-modal form');
+  expect(form.attributes('action')).toBe('/o/r/actions/runs/10/deployments/review');
+  expect(form.find('input[name="job_ids"][value="5"]').element.checked).toBe(true);
+
+  // a rejection without a comment is not sent; an approval is
+  const reject = {submitter: {value: 'rejected'}, preventDefault: vi.fn()};
+  wrapper.vm.checkDeploymentReview(reject);
+  expect(reject.preventDefault).toHaveBeenCalled();
+  await flushPromises();
+  expect(wrapper.find('#review-deployments-modal .field.error').text()).toContain('A comment is required to reject.');
+  const approve = {submitter: {value: 'approved'}, preventDefault: vi.fn()};
+  wrapper.vm.checkDeploymentReview(approve);
+  expect(approve.preventDefault).not.toHaveBeenCalled();
+});

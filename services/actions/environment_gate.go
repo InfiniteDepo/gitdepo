@@ -330,8 +330,14 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 		if err := recordDeploymentReview(ctx, run.Repo, env, d, audit_model.Event{Action: "repo.actions_deployment.expired", Result: audit_model.ResultFailure}, 0); err != nil {
 			return behaviourError, err
 		}
+		mailDeploymentDecided(ctx, env, d)
 		return behaviourFailJob, nil
-	case actions_model.DeploymentWaitingTimer, actions_model.DeploymentWaitingReview:
+	case actions_model.DeploymentWaitingReview:
+		if prior != actions_model.DeploymentWaitingReview { // it starts to wait for a review: once per deployment
+			mailDeploymentReviewers(ctx, run, job.Name, env, d)
+		}
+		return behaviourHoldJob, nil
+	case actions_model.DeploymentWaitingTimer:
 		return behaviourHoldJob, nil
 	}
 	// A job that runs on no label stays so: the labels of the environment only narrow the runners that can take it.

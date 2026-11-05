@@ -1944,6 +1944,7 @@ func registerRoutes(m *web.Route) {
 				m.Post("/time", actions.ChangeScheduledTime)
 			}, reqRepoActionsWriter, context.RepoMustNotBeArchived())
 
+			m.Get("/deployments", actions.Deployments)
 			m.Group("/runs", func() {
 				m.Get("/latest", actions.ViewLatest)
 				m.Group("/{run}", func() {
@@ -1963,6 +1964,7 @@ func registerRoutes(m *web.Route) {
 						})
 					})
 					m.Post("/cancel", reqRepoActionsWriter, actions.Cancel)
+					m.Post("/deployments/review", reqSignIn, context.RepoMustNotBeArchived(), actions.ReviewDeploymentsPost)
 					m.Post("/delete", reqRepoAdmin, actions.DeleteRun)
 					m.Post("/keep", reqRepoAdmin, actions.KeepRun)
 					m.Post("/unkeep", reqRepoAdmin, actions.UnkeepRun)

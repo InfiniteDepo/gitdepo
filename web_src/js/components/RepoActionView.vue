@@ -74,6 +74,8 @@ export default {
       lineNumberOffset: [],
       currentJobStepsStates: [],
       tokenPermissionsExpanded: false,
+      reviewComment: '',
+      reviewCommentError: false,
       artifacts: [],
       menuVisible: undefined,
       isFullScreen: false,
@@ -215,6 +217,16 @@ export default {
       return [];
     },
 
+    // the deployment of the viewed job, when the gate holds or failed it: its pane shows it instead of a log
+    gatedDeployment() {
+      const job = this.run.jobs?.[parseInt(this.jobIndex)];
+      return this.run.deployments?.items.find((item) => item.jobID === job?.id && item.gate);
+    },
+
+    waitingDeployments() {
+      return this.run.deployments?.items.filter((item) => item.waiting) ?? [];
+    },
+
     hasWarnings() {
       return this.run.preExecutionWarnings && this.run.preExecutionWarnings.length > 0;
     },
@@ -273,6 +285,19 @@ export default {
     // cancel a run
     cancelRun() {
       POST(`${this.run.link}/cancel`);
+    },
+
+    openDeploymentReview() {
+      this.reviewCommentError = false;
+      this.$refs.reviewDialog.showModal();
+    },
+
+    // a rejection needs a comment: the server checks it too
+    checkDeploymentReview(event) {
+      if (event.submitter?.value === 'rejected' && !this.reviewComment.trim()) {
+        event.preventDefault();
+        this.reviewCommentError = true;
+      }
     },
 
     // approve a run
@@ -565,6 +590,60 @@ export default {
         <div v-for="warning in run.preExecutionWarnings" :key="warning" v-html="warning"/>
       </div>
     </div>
+    <section class="deployments-panel" :class="run.deployments.state" v-if="run.deployments" :aria-label="run.deployments.title">
+      <div class="deployments-panel-header">
+        <strong>{{ run.deployments.title }}</strong>
+        <button class="ui primary small compact button" id="review-deployments" @click="openDeploymentReview()" v-if="run.deployments.canReview && currentlyViewingMostRecentAttempt">
+          <SvgIcon name="octicon-rocket"/> {{ run.deployments.labels.review }}
+        </button>
+      </div>
+      <div class="deployments-panel-item" v-for="item in run.deployments.items" :key="item.jobID">
+        <ActionRunStatus :locale-status="locale.status[item.status]" :status="item.status"/>
+        <div>
+          <div><strong>{{ item.jobName }}</strong> → <a :href="item.environmentLink">{{ item.environment }}</a> · <span class="deployment-text">{{ item.text }}</span></div>
+          <div class="deployment-detail" v-if="item.detail">
+            {{ item.detail }}
+          </div>
+          <div class="deployment-comment" v-if="item.comment">
+            {{ item.comment }}
+          </div>
+        </div>
+      </div>
+    </section>
+    <dialog class="modal" ref="reviewDialog" id="review-deployments-modal" v-if="run.deployments?.canReview">
+      <article>
+        <header>{{ run.deployments.labels.title }}</header>
+        <form class="ui form" method="post" :action="run.deployments.reviewURL" @submit="checkDeploymentReview">
+          <div class="content">
+            <p>{{ run.deployments.labels.choose }}</p>
+            <label class="deployment-review-choice" v-for="item in waitingDeployments" :key="item.jobID" :class="{disabled: !item.reviewable}">
+              <input type="checkbox" name="job_ids" :value="item.jobID" :disabled="!item.reviewable" :checked="item.reviewable">
+              <span><strong>{{ item.environment }}</strong> · {{ item.jobName }}
+                <span class="deployment-detail">{{ item.reviewable ? item.detail : item.notReviewable }}</span>
+              </span>
+            </label>
+            <div class="field" :class="{error: reviewCommentError}">
+              <label for="review-comment">{{ run.deployments.labels.comment }}</label>
+              <textarea id="review-comment" name="comment" rows="3" v-model="reviewComment"/>
+              <p class="help">
+                {{ reviewCommentError ? run.deployments.labels.commentRequired : run.deployments.labels.commentHelp }}
+              </p>
+            </div>
+          </div>
+          <div class="actions">
+            <button type="button" class="ui button" @click="$refs.reviewDialog.close()">
+              {{ run.deployments.labels.cancel }}
+            </button>
+            <button class="ui red button" name="state" value="rejected">
+              {{ run.deployments.labels.reject }}
+            </button>
+            <button class="ui primary button" name="state" value="approved">
+              {{ run.deployments.labels.approve }}
+            </button>
+          </div>
+        </form>
+      </article>
+    </dialog>
     <ActionRunGraph v-if="run.jobs?.length > 1" :jobs="run.jobs" :run-link="run.link" :current-job-index="parseInt(jobIndex)" :locale="locale"/>
     <div class="action-view-body">
       <div class="action-view-left" v-if="displayOtherJobs">
@@ -659,6 +738,15 @@ export default {
             </div>
           </div>
         </div>
+        <div v-if="gatedDeployment" class="job-deployment-gate" :class="gatedDeployment.status">
+          <strong>{{ gatedDeployment.text }}</strong>
+          <p v-if="gatedDeployment.detail">
+            {{ gatedDeployment.detail }}
+          </p>
+          <p class="deployment-comment" v-if="gatedDeployment.comment">
+            {{ gatedDeployment.comment }}
+          </p>
+        </div>
         <div v-if="currentJob.summaries?.length" class="job-summary markup">
           <!-- eslint-disable-next-line vue/no-v-html -->
           <div v-for="(stepSummary, index) in currentJob.summaries" :key="index" class="step-summary" v-html="stepSummary"/>
@@ -711,6 +799,73 @@ export default {
   </div>
 </template>
 <style scoped>
+.deployments-panel {
+  border: 1px solid var(--color-secondary);
+  border-radius: var(--border-radius);
+  margin-top: 12px;
+  padding: 8px 12px;
+}
+
+.deployments-panel.waiting {
+  background: var(--color-warning-bg);
+  border-color: var(--color-warning-border);
+}
+
+.deployments-panel.failed {
+  background: var(--color-error-bg);
+  border-color: var(--color-error-border);
+}
+
+.deployments-panel-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.deployments-panel-item {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+
+.deployment-detail {
+  display: block;
+  color: var(--color-text-light-2);
+  font-size: 13px;
+}
+
+.deployment-comment {
+  white-space: pre-wrap;
+  border-inline-start: 3px solid var(--color-secondary-dark-2);
+  padding-inline-start: 8px;
+  margin-top: 4px;
+}
+
+.deployment-review-choice {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.deployment-review-choice.disabled {
+  opacity: 0.6;
+}
+
+.job-deployment-gate {
+  margin: 12px;
+  padding: 12px;
+  border-radius: var(--border-radius);
+  background: var(--color-console-hover-bg);
+  color: var(--color-console-fg);
+}
+
+.job-deployment-gate p {
+  margin: 4px 0 0;
+}
+
 .action-view-body {
   padding-top: 12px;
   padding-bottom: 12px;
