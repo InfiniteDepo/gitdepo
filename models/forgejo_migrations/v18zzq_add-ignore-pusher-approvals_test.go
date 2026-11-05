@@ -12,29 +12,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type v18zzpProtectedBranchBefore struct {
+type v18zzqProtectedBranchBefore struct {
 	ID       int64 `xorm:"pk autoincr"`
 	RuleName string
 }
 
-func (v18zzpProtectedBranchBefore) TableName() string { return "protected_branch" }
+func (v18zzqProtectedBranchBefore) TableName() string { return "protected_branch" }
 
-type v18zzpDeployKeyBefore struct {
+type v18zzqDeployKeyBefore struct {
 	ID   int64 `xorm:"pk autoincr"`
 	Name string
 }
 
-func (v18zzpDeployKeyBefore) TableName() string { return "deploy_key" }
+func (v18zzqDeployKeyBefore) TableName() string { return "deploy_key" }
 
-type v18zzpOrgDeployKeyBefore struct {
+type v18zzqOrgDeployKeyBefore struct {
 	ID   int64 `xorm:"pk autoincr"`
 	Name string
 }
 
-func (v18zzpOrgDeployKeyBefore) TableName() string { return "org_deploy_key" }
+func (v18zzqOrgDeployKeyBefore) TableName() string { return "org_deploy_key" }
 
 func Test_addIgnorePusherApprovals(t *testing.T) {
-	x, deferable := migration_tests.PrepareTestEnv(t, 0, new(v18zzpProtectedBranchBefore), new(v18zzpDeployKeyBefore), new(v18zzpOrgDeployKeyBefore))
+	x, deferable := migration_tests.PrepareTestEnv(t, 0, new(v18zzqProtectedBranchBefore), new(v18zzqDeployKeyBefore), new(v18zzqOrgDeployKeyBefore))
 	defer deferable()
 	require.NotNil(t, x)
 
