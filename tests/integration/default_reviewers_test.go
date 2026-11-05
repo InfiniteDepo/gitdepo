@@ -620,3 +620,47 @@ func TestDefaultReviewersPatternLinearTime(t *testing.T) {
 		assert.Equal(t, []string{"user10"}, e.requested(index), "only the pattern with ** matches the branch")
 	})
 }
+
+// A request of an approval rule that only requests reviews is advisory under organization and project rules too: it
+// doesn't block with "Block on official review requests", while a request of a rule with a count does.
+func TestDefaultReviewersAdvisoryOrgAndProject(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		owner := NewAPITestContext(t, "user2", "", auth_model.AccessTokenScopeWriteRepository, auth_model.AccessTokenScopeWriteOrganization)
+		bwRepo(t, "dr-advisory")
+		repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{OwnerName: "org3", Name: "dr-advisory"})
+		e := newDREnv(t, repo.ID)
+		e.collaborator("user4", "write")
+		e.collaborator("user28", "write")
+		user28 := NewAPITestContext(t, "user28", "", auth_model.AccessTokenScopeWriteRepository)
+
+		check := func(path, base string) {
+			t.Helper()
+			protect := func(base string, rule *api.ApprovalRule) {
+				e.branch(base)
+				body := &api.CreateOrgBranchProtectionOption{CreateBranchProtectionOption: api.CreateBranchProtectionOption{
+					RuleName: base, BlockOnOfficialReviewRequests: true, ApprovalRules: []*api.ApprovalRule{rule},
+				}}
+				MakeRequest(t, NewRequestWithJSON(t, "POST", path, body).AddTokenAuth(owner.Token), http.StatusCreated)
+			}
+			protect(base+"-0", requestRule("Ask", 0, "", "user4"))
+			index := e.pr(base+"-0", "head-"+base+"-0", "a0", create(base+"0.txt", "a"))
+			require.Equal(t, []string{"user4"}, e.requested(index))
+			e.merge(index, http.StatusOK)
+
+			protect(base+"-1", requestRule("Gate", 1, "", "user4", "user28"))
+			index = e.pr(base+"-1", "head-"+base+"-1", "a1", create(base+"1.txt", "a"))
+			require.Equal(t, []string{"user28", "user4"}, e.requested(index))
+			MakeRequest(t, NewRequestWithJSON(t, "POST", fmt.Sprintf("%s/pulls/%d/reviews", e.api, index), &api.CreatePullReviewOptions{Event: api.ReviewStateApproved}).AddTokenAuth(user28.Token), http.StatusOK)
+			assert.Contains(t, e.merge(index, http.StatusMethodNotAllowed), "There are official review requests")
+		}
+
+		check("/api/v1/orgs/org3/branch_protections", "dr-adv-org")
+		t.Run("Project", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+			group, err := repo_model.CreateRepoGroup(t.Context(), unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3}), "dr-adv-project", "")
+			require.NoError(t, err)
+			require.NoError(t, repo_service.MoveRepository(t.Context(), unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2}), repo, group.ID))
+			check(fmt.Sprintf("/api/v1/orgs/org3/projects/%d/branch_protections", group.ID), "dr-adv-proj")
+		})
+	})
+}

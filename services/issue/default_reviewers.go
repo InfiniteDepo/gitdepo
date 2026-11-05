@@ -139,14 +139,14 @@ func DefaultReviewerRequests(ctx context.Context, issue *issues_model.Issue, pr 
 	return notifiers, nil
 }
 
-// requestUnofficially adds a review request with add and, unless official, clears its official flag, in one
-// transaction. The comment is nil if nothing was requested or the transaction failed.
+// requestUnofficially adds a review request with add and, unless official, makes it advisory, in one transaction.
+// The comment is nil if nothing was requested or the transaction failed.
 func requestUnofficially(ctx context.Context, official bool, add func(context.Context) (*issues_model.Comment, error)) (comment *issues_model.Comment, err error) {
 	err = db.WithTx(ctx, func(ctx context.Context) (err error) {
 		if comment, err = add(ctx); err != nil || comment == nil || official {
 			return err
 		}
-		return issues_model.ClearReviewOfficial(ctx, comment.ReviewID)
+		return issues_model.MarkReviewRequestAdvisory(ctx, comment.ReviewID)
 	})
 	if err != nil {
 		return nil, err

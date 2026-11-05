@@ -11,7 +11,7 @@ import (
 
 func init() {
 	registerMigration(&Migration{
-		Description: "add default reviewers (review requests and a source branch pattern) to approval rules",
+		Description: "add default reviewers (review requests and a source branch pattern) to approval rules, and advisory review requests",
 		Upgrade:     addApprovalRuleDefaultReviewers,
 	})
 }
@@ -37,6 +37,9 @@ func (v18zzrApprovalRule) TableName() string {
 }
 
 func addApprovalRuleDefaultReviewers(x *xorm.Engine) error {
-	_, err := x.SyncWithOptions(xorm.SyncOptions{IgnoreDropIndices: true}, new(v18zzrApprovalRule))
+	type Review struct {
+		Advisory bool `xorm:"NOT NULL DEFAULT false"`
+	}
+	_, err := x.SyncWithOptions(xorm.SyncOptions{IgnoreDropIndices: true}, new(v18zzrApprovalRule), new(Review))
 	return err
 }
