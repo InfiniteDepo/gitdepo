@@ -283,6 +283,9 @@ type swaggerParameterBodies struct {
 	ReviewDeploymentsOption api.ReviewDeploymentsOption
 
 	// in:body
+	CreateOrUpdateEnvironmentOption api.CreateOrUpdateEnvironmentOption
+
+	// in:body
 	CreateQuotaGroupOptions api.CreateQuotaGroupOptions
 
 	// in:body

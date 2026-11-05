@@ -939,6 +939,25 @@ func Routes() *web.Route {
 					reqOwner(unit.TypeActions),
 					repo.NewAction(),
 				)
+				// environments follow the repository's Actions secrets: the owner (or a site admin) manages them
+				m.Group("/actions/environments", func() {
+					m.Get("", repo.ListActionEnvironments)
+					m.Group("/{environment}", func() {
+						m.Combo("").Get(repo.GetActionEnvironment).
+							Put(mustNotBeArchived(), bind(api.CreateOrUpdateEnvironmentOption{}), repo.CreateOrUpdateActionEnvironment).
+							Delete(mustNotBeArchived(), repo.DeleteActionEnvironment)
+						m.Get("/secrets", repo.ListActionEnvironmentSecrets)
+						m.Combo("/secrets/{secretname}").
+							Put(mustNotBeArchived(), bind(api.CreateOrUpdateSecretOption{}), repo.CreateOrUpdateActionEnvironmentSecret).
+							Delete(mustNotBeArchived(), repo.DeleteActionEnvironmentSecret)
+						m.Get("/variables", repo.ListActionEnvironmentVariables)
+						m.Combo("/variables/{variablename}").
+							Get(repo.GetActionEnvironmentVariable).
+							Delete(mustNotBeArchived(), repo.DeleteActionEnvironmentVariable).
+							Post(mustNotBeArchived(), bind(api.CreateVariableOption{}), repo.CreateActionEnvironmentVariable).
+							Put(mustNotBeArchived(), bind(api.UpdateVariableOption{}), repo.UpdateActionEnvironmentVariable)
+					})
+				}, reqToken(), reqOwner(unit.TypeActions))
 				m.Group("/hooks/git", func() {
 					m.Combo("").Get(repo.ListGitHooks)
 					m.Group("/{id}", func() {
@@ -1038,6 +1057,7 @@ func Routes() *web.Route {
 						m.Post("/rerun", reqToken(), reqRepoWriter(unit.TypeActions), repo.RerunActionJob)
 						m.Get("/logs", repo.GetActionJobLogs)
 					})
+					m.Get("/deployments", repo.ListActionDeployments)
 					m.Group("/runs", func() {
 						m.Get("", repo.ListActionRuns)
 						m.Delete("", reqToken(), reqAdmin(unit.TypeActions), mustNotBeArchived(), repo.DeleteOldActionRuns)

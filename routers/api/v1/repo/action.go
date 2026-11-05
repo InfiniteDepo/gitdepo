@@ -58,30 +58,7 @@ func (Action) ListActionsSecrets(ctx *context.APIContext) {
 	//     "$ref": "#/responses/SecretList"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
-
-	repo := ctx.Repo().Repository
-
-	opts := &secret_model.FindSecretsOptions{
-		RepoID:      repo.ID,
-		ListOptions: utils.GetListOptions(ctx),
-	}
-
-	secrets, count, err := db.FindAndCount[secret_model.Secret](ctx, opts)
-	if err != nil {
-		ctx.InternalServerError(err)
-		return
-	}
-
-	apiSecrets := make([]*api.Secret, len(secrets))
-	for k, v := range secrets {
-		apiSecrets[k] = &api.Secret{
-			Name:    v.Name,
-			Created: v.CreatedUnix.AsTime(),
-		}
-	}
-
-	ctx.SetTotalCountHeader(count)
-	ctx.JSON(http.StatusOK, apiSecrets)
+	listRepoSecrets(ctx, 0)
 }
 
 // create or update one secret of the repository
@@ -122,28 +99,7 @@ func (Action) CreateOrUpdateSecret(ctx *context.APIContext) {
 	//     "$ref": "#/responses/error"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
-
-	repo := ctx.Repo().Repository
-
-	opt := web.GetForm(ctx).(*api.CreateOrUpdateSecretOption)
-
-	_, created, err := secrets_service.CreateOrUpdateSecret(ctx, 0, 0, repo.ID, 0, ctx.Params("secretname"), opt.Data)
-	if err != nil {
-		if errors.Is(err, util.ErrInvalidArgument) {
-			ctx.Error(http.StatusBadRequest, "CreateOrUpdateSecret", err)
-		} else if errors.Is(err, util.ErrNotExist) {
-			ctx.Error(http.StatusNotFound, "CreateOrUpdateSecret", err)
-		} else {
-			ctx.Error(http.StatusInternalServerError, "CreateOrUpdateSecret", err)
-		}
-		return
-	}
-
-	if created {
-		ctx.Status(http.StatusCreated)
-	} else {
-		ctx.Status(http.StatusNoContent)
-	}
+	putRepoSecret(ctx, 0)
 }
 
 // DeleteSecret delete one secret of the repository
@@ -178,22 +134,7 @@ func (Action) DeleteSecret(ctx *context.APIContext) {
 	//     "$ref": "#/responses/error"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
-
-	repo := ctx.Repo().Repository
-
-	err := secrets_service.DeleteSecretByName(ctx, 0, 0, repo.ID, 0, ctx.Params("secretname"))
-	if err != nil {
-		if errors.Is(err, util.ErrInvalidArgument) {
-			ctx.Error(http.StatusBadRequest, "DeleteSecret", err)
-		} else if errors.Is(err, util.ErrNotExist) {
-			ctx.Error(http.StatusNotFound, "DeleteSecret", err)
-		} else {
-			ctx.Error(http.StatusInternalServerError, "DeleteSecret", err)
-		}
-		return
-	}
-
-	ctx.Status(http.StatusNoContent)
+	deleteRepoSecret(ctx, 0)
 }
 
 // GetVariable get a repo-level variable
@@ -226,27 +167,7 @@ func (Action) GetVariable(ctx *context.APIContext) {
 	//     "$ref": "#/responses/error"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
-	v, err := actions_service.GetVariable(ctx, actions_model.FindVariablesOpts{
-		RepoID: ctx.Repo().Repository.ID,
-		Name:   ctx.Params("variablename"),
-	})
-	if err != nil {
-		if errors.Is(err, util.ErrNotExist) {
-			ctx.Error(http.StatusNotFound, "GetVariable", err)
-		} else {
-			ctx.Error(http.StatusInternalServerError, "GetVariable", err)
-		}
-		return
-	}
-
-	variable := &api.ActionVariable{
-		OwnerID: v.OwnerID,
-		RepoID:  v.RepoID,
-		Name:    v.Name,
-		Data:    v.Data,
-	}
-
-	ctx.JSON(http.StatusOK, variable)
+	getRepoVariable(ctx, 0)
 }
 
 // DeleteVariable delete a repo-level variable
@@ -279,19 +200,7 @@ func (Action) DeleteVariable(ctx *context.APIContext) {
 	//     "$ref": "#/responses/error"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
-
-	if err := actions_service.DeleteVariableByName(ctx, 0, 0, ctx.Repo().Repository.ID, 0, ctx.Params("variablename")); err != nil {
-		if errors.Is(err, util.ErrInvalidArgument) {
-			ctx.Error(http.StatusBadRequest, "DeleteVariableByName", err)
-		} else if errors.Is(err, util.ErrNotExist) {
-			ctx.Error(http.StatusNotFound, "DeleteVariableByName", err)
-		} else {
-			ctx.Error(http.StatusInternalServerError, "DeleteVariableByName", err)
-		}
-		return
-	}
-
-	ctx.Status(http.StatusNoContent)
+	deleteRepoVariable(ctx, 0)
 }
 
 // CreateVariable create a repo-level variable
@@ -330,35 +239,7 @@ func (Action) CreateVariable(ctx *context.APIContext) {
 	//     "$ref": "#/responses/error"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
-
-	opt := web.GetForm(ctx).(*api.CreateVariableOption)
-
-	repoID := ctx.Repo().Repository.ID
-	variableName := ctx.Params("variablename")
-
-	v, err := actions_service.GetVariable(ctx, actions_model.FindVariablesOpts{
-		RepoID: repoID,
-		Name:   variableName,
-	})
-	if err != nil && !errors.Is(err, util.ErrNotExist) {
-		ctx.Error(http.StatusInternalServerError, "GetVariable", err)
-		return
-	}
-	if v != nil && v.ID > 0 {
-		ctx.Error(http.StatusConflict, "VariableNameAlreadyExists", util.NewAlreadyExistErrorf("variable name %s already exists", variableName))
-		return
-	}
-
-	if _, err := actions_service.CreateVariable(ctx, 0, 0, repoID, 0, variableName, opt.Value); err != nil {
-		if errors.Is(err, util.ErrInvalidArgument) {
-			ctx.Error(http.StatusBadRequest, "CreateVariable", err)
-		} else {
-			ctx.Error(http.StatusInternalServerError, "CreateVariable", err)
-		}
-		return
-	}
-
-	ctx.Status(http.StatusNoContent)
+	createRepoVariable(ctx, 0)
 }
 
 // UpdateVariable update a repo-level variable
@@ -397,35 +278,7 @@ func (Action) UpdateVariable(ctx *context.APIContext) {
 	//     "$ref": "#/responses/error"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
-
-	opt := web.GetForm(ctx).(*api.UpdateVariableOption)
-
-	v, err := actions_service.GetVariable(ctx, actions_model.FindVariablesOpts{
-		RepoID: ctx.Repo().Repository.ID,
-		Name:   ctx.Params("variablename"),
-	})
-	if err != nil {
-		if errors.Is(err, util.ErrNotExist) {
-			ctx.Error(http.StatusNotFound, "GetVariable", err)
-		} else {
-			ctx.Error(http.StatusInternalServerError, "GetVariable", err)
-		}
-		return
-	}
-
-	if opt.Name == "" {
-		opt.Name = ctx.Params("variablename")
-	}
-	if _, err := actions_service.UpdateVariable(ctx, v.ID, 0, 0, ctx.Repo().Repository.ID, 0, opt.Name, opt.Value); err != nil {
-		if errors.Is(err, util.ErrInvalidArgument) {
-			ctx.Error(http.StatusBadRequest, "UpdateVariable", err)
-		} else {
-			ctx.Error(http.StatusInternalServerError, "UpdateVariable", err)
-		}
-		return
-	}
-
-	ctx.Status(http.StatusNoContent)
+	updateRepoVariable(ctx, 0)
 }
 
 // ListVariables list repo-level variables
@@ -461,10 +314,189 @@ func (Action) ListVariables(ctx *context.APIContext) {
 	//     "$ref": "#/responses/error"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
+	listRepoVariables(ctx, 0)
+}
 
+// The bodies of the secrets and variables routes of a repository (environmentID 0) and of its environments.
+
+func listRepoSecrets(ctx *context.APIContext, environmentID int64) {
+	repo := ctx.Repo().Repository
+
+	opts := &secret_model.FindSecretsOptions{
+		RepoID:        repo.ID,
+		EnvironmentID: environmentID,
+		ListOptions:   utils.GetListOptions(ctx),
+	}
+
+	secrets, count, err := db.FindAndCount[secret_model.Secret](ctx, opts)
+	if err != nil {
+		ctx.InternalServerError(err)
+		return
+	}
+
+	apiSecrets := make([]*api.Secret, len(secrets))
+	for k, v := range secrets {
+		apiSecrets[k] = &api.Secret{
+			Name:    v.Name,
+			Created: v.CreatedUnix.AsTime(),
+		}
+	}
+
+	ctx.SetTotalCountHeader(count)
+	ctx.JSON(http.StatusOK, apiSecrets)
+}
+
+func putRepoSecret(ctx *context.APIContext, environmentID int64) {
+	repo := ctx.Repo().Repository
+
+	opt := web.GetForm(ctx).(*api.CreateOrUpdateSecretOption)
+
+	_, created, err := secrets_service.CreateOrUpdateSecret(ctx, 0, 0, repo.ID, environmentID, ctx.Params("secretname"), opt.Data)
+	if err != nil {
+		if errors.Is(err, util.ErrInvalidArgument) {
+			ctx.Error(http.StatusBadRequest, "CreateOrUpdateSecret", err)
+		} else if errors.Is(err, util.ErrNotExist) {
+			ctx.Error(http.StatusNotFound, "CreateOrUpdateSecret", err)
+		} else {
+			ctx.Error(http.StatusInternalServerError, "CreateOrUpdateSecret", err)
+		}
+		return
+	}
+
+	if created {
+		ctx.Status(http.StatusCreated)
+	} else {
+		ctx.Status(http.StatusNoContent)
+	}
+}
+
+func deleteRepoSecret(ctx *context.APIContext, environmentID int64) {
+	repo := ctx.Repo().Repository
+
+	err := secrets_service.DeleteSecretByName(ctx, 0, 0, repo.ID, environmentID, ctx.Params("secretname"))
+	if err != nil {
+		if errors.Is(err, util.ErrInvalidArgument) {
+			ctx.Error(http.StatusBadRequest, "DeleteSecret", err)
+		} else if errors.Is(err, util.ErrNotExist) {
+			ctx.Error(http.StatusNotFound, "DeleteSecret", err)
+		} else {
+			ctx.Error(http.StatusInternalServerError, "DeleteSecret", err)
+		}
+		return
+	}
+
+	ctx.Status(http.StatusNoContent)
+}
+
+func getRepoVariable(ctx *context.APIContext, environmentID int64) {
+	v, err := actions_service.GetVariable(ctx, actions_model.FindVariablesOpts{
+		RepoID:        ctx.Repo().Repository.ID,
+		EnvironmentID: environmentID,
+		Name:          ctx.Params("variablename"),
+	})
+	if err != nil {
+		if errors.Is(err, util.ErrNotExist) {
+			ctx.Error(http.StatusNotFound, "GetVariable", err)
+		} else {
+			ctx.Error(http.StatusInternalServerError, "GetVariable", err)
+		}
+		return
+	}
+
+	variable := &api.ActionVariable{
+		OwnerID: v.OwnerID,
+		RepoID:  v.RepoID,
+		Name:    v.Name,
+		Data:    v.Data,
+	}
+
+	ctx.JSON(http.StatusOK, variable)
+}
+
+func deleteRepoVariable(ctx *context.APIContext, environmentID int64) {
+	if err := actions_service.DeleteVariableByName(ctx, 0, 0, ctx.Repo().Repository.ID, environmentID, ctx.Params("variablename")); err != nil {
+		if errors.Is(err, util.ErrInvalidArgument) {
+			ctx.Error(http.StatusBadRequest, "DeleteVariableByName", err)
+		} else if errors.Is(err, util.ErrNotExist) {
+			ctx.Error(http.StatusNotFound, "DeleteVariableByName", err)
+		} else {
+			ctx.Error(http.StatusInternalServerError, "DeleteVariableByName", err)
+		}
+		return
+	}
+
+	ctx.Status(http.StatusNoContent)
+}
+
+func createRepoVariable(ctx *context.APIContext, environmentID int64) {
+	opt := web.GetForm(ctx).(*api.CreateVariableOption)
+
+	repoID := ctx.Repo().Repository.ID
+	variableName := ctx.Params("variablename")
+
+	v, err := actions_service.GetVariable(ctx, actions_model.FindVariablesOpts{
+		RepoID:        repoID,
+		EnvironmentID: environmentID,
+		Name:          variableName,
+	})
+	if err != nil && !errors.Is(err, util.ErrNotExist) {
+		ctx.Error(http.StatusInternalServerError, "GetVariable", err)
+		return
+	}
+	if v != nil && v.ID > 0 {
+		ctx.Error(http.StatusConflict, "VariableNameAlreadyExists", util.NewAlreadyExistErrorf("variable name %s already exists", variableName))
+		return
+	}
+
+	if _, err := actions_service.CreateVariable(ctx, 0, 0, repoID, environmentID, variableName, opt.Value); err != nil {
+		if errors.Is(err, util.ErrInvalidArgument) {
+			ctx.Error(http.StatusBadRequest, "CreateVariable", err)
+		} else {
+			ctx.Error(http.StatusInternalServerError, "CreateVariable", err)
+		}
+		return
+	}
+
+	ctx.Status(http.StatusNoContent)
+}
+
+func updateRepoVariable(ctx *context.APIContext, environmentID int64) {
+	opt := web.GetForm(ctx).(*api.UpdateVariableOption)
+
+	v, err := actions_service.GetVariable(ctx, actions_model.FindVariablesOpts{
+		RepoID:        ctx.Repo().Repository.ID,
+		EnvironmentID: environmentID,
+		Name:          ctx.Params("variablename"),
+	})
+	if err != nil {
+		if errors.Is(err, util.ErrNotExist) {
+			ctx.Error(http.StatusNotFound, "GetVariable", err)
+		} else {
+			ctx.Error(http.StatusInternalServerError, "GetVariable", err)
+		}
+		return
+	}
+
+	if opt.Name == "" {
+		opt.Name = ctx.Params("variablename")
+	}
+	if _, err := actions_service.UpdateVariable(ctx, v.ID, 0, 0, ctx.Repo().Repository.ID, environmentID, opt.Name, opt.Value); err != nil {
+		if errors.Is(err, util.ErrInvalidArgument) {
+			ctx.Error(http.StatusBadRequest, "UpdateVariable", err)
+		} else {
+			ctx.Error(http.StatusInternalServerError, "UpdateVariable", err)
+		}
+		return
+	}
+
+	ctx.Status(http.StatusNoContent)
+}
+
+func listRepoVariables(ctx *context.APIContext, environmentID int64) {
 	vars, count, err := db.FindAndCount[actions_model.ActionVariable](ctx, &actions_model.FindVariablesOpts{
-		RepoID:      ctx.Repo().Repository.ID,
-		ListOptions: utils.GetListOptions(ctx),
+		RepoID:        ctx.Repo().Repository.ID,
+		EnvironmentID: environmentID,
+		ListOptions:   utils.GetListOptions(ctx),
 	})
 	if err != nil {
 		ctx.Error(http.StatusInternalServerError, "FindVariables", err)
