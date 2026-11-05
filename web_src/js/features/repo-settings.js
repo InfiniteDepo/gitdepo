@@ -127,8 +127,8 @@ function globsWithinLimits(pattern) {
     if (c === '{') {
       braces++;
       if (++depth > 1) return false;
-    } else if (c === '}') {
-      if (--depth < 0) return false;
+    } else if (c === '}' && --depth < 0) {
+      return false;
     }
   }
   return new TextEncoder().encode(p).length <= 255 && (p.match(/[*?]/g) ?? []).length <= 6 && braces <= 3;
