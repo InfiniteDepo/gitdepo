@@ -57,56 +57,74 @@ func FindEnvironmentReviewers(ctx context.Context, environmentID int64) ([]*Acti
 	return reviewers, db.GetEngine(ctx).Where("environment_id = ?", environmentID).OrderBy("team_id, user_id").Find(&reviewers)
 }
 
-// ReplaceEnvironmentReviewers makes reviewers the whole list of the environment, sets whether the environment
-// requires reviews (it does when the list is not empty) and records the change. It checks only the shape of the list (at
-// most MaxEnvironmentReviewers, each entry a user or a team, no duplicate); the caller checks that they exist and that a
-// team belongs to the owner of the repository. Editing the list is how the rule is changed, also to none at all.
-func ReplaceEnvironmentReviewers(ctx context.Context, e *ActionEnvironment, reviewers []ActionEnvironmentReviewer) error {
+// reviewerListKeys checks the shape of a list of reviewers (at most MaxEnvironmentReviewers, each a user or a team,
+// none twice) and returns their sorted keys.
+func reviewerListKeys(reviewers []ActionEnvironmentReviewer) ([]string, error) {
 	if len(reviewers) > MaxEnvironmentReviewers {
-		return util.NewInvalidArgumentErrorf("too many reviewers")
+		return nil, util.NewInvalidArgumentErrorf("too many reviewers")
 	}
 	keys := make([]string, 0, len(reviewers))
 	for _, r := range reviewers {
 		if (r.UserID > 0) == (r.TeamID > 0) || r.UserID < 0 || r.TeamID < 0 {
-			return util.NewInvalidArgumentErrorf("a reviewer is a user or a team")
+			return nil, util.NewInvalidArgumentErrorf("a reviewer is a user or a team")
 		}
 		if slices.Contains(keys, r.Key()) {
-			return util.NewInvalidArgumentErrorf("a reviewer is listed once")
+			return nil, util.NewInvalidArgumentErrorf("a reviewer is listed once")
 		}
 		keys = append(keys, r.Key())
 	}
 	slices.Sort(keys)
-	required := len(keys) > 0
-	return db.WithTx(ctx, func(ctx context.Context) error {
-		if err := LockEnvironment(ctx, e.RepoID, e.ID); err != nil { // concurrent edits and a delete run in order
+	return keys, nil
+}
+
+// insertReviewers inserts the reviewers of the environment of repository repoID, in the caller's transaction after the
+// environment's lock, which the deletion of a user or team and a transfer take to remove their rows: a user or team
+// that is gone by now, or a team the repository's owner doesn't have, is an invalid argument, so no row is left that
+// nobody can be.
+func insertReviewers(ctx context.Context, repoID, environmentID int64, reviewers []ActionEnvironmentReviewer) error {
+	var userIDs, teamIDs []int64
+	for _, r := range reviewers {
+		if r.TeamID > 0 {
+			teamIDs = append(teamIDs, r.TeamID)
+		} else {
+			userIDs = append(userIDs, r.UserID)
+		}
+	}
+	users, teams := int64(0), int64(0)
+	var err error
+	if len(userIDs) > 0 {
+		if users, err = db.GetEngine(ctx).Table("user").In("id", userIDs).Count(); err != nil {
 			return err
 		}
-		stored, err := GetRepoEnvironmentByID(ctx, e.RepoID, e.ID)
-		if err != nil {
+	}
+	if len(teamIDs) > 0 {
+		if teams, err = db.GetEngine(ctx).Table("team").In("id", teamIDs).
+			And("org_id = (SELECT owner_id FROM repository WHERE id = ?)", repoID).Count(); err != nil {
 			return err
 		}
-		before, err := FindEnvironmentReviewers(ctx, stored.ID)
-		if err != nil {
+	}
+	if users != int64(len(userIDs)) || teams != int64(len(teamIDs)) {
+		return util.NewInvalidArgumentErrorf("unknown reviewer")
+	}
+	for _, r := range reviewers {
+		if err := db.Insert(ctx, &ActionEnvironmentReviewer{EnvironmentID: environmentID, UserID: r.UserID, TeamID: r.TeamID}); err != nil {
 			return err
 		}
-		old := reviewerKeys(before)
-		if slices.Equal(old, keys) && stored.ReviewsRequired == required {
-			return nil
-		}
-		if _, err := db.GetEngine(ctx).Where("environment_id = ?", stored.ID).Delete(new(ActionEnvironmentReviewer)); err != nil {
-			return err
-		}
-		for _, r := range reviewers {
-			if err := db.Insert(ctx, &ActionEnvironmentReviewer{EnvironmentID: stored.ID, UserID: r.UserID, TeamID: r.TeamID}); err != nil {
-				return err
-			}
-		}
-		if _, err := db.Exec(ctx, "UPDATE `action_environment` SET reviews_required = ? WHERE id = ?", required, stored.ID); err != nil {
-			return err
-		}
-		return recordEnvironment(ctx, audit_model.LevelActions{Repo: "repo.actions_env.updated"}, stored,
-			audit_model.Changes(map[string]any{"reviewers": old, "reviews_required": stored.ReviewsRequired}, map[string]any{"reviewers": keys, "reviews_required": required}))
-	})
+	}
+	return nil
+}
+
+// FindReviewersOfEnvironments returns the reviewers of the environments by environment ID, users first.
+func FindReviewersOfEnvironments(ctx context.Context, environmentIDs []int64) (map[int64][]*ActionEnvironmentReviewer, error) {
+	var rows []*ActionEnvironmentReviewer
+	if err := db.GetEngine(ctx).In("environment_id", environmentIDs).OrderBy("environment_id, team_id, user_id").Find(&rows); err != nil {
+		return nil, err
+	}
+	out := make(map[int64][]*ActionEnvironmentReviewer, len(environmentIDs))
+	for _, r := range rows {
+		out[r.EnvironmentID] = append(out[r.EnvironmentID], r)
+	}
+	return out, nil
 }
 
 // RemoveReviewers removes the reviewer rows that cond selects (UserReviewerCond and TeamReviewerCond for a deleted

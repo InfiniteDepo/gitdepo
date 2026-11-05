@@ -122,8 +122,8 @@ func TestActionsEnvironmentReviewAttacks(t *testing.T) {
 			if mutate != nil {
 				mutate(e)
 			}
-			require.NoError(t, actions_model.CreateEnvironment(sctx, e))
-			require.NoError(t, actions_service.SetEnvironmentReviewers(sctx, e, reviewers, nil))
+			require.NoError(t, actions_model.CreateEnvironment(sctx, e, nil))
+			require.NoError(t, setEnvironmentReviewers(sctx, e, reviewers, nil))
 			return e
 		}
 		base := fmt.Sprintf("/api/v1/repos/%s/%s/actions/runs", user2.Name, repo.Name)

@@ -5228,6 +5228,9 @@
           },
           "404": {
             "$ref": "#/responses/notFound"
+          },
+          "409": {
+            "description": "a variable of the new name exists"
           }
         }
       },
@@ -10640,6 +10643,763 @@
         }
       }
     },
+    "/repos/{owner}/{repo}/actions/deployments": {
+      "get": {
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "repository"
+        ],
+        "summary": "List the deployments of a repository, newest first",
+        "operationId": "repoListActionDeployments",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "owner of the repository",
+            "name": "owner",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the repository",
+            "name": "repo",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "only the deployments to the environment of that name (ignoring case)",
+            "name": "environment",
+            "in": "query"
+          },
+          {
+            "type": "integer",
+            "description": "page number of results to return (1-based)",
+            "name": "page",
+            "in": "query"
+          },
+          {
+            "type": "integer",
+            "description": "page size of results",
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/ActionDeploymentList"
+          },
+          "403": {
+            "$ref": "#/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/notFound"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/actions/environments": {
+      "get": {
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "repository"
+        ],
+        "summary": "List the deployment environments of a repository with their protection rules",
+        "operationId": "repoListActionEnvironments",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "owner of the repository",
+            "name": "owner",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the repository",
+            "name": "repo",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "integer",
+            "description": "page number of results to return (1-based)",
+            "name": "page",
+            "in": "query"
+          },
+          {
+            "type": "integer",
+            "description": "page size of results",
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/ActionEnvironmentList"
+          },
+          "403": {
+            "$ref": "#/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/notFound"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/actions/environments/{environment}": {
+      "get": {
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "repository"
+        ],
+        "summary": "Get a deployment environment of a repository with its protection rules",
+        "operationId": "repoGetActionEnvironment",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "owner of the repository",
+            "name": "owner",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the repository",
+            "name": "repo",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the environment, matched ignoring case",
+            "name": "environment",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/ActionEnvironment"
+          },
+          "403": {
+            "$ref": "#/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/notFound"
+          }
+        }
+      },
+      "put": {
+        "description": "The body is the whole set of rules and every field is required (a field left out is a 422): an empty list, 0 or false sets no rule, so an empty reviewers list removes them and the jobs that wait for a review are released. An environment whose name differs only in case is the same environment and keeps its name. Every change is recorded in the audit log. Only a person's own credential changes the rules: a request under sudo, with an OAuth2 grant or with an authorized integration is a 403. An unknown reviewer, or one the caller can't see, is a 422; so is an invalid rule.\n",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "repository"
+        ],
+        "summary": "Create a deployment environment of a repository, or replace the protection rules of the one with that name",
+        "operationId": "repoCreateOrUpdateActionEnvironment",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "owner of the repository",
+            "name": "owner",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the repository",
+            "name": "repo",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the environment, matched ignoring case",
+            "name": "environment",
+            "in": "path",
+            "required": true
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "$ref": "#/definitions/CreateOrUpdateEnvironmentOption"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/ActionEnvironment"
+          },
+          "201": {
+            "$ref": "#/responses/ActionEnvironment"
+          },
+          "403": {
+            "$ref": "#/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/notFound"
+          },
+          "422": {
+            "$ref": "#/responses/validationError"
+          },
+          "423": {
+            "$ref": "#/responses/repoArchivedError"
+          }
+        }
+      },
+      "delete": {
+        "description": "Its deployments stay as history. The jobs that wait for it, or were released by it and no runner took yet, fail. A workflow that names the environment again creates it without rules. Only a person's own credential deletes it: a request under sudo, with an OAuth2 grant or with an authorized integration is a 403.\n",
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "repository"
+        ],
+        "summary": "Delete a deployment environment of a repository with its secrets, variables and reviewers",
+        "operationId": "repoDeleteActionEnvironment",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "owner of the repository",
+            "name": "owner",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the repository",
+            "name": "repo",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the environment, matched ignoring case",
+            "name": "environment",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "204": {
+            "$ref": "#/responses/empty"
+          },
+          "403": {
+            "$ref": "#/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/notFound"
+          },
+          "423": {
+            "$ref": "#/responses/repoArchivedError"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/actions/environments/{environment}/secrets": {
+      "get": {
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "repository"
+        ],
+        "summary": "List the secrets of a deployment environment (never their values)",
+        "operationId": "repoListActionEnvironmentSecrets",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "owner of the repository",
+            "name": "owner",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the repository",
+            "name": "repo",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the environment, matched ignoring case",
+            "name": "environment",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "integer",
+            "description": "page number of results to return (1-based)",
+            "name": "page",
+            "in": "query"
+          },
+          {
+            "type": "integer",
+            "description": "page size of results",
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/SecretList"
+          },
+          "404": {
+            "$ref": "#/responses/notFound"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/actions/environments/{environment}/secrets/{secretname}": {
+      "put": {
+        "description": "An invalid name is a 400, as for the secrets of a repository. Only a person's own credential changes the secrets of an environment: a request under sudo, with an OAuth2 grant or with an authorized integration is a 403.\n",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "repository"
+        ],
+        "summary": "Create or update a secret of a deployment environment",
+        "operationId": "updateRepoEnvironmentSecret",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "owner of the repository",
+            "name": "owner",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the repository",
+            "name": "repo",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the environment, matched ignoring case",
+            "name": "environment",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the secret",
+            "name": "secretname",
+            "in": "path",
+            "required": true
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "$ref": "#/definitions/CreateOrUpdateSecretOption"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "response when creating a secret"
+          },
+          "204": {
+            "description": "response when updating a secret"
+          },
+          "400": {
+            "$ref": "#/responses/error"
+          },
+          "403": {
+            "$ref": "#/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/notFound"
+          },
+          "423": {
+            "$ref": "#/responses/repoArchivedError"
+          }
+        }
+      },
+      "delete": {
+        "description": "An invalid name is a 400, as for the secrets of a repository. Only a person's own credential changes the secrets of an environment: a request under sudo, with an OAuth2 grant or with an authorized integration is a 403.\n",
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "repository"
+        ],
+        "summary": "Delete a secret of a deployment environment",
+        "operationId": "deleteRepoEnvironmentSecret",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "owner of the repository",
+            "name": "owner",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the repository",
+            "name": "repo",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the environment, matched ignoring case",
+            "name": "environment",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the secret",
+            "name": "secretname",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "response when deleting a secret"
+          },
+          "400": {
+            "$ref": "#/responses/error"
+          },
+          "403": {
+            "$ref": "#/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/notFound"
+          },
+          "423": {
+            "$ref": "#/responses/repoArchivedError"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/actions/environments/{environment}/variables": {
+      "get": {
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "repository"
+        ],
+        "summary": "List the variables of a deployment environment",
+        "operationId": "getRepoEnvironmentVariablesList",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "owner of the repository",
+            "name": "owner",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the repository",
+            "name": "repo",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the environment, matched ignoring case",
+            "name": "environment",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "integer",
+            "description": "page number of results to return (1-based)",
+            "name": "page",
+            "in": "query"
+          },
+          {
+            "type": "integer",
+            "description": "page size of results",
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/VariableList"
+          },
+          "400": {
+            "$ref": "#/responses/error"
+          },
+          "404": {
+            "$ref": "#/responses/notFound"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/actions/environments/{environment}/variables/{variablename}": {
+      "get": {
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "repository"
+        ],
+        "summary": "Get a variable of a deployment environment",
+        "operationId": "getRepoEnvironmentVariable",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "owner of the repository",
+            "name": "owner",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the repository",
+            "name": "repo",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the environment, matched ignoring case",
+            "name": "environment",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the variable",
+            "name": "variablename",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/ActionVariable"
+          },
+          "400": {
+            "$ref": "#/responses/error"
+          },
+          "404": {
+            "$ref": "#/responses/notFound"
+          }
+        }
+      },
+      "put": {
+        "description": "An invalid name is a 400, as for the variables of a repository. Only a person's own credential changes the variables of an environment: a request under sudo, with an OAuth2 grant or with an authorized integration is a 403.\n",
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "repository"
+        ],
+        "summary": "Update a variable of a deployment environment",
+        "operationId": "updateRepoEnvironmentVariable",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "owner of the repository",
+            "name": "owner",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the repository",
+            "name": "repo",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the environment, matched ignoring case",
+            "name": "environment",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the variable",
+            "name": "variablename",
+            "in": "path",
+            "required": true
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "$ref": "#/definitions/UpdateVariableOption"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "response when updating a variable"
+          },
+          "400": {
+            "$ref": "#/responses/error"
+          },
+          "403": {
+            "$ref": "#/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/notFound"
+          },
+          "409": {
+            "description": "a variable of the new name exists"
+          },
+          "423": {
+            "$ref": "#/responses/repoArchivedError"
+          }
+        }
+      },
+      "post": {
+        "description": "An invalid name is a 400, as for the variables of a repository. Only a person's own credential changes the variables of an environment: a request under sudo, with an OAuth2 grant or with an authorized integration is a 403.\n",
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "repository"
+        ],
+        "summary": "Create a variable of a deployment environment",
+        "operationId": "createRepoEnvironmentVariable",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "owner of the repository",
+            "name": "owner",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the repository",
+            "name": "repo",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the environment, matched ignoring case",
+            "name": "environment",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the variable",
+            "name": "variablename",
+            "in": "path",
+            "required": true
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "$ref": "#/definitions/CreateVariableOption"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "response when creating a variable"
+          },
+          "400": {
+            "$ref": "#/responses/error"
+          },
+          "403": {
+            "$ref": "#/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/notFound"
+          },
+          "409": {
+            "description": "a variable of that name exists"
+          },
+          "423": {
+            "$ref": "#/responses/repoArchivedError"
+          }
+        }
+      },
+      "delete": {
+        "description": "An invalid name is a 400, as for the variables of a repository. Only a person's own credential changes the variables of an environment: a request under sudo, with an OAuth2 grant or with an authorized integration is a 403.\n",
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "repository"
+        ],
+        "summary": "Delete a variable of a deployment environment",
+        "operationId": "deleteRepoEnvironmentVariable",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "owner of the repository",
+            "name": "owner",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the repository",
+            "name": "repo",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the environment, matched ignoring case",
+            "name": "environment",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the variable",
+            "name": "variablename",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "response when deleting a variable"
+          },
+          "400": {
+            "$ref": "#/responses/error"
+          },
+          "403": {
+            "$ref": "#/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/notFound"
+          },
+          "423": {
+            "$ref": "#/responses/repoArchivedError"
+          }
+        }
+      }
+    },
     "/repos/{owner}/{repo}/actions/jobs/{job_id}": {
       "get": {
         "description": "Returns the workflow job plus the ordered list of steps that make up its execution. The `number` field on each step is the value accepted by the `?step=` filter on the job-logs endpoint; `number=0` is always \"Set up job\" and the last index is always \"Complete job\", with the workflow's real steps in between. A job that has never been picked up by a runner returns the job metadata with `steps` omitted.\n",
@@ -12319,6 +13079,9 @@
           },
           "404": {
             "$ref": "#/responses/notFound"
+          },
+          "409": {
+            "description": "a variable of the new name exists"
           }
         }
       },
@@ -27718,6 +28481,9 @@
           },
           "404": {
             "$ref": "#/responses/notFound"
+          },
+          "409": {
+            "description": "a variable of the new name exists"
           }
         }
       },
@@ -31271,6 +32037,10 @@
           "format": "int64",
           "x-go-name": "Attempt"
         },
+        "commit_sha": {
+          "type": "string",
+          "x-go-name": "CommitSHA"
+        },
         "created_at": {
           "type": "string",
           "format": "date-time",
@@ -31280,6 +32050,11 @@
           "description": "the name of the environment, empty if the job's environment name was invalid",
           "type": "string",
           "x-go-name": "Environment"
+        },
+        "environment_url": {
+          "description": "the URL the workflow gave for the environment",
+          "type": "string",
+          "x-go-name": "EnvironmentURL"
         },
         "id": {
           "type": "integer",
@@ -31300,6 +32075,11 @@
           "description": "the short code why the deployment was refused",
           "type": "string",
           "x-go-name": "Reason"
+        },
+        "ref": {
+          "description": "the ref and commit that the run deploys",
+          "type": "string",
+          "x-go-name": "Ref"
         },
         "release_after": {
           "description": "when the wait timer ends",
@@ -31323,10 +32103,23 @@
         "reviewers": {
           "$ref": "#/definitions/ActionDeploymentReviewers"
         },
+        "run_id": {
+          "description": "the run and its page",
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "RunID"
+        },
+        "run_url": {
+          "type": "string",
+          "x-go-name": "RunURL"
+        },
         "status": {
           "description": "waiting_timer, waiting_review, released, refused, cancelled, rejected or expired; an approved deployment waits\nfor its wait timer as waiting_timer, with reviewed_by set",
           "type": "string",
           "x-go-name": "Status"
+        },
+        "triggered_by": {
+          "$ref": "#/definitions/User"
         }
       },
       "x-go-package": "forgejo.org/modules/structs"
@@ -31351,6 +32144,153 @@
           "type": "integer",
           "format": "int64",
           "x-go-name": "Users"
+        }
+      },
+      "x-go-package": "forgejo.org/modules/structs"
+    },
+    "ActionEnvironment": {
+      "description": "ActionEnvironment is a deployment environment of a repository and its protection rules",
+      "type": "object",
+      "properties": {
+        "allowed_workflows": {
+          "description": "patterns of the workflow files (such as deploy-*.yml) whose runs may deploy; empty means every workflow",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-name": "AllowedWorkflows"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "x-go-name": "Created"
+        },
+        "created_by_workflow": {
+          "description": "a workflow named the environment before it existed and it was created without rules",
+          "type": "boolean",
+          "x-go-name": "CreatedByWorkflow"
+        },
+        "id": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "ID"
+        },
+        "last_deployment": {
+          "$ref": "#/definitions/ActionDeployment"
+        },
+        "name": {
+          "type": "string",
+          "x-go-name": "Name"
+        },
+        "prevent_self_review": {
+          "description": "the user who triggered the run can't approve its deployment",
+          "type": "boolean",
+          "x-go-name": "PreventSelfReview"
+        },
+        "ref_patterns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ActionEnvironmentRefPattern"
+          },
+          "x-go-name": "RefPatterns"
+        },
+        "ref_policy": {
+          "description": "which refs may deploy: any, protected_branches or patterns",
+          "type": "string",
+          "enum": [
+            "any",
+            "protected_branches",
+            "patterns"
+          ],
+          "x-go-name": "RefPolicy"
+        },
+        "reviewers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ActionEnvironmentReviewer"
+          },
+          "x-go-name": "Reviewers"
+        },
+        "reviews_required": {
+          "description": "whether a deployment needs an approval; it stays true when every listed reviewer was deleted, until the\nreviewers are edited",
+          "type": "boolean",
+          "x-go-name": "ReviewsRequired"
+        },
+        "runner_labels": {
+          "description": "labels a runner needs to run a job of the environment",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-name": "RunnerLabels"
+        },
+        "secrets_count": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "SecretsCount"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "x-go-name": "Updated"
+        },
+        "variables_count": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "VariablesCount"
+        },
+        "wait_timer": {
+          "description": "minutes a job waits before it starts, counted from when it is ready, at the same time as the review",
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "WaitTimer"
+        }
+      },
+      "x-go-package": "forgejo.org/modules/structs"
+    },
+    "ActionEnvironmentRefPattern": {
+      "description": "ActionEnvironmentRefPattern is a pattern of the refs that may deploy to an environment",
+      "type": "object",
+      "properties": {
+        "pattern": {
+          "description": "matched against the branch or tag name (without refs/heads/ or refs/tags/); `*` stays within one path\nsegment, `**` crosses `/`",
+          "type": "string",
+          "x-go-name": "Pattern"
+        },
+        "type": {
+          "description": "branch or tag",
+          "type": "string",
+          "enum": [
+            "branch",
+            "tag"
+          ],
+          "x-go-name": "Type"
+        }
+      },
+      "x-go-package": "forgejo.org/modules/structs"
+    },
+    "ActionEnvironmentReviewer": {
+      "description": "ActionEnvironmentReviewer is a required reviewer of an environment",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "ID"
+        },
+        "name": {
+          "description": "the login of the user or the name of the team, ignored in a request",
+          "type": "string",
+          "x-go-name": "Name"
+        },
+        "type": {
+          "description": "user or team; a team belongs to the organization that owns the repository",
+          "type": "string",
+          "enum": [
+            "user",
+            "team"
+          ],
+          "x-go-name": "Type"
         }
       },
       "x-go-package": "forgejo.org/modules/structs"
@@ -34224,6 +35164,71 @@
             "type": "string"
           },
           "x-go-name": "RedirectURIs"
+        }
+      },
+      "x-go-package": "forgejo.org/modules/structs"
+    },
+    "CreateOrUpdateEnvironmentOption": {
+      "description": "CreateOrUpdateEnvironmentOption is the whole set of rules of an environment. Every field is required, so a client\nthat doesn't know a rule can't remove it by leaving it out: an empty list, 0 or false sets no rule explicitly.",
+      "type": "object",
+      "required": [
+        "ref_policy",
+        "ref_patterns",
+        "wait_timer",
+        "prevent_self_review",
+        "reviewers",
+        "runner_labels",
+        "allowed_workflows"
+      ],
+      "properties": {
+        "allowed_workflows": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-name": "AllowedWorkflows"
+        },
+        "prevent_self_review": {
+          "type": "boolean",
+          "x-go-name": "PreventSelfReview"
+        },
+        "ref_patterns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ActionEnvironmentRefPattern"
+          },
+          "x-go-name": "RefPatterns"
+        },
+        "ref_policy": {
+          "description": "any, protected_branches or patterns",
+          "type": "string",
+          "enum": [
+            "any",
+            "protected_branches",
+            "patterns"
+          ],
+          "x-go-name": "RefPolicy"
+        },
+        "reviewers": {
+          "description": "at most 6 users and teams together, each named by type and id; an empty list means no review is required",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ActionEnvironmentReviewer"
+          },
+          "x-go-name": "Reviewers"
+        },
+        "runner_labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-name": "RunnerLabels"
+        },
+        "wait_timer": {
+          "description": "minutes, at most 43200",
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "WaitTimer"
         }
       },
       "x-go-package": "forgejo.org/modules/structs"
@@ -44417,6 +45422,21 @@
         "type": "array",
         "items": {
           "$ref": "#/definitions/ActionDeployment"
+        }
+      }
+    },
+    "ActionEnvironment": {
+      "description": "ActionEnvironment",
+      "schema": {
+        "$ref": "#/definitions/ActionEnvironment"
+      }
+    },
+    "ActionEnvironmentList": {
+      "description": "ActionEnvironmentList",
+      "schema": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/ActionEnvironment"
         }
       }
     },

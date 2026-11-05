@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
 	secret_model "forgejo.org/models/secret"
@@ -57,6 +58,13 @@ func TestEnvironmentNormalize(t *testing.T) {
 		"name with tab":            func(e *ActionEnvironment) { e.Name = "pro\td" },
 		"name with unicode space":  func(e *ActionEnvironment) { e.Name = "prod\u2003" },
 		"name with DEL":            func(e *ActionEnvironment) { e.Name = "pro\x7fd" },
+		"name of dots":             func(e *ActionEnvironment) { e.Name = ".." },
+		"name of one dot":          func(e *ActionEnvironment) { e.Name = "." },
+		"name with slash":          func(e *ActionEnvironment) { e.Name = "a/b" },
+		"name with question mark":  func(e *ActionEnvironment) { e.Name = "a?b" },
+		"name with hash":           func(e *ActionEnvironment) { e.Name = "a#b" },
+		"name with percent":        func(e *ActionEnvironment) { e.Name = "a%2fb" },
+		"name with backslash":      func(e *ActionEnvironment) { e.Name = "a\\b" },
 		"allowed workflow empty":   func(e *ActionEnvironment) { e.AllowedWorkflows = []string{""} },
 		"allowed workflow unicode": func(e *ActionEnvironment) { e.AllowedWorkflows = []string{"d\u0435ploy.yml"} },
 		"allowed workflow control": func(e *ActionEnvironment) { e.AllowedWorkflows = []string{"deploy\n.yml"} },
@@ -167,13 +175,13 @@ func TestEnvironmentLifecycle(t *testing.T) {
 	since := auditMax(t)
 
 	prod := &ActionEnvironment{RepoID: 1, Name: "Production", RefPolicy: EnvironmentRefPatterns, RefPatterns: []EnvironmentRefPattern{{EnvironmentPatternBranch, "main"}}}
-	require.NoError(t, CreateEnvironment(ctx, prod))
+	require.NoError(t, CreateEnvironment(ctx, prod, nil))
 	assert.NotZero(t, prod.ID)
 	assert.EqualValues(t, 0, prod.OwnerID)
-	require.ErrorIs(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 1, Name: "PRODUCTION"}), ErrEnvironmentExists, "a twin of another case")
-	require.ErrorIs(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 1, Name: "a\nb"}), util.ErrInvalidArgument)
-	require.ErrorIs(t, CreateEnvironment(ctx, &ActionEnvironment{Name: "x"}), util.ErrInvalidArgument, "needs a repository")
-	require.NoError(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 2, Name: "Production"}), "the name is per repository")
+	require.ErrorIs(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 1, Name: "PRODUCTION"}, nil), ErrEnvironmentExists, "a twin of another case")
+	require.ErrorIs(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 1, Name: "a\nb"}, nil), util.ErrInvalidArgument)
+	require.ErrorIs(t, CreateEnvironment(ctx, &ActionEnvironment{Name: "x"}, nil), util.ErrInvalidArgument, "needs a repository")
+	require.NoError(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 2, Name: "Production"}, nil), "the name is per repository")
 
 	for _, name := range []string{"production", "PRODUCTION", " Production "} {
 		found, err := GetRepoEnvironmentByName(ctx, 1, name)
@@ -194,6 +202,8 @@ func TestEnvironmentLifecycle(t *testing.T) {
 	assert.Empty(t, staging.RefPatterns)
 	assert.Zero(t, staging.WaitTimerMinutes)
 	assert.Empty(t, staging.RunnerLabels)
+	assert.True(t, staging.CreatedByWorkflow, "a workflow created it")
+	assert.False(t, prod.CreatedByWorkflow)
 	twin, err := GetOrCreateRepoEnvironment(ctx, 1, "staging")
 	require.NoError(t, err)
 	assert.Equal(t, staging.ID, twin.ID)
@@ -206,23 +216,29 @@ func TestEnvironmentLifecycle(t *testing.T) {
 	_, err = GetOrCreateRepoEnvironment(ctx, 1, strings.Repeat("a", 256))
 	require.ErrorIs(t, err, util.ErrInvalidArgument)
 
-	envs, err := FindRepoEnvironments(ctx, 1)
+	envs, count, err := FindRepoEnvironments(ctx, 1, db.ListOptions{})
 	require.NoError(t, err)
 	require.Len(t, envs, 2)
+	assert.EqualValues(t, 2, count)
 	assert.Equal(t, "Production", envs[0].Name)
+	envs, count, err = FindRepoEnvironments(ctx, 1, db.ListOptions{Page: 2, PageSize: 1})
+	require.NoError(t, err)
+	require.Len(t, envs, 1)
+	assert.EqualValues(t, 2, count, "the count is of every page")
+	assert.Equal(t, "staging", envs[0].LowerName)
 
 	// an update changes the rules, not the name's identity
 	prod.RefPolicy, prod.RefPatterns, prod.WaitTimerMinutes, prod.Name = EnvironmentRefProtectedBranches, nil, 10, "PRODUCTION"
-	require.NoError(t, UpdateEnvironment(ctx, prod))
+	require.NoError(t, UpdateEnvironment(ctx, prod, nil))
 	stored, err := GetRepoEnvironmentByID(ctx, 1, prod.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "PRODUCTION", stored.Name)
 	assert.Equal(t, 10, stored.WaitTimerMinutes)
 	assert.Empty(t, stored.RefPatterns)
-	require.NoError(t, UpdateEnvironment(ctx, stored), "an update without a change records nothing")
+	require.NoError(t, UpdateEnvironment(ctx, stored, nil), "an update without a change records nothing")
 	renamed := *stored
 	renamed.Name = "Live"
-	require.ErrorIs(t, UpdateEnvironment(ctx, &renamed), util.ErrInvalidArgument)
+	require.ErrorIs(t, UpdateEnvironment(ctx, &renamed, nil), util.ErrInvalidArgument)
 
 	// secrets and variables of an environment go with it; the deployments stay
 	secret, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 1, prod.ID, "token", "s3cr3t-value")
@@ -309,7 +325,7 @@ func TestEnvironmentLimit(t *testing.T) {
 	}
 	_, err := GetOrCreateRepoEnvironment(ctx, 1, "one-too-many")
 	require.ErrorIs(t, err, ErrEnvironmentLimit)
-	require.ErrorIs(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 1, Name: "also-too-many"}), ErrEnvironmentLimit)
+	require.ErrorIs(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 1, Name: "also-too-many"}, nil), ErrEnvironmentLimit)
 	existing, err := GetOrCreateRepoEnvironment(ctx, 1, "ENV-7")
 	require.NoError(t, err, "an environment that exists is still found at the cap")
 	assert.Equal(t, "env-7", existing.Name)
@@ -426,11 +442,69 @@ func TestEnvironmentSecretVariableAudit(t *testing.T) {
 	}, actions)
 }
 
+// Values of secrets and variables are at most 64 KiB at every level, an environment holds at most 100 of each, and
+// only the doer's own act writes an environment's secrets, variables and rules, whoever calls the model.
+func TestEnvironmentSecretVariableLimits(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := auditCtx()
+	env, err := GetOrCreateRepoEnvironment(ctx, 1, "limits")
+	require.NoError(t, err)
+
+	big := strings.Repeat("x", secret_model.MaxValueSize+1)
+	fits := strings.Repeat("x", secret_model.MaxValueSize)
+	_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, 1, env.ID, "BIG", big)
+	require.ErrorIs(t, err, util.ErrInvalidArgument)
+	_, err = secret_model.InsertEncryptedSecret(ctx, 0, 0, 1, "BIG", big)
+	require.ErrorIs(t, err, util.ErrInvalidArgument, "a repository secret too")
+	_, err = InsertEnvironmentVariable(ctx, 1, env.ID, "BIG", big)
+	require.ErrorIs(t, err, util.ErrInvalidArgument)
+	_, err = InsertVariable(ctx, 2, 0, 0, "BIG", big)
+	require.ErrorIs(t, err, util.ErrInvalidArgument, "an owner variable too")
+	v, err := InsertEnvironmentVariable(ctx, 1, env.ID, "FITS", fits)
+	require.NoError(t, err)
+	v.Data = big
+	_, err = UpdateVariable(ctx, v)
+	require.ErrorIs(t, err, util.ErrInvalidArgument, "an update too")
+
+	for i := 1; i < secret_model.MaxPerEnvironment; i++ {
+		_, err := InsertEnvironmentVariable(ctx, 1, env.ID, fmt.Sprintf("V%d", i), "x")
+		require.NoError(t, err)
+	}
+	for i := range secret_model.MaxPerEnvironment {
+		_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 1, env.ID, fmt.Sprintf("S%d", i), "x")
+		require.NoError(t, err)
+	}
+	_, err = InsertEnvironmentVariable(ctx, 1, env.ID, "ONE_MORE", "x")
+	require.ErrorIs(t, err, util.ErrInvalidArgument)
+	_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, 1, env.ID, "ONE_MORE", "x")
+	require.ErrorIs(t, err, util.ErrInvalidArgument)
+	_, err = InsertVariable(ctx, 0, 0, 1, "ONE_MORE", "x")
+	require.NoError(t, err, "the repository level has no count cap")
+
+	t.Run("own act", func(t *testing.T) {
+		bare := t.Context() // no actor: can't be told from a delegated credential
+		_, err := InsertEnvironmentVariable(bare, 1, env.ID, "NOT_OWN", "x")
+		require.ErrorIs(t, err, audit_model.ErrNotOwnAct)
+		_, err = secret_model.InsertEncryptedEnvironmentSecret(bare, 1, env.ID, "NOT_OWN", "x")
+		require.ErrorIs(t, err, audit_model.ErrNotOwnAct)
+		v.Data = "y"
+		_, err = UpdateVariable(bare, v)
+		require.ErrorIs(t, err, audit_model.ErrNotOwnAct)
+		_, err = DeleteEnvironmentVariable(bare, v.ID, 1, env.ID)
+		require.ErrorIs(t, err, audit_model.ErrNotOwnAct)
+		require.ErrorIs(t, UpdateEnvironment(bare, env, nil), audit_model.ErrNotOwnAct)
+		require.ErrorIs(t, CreateEnvironment(bare, &ActionEnvironment{RepoID: 1, Name: "other"}, nil), audit_model.ErrNotOwnAct)
+		require.ErrorIs(t, DeleteEnvironment(bare, env, func(context.Context) error { return nil }), audit_model.ErrNotOwnAct)
+		_, err = InsertVariable(bare, 0, 0, 1, "REPO_LEVEL", "x")
+		require.NoError(t, err, "the repository level keeps its own rules")
+	})
+}
+
 // A look-alike or non-ASCII name finds no environment (the Kelvin sign lower-cases to an ASCII k) and creates none.
 func TestEnvironmentNamesAreASCII(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	ctx := auditCtx()
-	require.NoError(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 1, Name: "Kprod"}))
+	require.NoError(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 1, Name: "Kprod"}, nil))
 	got, err := GetRepoEnvironmentByName(ctx, 1, "  kPROD ")
 	require.NoError(t, err)
 	assert.Equal(t, "Kprod", got.Name)

@@ -7,6 +7,8 @@ import (
 	"context"
 	"strconv"
 	"strings"
+
+	"forgejo.org/modules/util"
 )
 
 const (
@@ -124,6 +126,27 @@ func WithActor(ctx context.Context, a *Actor) context.Context {
 func ActorFromContext(ctx context.Context) *Actor {
 	a, _ := ctx.Value(ActorContextKey).(*Actor)
 	return a
+}
+
+// ErrNotOwnAct refuses a change that only a person may make with a credential of their own (see IsOwnAct).
+var ErrNotOwnAct = util.NewPermissionDeniedErrorf("only a person with a credential of their own may make this change")
+
+// IsOwnAct tells that what ctx does is the actor's own act: not made under sudo, nor with a credential that another
+// party holds on the user's behalf (an OAuth2 grant, or an authorized integration that workflow code can use). This is
+// the rule of auth_service.IsHeldByUser, read from the actor that every authentication stores; without an actor the
+// request can't be told from those, so it fails closed. It is the one rule for deployment protection: reviews of
+// deployments and every change of an environment's rules, secrets and variables.
+func IsOwnAct(ctx context.Context) bool {
+	a := ActorFromContext(ctx)
+	return a != nil && a.SudoByID == 0 && a.Credential.Type != CredentialOAuth2Grant && a.Credential.Type != CredentialAuthorizedIntegration
+}
+
+// CheckOwnAct returns ErrNotOwnAct unless IsOwnAct.
+func CheckOwnAct(ctx context.Context) error {
+	if !IsOwnAct(ctx) {
+		return ErrNotOwnAct
+	}
+	return nil
 }
 
 // SystemActor is the server doing work by itself, e.g. "cron:<task>", "mirror:<repo id>", "install".

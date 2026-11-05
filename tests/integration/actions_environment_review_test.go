@@ -4,6 +4,7 @@
 package integration
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -31,6 +32,21 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// setEnvironmentReviewers makes the users and teams the reviewers of the environment as it is stored, keeping its rules, as the
+// site administrator.
+func setEnvironmentReviewers(ctx context.Context, e *actions_model.ActionEnvironment, userIDs, teamIDs []int64) error {
+	stored, err := actions_model.GetRepoEnvironmentByID(ctx, e.RepoID, e.ID)
+	if err != nil {
+		return err
+	}
+	admin, err := user_model.GetUserByID(ctx, 1) // sees every reviewer
+	if err != nil {
+		return err
+	}
+	_, err = actions_service.SaveEnvironment(ctx, admin, stored, userIDs, teamIDs)
+	return err
+}
 
 // Required reviewers, approvals, expiry, allowed workflows, referenced secrets, the OIDC environment claim and the
 // refusal of a monolithic call that names an environment, each through the real Actions, API and cron code.
@@ -105,8 +121,8 @@ func TestActionsEnvironmentReviews(t *testing.T) {
 			if mutate != nil {
 				mutate(e)
 			}
-			require.NoError(t, actions_model.CreateEnvironment(ctx, e))
-			require.NoError(t, actions_service.SetEnvironmentReviewers(ctx, e, reviewers, nil))
+			require.NoError(t, actions_model.CreateEnvironment(ctx, e, nil))
+			require.NoError(t, setEnvironmentReviewers(ctx, e, reviewers, nil))
 			return e
 		}
 		basePath := fmt.Sprintf("/api/v1/repos/%s/%s/actions/runs", user2.Name, repo.Name)
@@ -378,7 +394,7 @@ func TestActionsEnvironmentReviews(t *testing.T) {
 			_, job := pushJob("", "rv-g", "    environment: breakglass-rv\n", "echo")
 			require.Equal(t, actions_model.DeploymentWaitingReview, deployment(job, 1).Status)
 			assert.Nil(t, runner.maybeFetchTask(t))
-			require.NoError(t, actions_service.SetEnvironmentReviewers(ctx, e, nil, nil))
+			require.NoError(t, setEnvironmentReviewers(ctx, e, nil, nil))
 			require.Eventually(t, func() bool { return hasStatus(job, actions_model.StatusWaiting) }, 10*time.Second, 100*time.Millisecond)
 			assert.Equal(t, actions_model.DeploymentReleased, deployment(job, 1).Status)
 			runner.execTask(t, runner.fetchTask(t), &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
@@ -416,7 +432,7 @@ func TestActionsEnvironmentReviews(t *testing.T) {
 			d := deployment(unapproved, 1)
 			assert.Equal(t, actions_model.DeploymentWaitingReview, d.Status)
 			assert.NotZero(t, d.ReleaseAfterUnix)
-			_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET release_after_unix = 1 WHERE id = ?", d.ID)
+			_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET release_after_unix = 1, created = created - 86400 WHERE id = ?", d.ID)
 			require.NoError(t, err)
 			require.NoError(t, actions_service.StartDueDeployments(t.Context()))
 			assert.Equal(t, actions_model.DeploymentWaitingReview, deployment(unapproved, 1).Status)
@@ -433,7 +449,7 @@ func TestActionsEnvironmentReviews(t *testing.T) {
 			assert.Equal(t, actions_model.StatusBlocked, reload(approved).Status, "not due")
 
 			// the timer ends: the approved job is released, the other one still waits
-			_, err = db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET release_after_unix = 1 WHERE id = ?", deployment(approved, 1).ID)
+			_, err = db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET release_after_unix = 1, created = created - 86400 WHERE id = ?", deployment(approved, 1).ID)
 			require.NoError(t, err)
 			require.NoError(t, actions_service.StartDueDeployments(t.Context()))
 			assert.Equal(t, actions_model.DeploymentReleased, deployment(approved, 1).Status)
@@ -582,6 +598,41 @@ jobs:
 			assert.Nil(t, runner.maybeFetchTask(t))
 		})
 
+		t.Run("a change of rules whose own pass failed takes effect at the next tick", func(t *testing.T) {
+			e := newEnv("lost-pass", []int64{user4.ID}, nil)
+			run, job := pushJob("", "rv-j", "    environment: lost-pass\n", "echo")
+			require.Equal(t, actions_model.DeploymentWaitingReview, deployment(job, 1).Status)
+			isDue := func() bool {
+				due, err := actions_model.FindDueDeploymentRunIDs(t.Context(), timeutil.TimeStampNow(), 1000)
+				require.NoError(t, err)
+				return slices.Contains(due, run.ID)
+			}
+			// the environment doesn't change, or a save changes nothing: the tick has nothing to do for the run
+			// times have second resolution: move both back, so the change below is in a later second than either
+			_, err := db.GetEngine(t.Context()).Exec("UPDATE action_environment SET updated = updated - 10 WHERE id = ?", e.ID)
+			require.NoError(t, err)
+			_, err = db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET updated = updated - 5 WHERE job_id = ?", job.ID)
+			require.NoError(t, err)
+			assert.False(t, isDue())
+			MakeRequest(t, NewRequestWithJSON(t, "PUT", fmt.Sprintf("/api/v1/repos/%s/%s/actions/environments/lost-pass", user2.Name, repo.Name),
+				envRules(api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: user4.ID}}})).AddTokenAuth(ownerToken), http.StatusOK)
+			assert.False(t, isDue())
+
+			// the reviewers are removed and the change is committed, but its own pass of the gate never runs (what
+			// SaveEnvironment leaves behind when emitEnvironmentRuns fails): the job still waits
+			stored, err := actions_model.GetRepoEnvironmentByID(ctx, repo.ID, e.ID)
+			require.NoError(t, err)
+			require.NoError(t, actions_model.UpdateEnvironment(ctx, stored, nil))
+			assert.Equal(t, actions_model.StatusBlocked, reload(job).Status)
+			assert.True(t, isDue())
+
+			// the next tick decides it by the rules as they are: released
+			require.NoError(t, actions_service.StartDueDeployments(t.Context()))
+			assert.Equal(t, actions_model.DeploymentReleased, deployment(job, 1).Status)
+			assert.False(t, isDue())
+			runner.execTask(t, runner.fetchTask(t), &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
+		})
+
 		t.Run("reviewers go with their user and their environment", func(t *testing.T) {
 			var cleanupEnvID int64
 			count := func() int64 {
@@ -594,7 +645,7 @@ jobs:
 			assert.EqualValues(t, 1, count())
 			MakeRequest(t, NewRequest(t, "DELETE", "/api/v1/admin/users/"+user5.Name+"?purge=true").AddTokenAuth(adminToken), http.StatusNoContent)
 			assert.EqualValues(t, 0, count())
-			require.NoError(t, actions_service.SetEnvironmentReviewers(ctx, e, []int64{user4.ID}, nil))
+			require.NoError(t, setEnvironmentReviewers(ctx, e, []int64{user4.ID}, nil))
 			require.NoError(t, actions_service.DeleteEnvironment(ctx, e))
 			assert.EqualValues(t, 0, count())
 		})

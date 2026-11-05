@@ -9,11 +9,13 @@ import (
 	"maps"
 	"slices"
 
+	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
 	issues_model "forgejo.org/models/issues"
 	"forgejo.org/models/organization"
 	"forgejo.org/models/perm"
 	access_model "forgejo.org/models/perm/access"
+	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/cache"
@@ -21,6 +23,7 @@ import (
 	"forgejo.org/modules/gitrepo"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/util"
+	"forgejo.org/services/approvers"
 	issue_service "forgejo.org/services/issue"
 )
 
@@ -38,7 +41,20 @@ type ApprovalRuleStatus struct {
 	// CodeOwnersErrorLine is the line of a malformed CODEOWNERS section header, which fails every code owner rule
 	CodeOwnersErrorLine int
 	CodeOwnersFile      string // the path of that file on the base branch
+	// CodeOwnersUnchecked: matching the changed files against CODEOWNERS would take more than the evaluation's
+	// git_model.PathMatchBudget, so no owner requirement is met (fails closed)
+	CodeOwnersUnchecked bool
 	Satisfied           bool
+	// CanApprove names the people and teams a rule lists who can approve; only LoadIneligibleOwners sets it, for
+	// repository admins.
+	CanApprove []string
+	// Ineligible are the owners (and for a repository admin the listed approvers) of an unsatisfied rule who can't
+	// approve; only LoadIneligibleOwners sets it, for viewers who can write the code.
+	Ineligible     []OwnerMark
+	IneligibleMore bool
+	// what LoadIneligibleOwners needs, kept so that the enforcement path computes nothing for it
+	files []string
+	git   *pullGitInfo
 }
 
 // SectionShortfall is a CODEOWNERS section with fewer approving owners than it needs.
@@ -61,6 +77,8 @@ func (s *ApprovalRuleStatus) Reason() string {
 	switch {
 	case s.CodeOwnersErrorLine != 0:
 		return fmt.Sprintf("Approval rule %q: CODEOWNERS has an error on line %d, which blocks the merge", s.Name, s.CodeOwnersErrorLine)
+	case s.CodeOwnersUnchecked:
+		return fmt.Sprintf("Approval rule %q: the changes are too large to check against CODEOWNERS, which blocks the merge", s.Name)
 	case s.Granted < s.Required:
 		return fmt.Sprintf("Approval rule %q needs %s, has %d", s.Name, approvals(s.Required), s.Granted)
 	case s.UncoveredFiles > 0:
@@ -189,29 +207,35 @@ func EvaluateApprovalRules(ctx context.Context, pb *git_model.ProtectedBranch, p
 		return nil, err
 	}
 	return cache.GetWithContextCache(ctx, "approval_rules", fmt.Sprintf("%d:%s", pb.ID, state), func() ([]*ApprovalRuleStatus, error) {
-		return evaluateApprovalRules(ctx, pb, pr, rules, budget)
+		return evaluateApprovalRules(ctx, pb, pr, rules, budget, state)
 	})
 }
 
-func evaluateApprovalRules(ctx context.Context, pb *git_model.ProtectedBranch, pr *issues_model.PullRequest, rules []*git_model.ApprovalRule, budget *git_model.PathMatchBudget) ([]*ApprovalRuleStatus, error) {
+func evaluateApprovalRules(ctx context.Context, pb *git_model.ProtectedBranch, pr *issues_model.PullRequest, rules []*git_model.ApprovalRule, budget *git_model.PathMatchBudget, state string) ([]*ApprovalRuleStatus, error) {
 	approvers, err := issues_model.ValidReviewers(ctx, pb, pr, issues_model.ReviewTypeApprove)
 	if err != nil {
 		return nil, err
 	}
 
 	var files []string
-	var codeOwners *issues_model.CodeOwners
+	var info *pullGitInfo
 	needFiles := slices.ContainsFunc(rules, func(r *git_model.ApprovalRule) bool { return r.PathPatterns != "" || r.RequireCodeOwners })
 	if needFiles {
 		needOwners := slices.ContainsFunc(rules, func(r *git_model.ApprovalRule) bool { return r.RequireCodeOwners })
-		if files, codeOwners, err = loadPullGitInfo(ctx, pr, needOwners); err != nil {
+		// the same for every level in a request: the files, CODEOWNERS and its matching are read once
+		info, err = cache.GetWithContextCache(ctx, "approval_rules_git", fmt.Sprintf("%s:%t", state, needOwners), func() (*pullGitInfo, error) {
+			return loadPullGitInfo(ctx, pr, needOwners)
+		})
+		if err != nil {
 			return nil, err
 		}
+		files = info.files
 	}
 
 	statuses := make([]*ApprovalRuleStatus, 0, len(rules))
 	for _, rule := range rules {
-		if !rule.AppliesTo(budget, files) {
+		scoped, applies := filesInScope(rule, budget, files)
+		if !applies {
 			continue
 		}
 		s := &ApprovalRuleStatus{Rule: rule, Name: rule.Name, Required: rule.RequiredCount}
@@ -230,69 +254,120 @@ func evaluateApprovalRules(ctx context.Context, pb *git_model.ProtectedBranch, p
 		s.Granted = int64(len(s.Approvers))
 		s.Satisfied = s.Granted >= s.Required
 		if rule.RequireCodeOwners {
-			if codeOwners.ErrorLine != 0 {
+			switch {
+			case info.owners.ErrorLine != 0:
 				// the file can't be trusted: no owner requirement is met
-				s.CodeOwnersErrorLine, s.CodeOwnersFile = codeOwners.ErrorLine, codeOwners.File
+				s.CodeOwnersErrorLine, s.CodeOwnersFile = info.owners.ErrorLine, info.owners.File
 				s.Satisfied = false
-			} else {
-				if s.UncoveredFiles, s.Shortfalls, err = countUncoveredFiles(ctx, pb, pr, rule, budget, files, codeOwners.Rules, s.Approvers); err != nil {
+			case !info.matchOwners(budget):
+				s.CodeOwnersUnchecked = true
+				s.Satisfied = false
+			default:
+				if s.UncoveredFiles, s.Shortfalls, err = countUncoveredFiles(ctx, pb, pr, rule, scoped, info, s.Approvers); err != nil {
 					return nil, err
 				}
 				s.Satisfied = s.Satisfied && s.UncoveredFiles == 0 && len(s.Shortfalls) == 0
 			}
+		}
+		if !s.Satisfied && rule.RequireCodeOwners && info.ownerLines != nil {
+			s.files, s.git = scoped, info
 		}
 		statuses = append(statuses, s)
 	}
 	return statuses, nil
 }
 
-// loadPullGitInfo returns the files the pull request changes since the merge base and, if wanted, the CODEOWNERS
-// rules of the target branch. The head of the pull request must never decide who the owners are, and a CODEOWNERS
-// file that can't be read in full fails the check.
-func loadPullGitInfo(ctx context.Context, pr *issues_model.PullRequest, withOwners bool) (files []string, owners *issues_model.CodeOwners, err error) {
+// filesInScope returns the changed files in the scope of the rule and whether the rule applies (it has no path
+// patterns or one of them matches a file). Paths that can't be matched within the budget put every file in the scope
+// and make the rule apply: it fails closed.
+func filesInScope(rule *git_model.ApprovalRule, budget *git_model.PathMatchBudget, files []string) (scoped []string, applies bool) {
+	inScope, decided := rule.FilesInScope(budget, files)
+	if !decided || inScope == nil {
+		return files, true
+	}
+	for i, f := range files {
+		if inScope[i] {
+			scoped = append(scoped, f)
+		}
+	}
+	return scoped, len(scoped) > 0
+}
+
+// pullGitInfo is what an evaluation of the approval rules reads from git: the files the pull request changes since
+// the merge base and, if wanted, the CODEOWNERS rules of the target branch, with the lines matching each file.
+type pullGitInfo struct {
+	files  []string
+	owners *issues_model.CodeOwners
+	// ownerLines are the CODEOWNERS lines matching each changed file, matched once (matchOwners); nil before, or when
+	// that would take more than the budget
+	ownerLines    map[string][]*issues_model.CodeOwnerRule
+	ownersMatched bool // matchOwners ran
+}
+
+// loadPullGitInfo reads the changed files and, if wanted, CODEOWNERS. The head of the pull request must never decide
+// who the owners are, and a CODEOWNERS file that can't be read in full fails the check.
+func loadPullGitInfo(ctx context.Context, pr *issues_model.PullRequest, withOwners bool) (*pullGitInfo, error) {
 	gitRepo, err := gitrepo.OpenRepository(ctx, pr.BaseRepo)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	defer gitRepo.Close()
 
 	mergeBase, err := gitRepo.GetMergeBaseSimple(git.BranchPrefix+pr.BaseBranch, pr.GetGitRefName())
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	if files, err = gitRepo.GetFilesChangedBetween(mergeBase, pr.GetGitRefName()); err != nil || !withOwners {
-		return files, nil, err
+	info := &pullGitInfo{}
+	if info.files, err = gitRepo.GetFilesChangedBetween(mergeBase, pr.GetGitRefName()); err != nil || !withOwners {
+		return info, err
 	}
 
 	commit, err := gitRepo.GetBranchCommit(pr.BaseBranch)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	owners, truncated, err := issue_service.LoadCodeOwnerRules(ctx, commit)
+	owners, truncated, err := issue_service.LoadCodeOwnerRules(ctx, pr.BaseRepo.OwnerID, commit)
 	if err == nil && truncated {
 		err = fmt.Errorf("CODEOWNERS of %s is too big", pr.BaseBranch)
 	}
-	return files, owners, err
+	info.owners = owners
+	return info, err
 }
 
-// countUncoveredFiles counts the changed files in the scope of the rule where a section of CODEOWNERS is not met:
+// matchOwners matches every changed file against the CODEOWNERS lines once, under the budget, and returns whether
+// it could: when it would take more than is left, no file has its owners (the caller fails closed).
+func (g *pullGitInfo) matchOwners(budget *git_model.PathMatchBudget) bool {
+	if g.ownersMatched {
+		return g.ownerLines != nil
+	}
+	g.ownersMatched = true
+	if !budget.Take(g.files, issue_service.CodeOwnerPatterns(g.owners.Rules)) {
+		return false
+	}
+	g.ownerLines = make(map[string][]*issues_model.CodeOwnerRule, len(g.files))
+	for _, f := range g.files {
+		g.ownerLines[f] = issue_service.CodeOwnerRulesOfFile(g.owners.Rules, f)
+	}
+	return true
+}
+
+// countUncoveredFiles counts the files (the changed files in the scope of the rule, see filesInScope) where a section of CODEOWNERS is not met:
 // every matching line of a section needs an approving owner, so a catch-all line can't cover a file that a more
 // specific line gives to other owners, and the distinct approving owners over the matching lines of the section must
 // reach its number of approvals. Optional sections never block.
-func countUncoveredFiles(ctx context.Context, pb *git_model.ProtectedBranch, pr *issues_model.PullRequest, rule *git_model.ApprovalRule, budget *git_model.PathMatchBudget, files []string, codeOwners []*issues_model.CodeOwnerRule, approvers []*user_model.User) (int, []*SectionShortfall, error) {
+func countUncoveredFiles(ctx context.Context, pb *git_model.ProtectedBranch, pr *issues_model.PullRequest, rule *git_model.ApprovalRule, files []string, info *pullGitInfo, approvers []*user_model.User) (int, []*SectionShortfall, error) {
 	uncovered := 0
 	var shortfalls []*SectionShortfall
 	reported := map[*issues_model.CodeOwnerSection]bool{}
 	byLine := map[*issues_model.CodeOwnerRule]map[int64]bool{} // lines are shared by many files
-	// paths that can't be matched put every file in the scope of the rule (fails closed)
-	inScope, decided := rule.FilesInScope(budget, files)
-	for i, f := range files {
-		if decided && inScope != nil && !inScope[i] {
-			continue
-		}
+	teamsOf, err := approverTeams(ctx, info.owners.Rules, approvers)
+	if err != nil {
+		return 0, nil, err
+	}
+	for _, f := range files {
 		var sections []*issues_model.CodeOwnerSection // in the order of the file
 		lines := map[*issues_model.CodeOwnerSection][]*issues_model.CodeOwnerRule{}
-		for _, line := range issue_service.CodeOwnerRulesOfFile(codeOwners, f) {
+		for _, line := range info.ownerLines[f] {
 			if lines[line.Section] == nil {
 				sections = append(sections, line.Section)
 			}
@@ -308,10 +383,7 @@ func countUncoveredFiles(ctx context.Context, pb *git_model.ProtectedBranch, pr 
 			for _, line := range lines[section] {
 				ids, seen := byLine[line]
 				if !seen {
-					var err error
-					if ids, err = lineApprovers(ctx, line, approvers); err != nil {
-						return 0, nil, err
-					}
+					ids = lineApprovers(line, approvers, teamsOf)
 					byLine[line] = ids
 				}
 				if len(ids) == 0 {
@@ -340,25 +412,32 @@ func countUncoveredFiles(ctx context.Context, pb *git_model.ProtectedBranch, pr 
 	return uncovered, shortfalls, nil
 }
 
-// lineApprovers returns the IDs of the approvers who are owners named on the line, directly or through a team.
-func lineApprovers(ctx context.Context, line *issues_model.CodeOwnerRule, approvers []*user_model.User) (map[int64]bool, error) {
-	teamIDs := make([]int64, len(line.Teams))
-	for i, t := range line.Teams {
-		teamIDs[i] = t.ID
-	}
-	ids := map[int64]bool{}
-	for _, a := range approvers {
-		if slices.ContainsFunc(line.Users, func(u *user_model.User) bool { return u.ID == a.ID }) {
-			ids[a.ID] = true
-		} else if len(teamIDs) > 0 {
-			if ok, err := organization.IsUserInTeams(ctx, a.ID, teamIDs); err != nil {
-				return nil, err
-			} else if ok {
-				ids[a.ID] = true
-			}
+// approverTeams returns, for each approver, which of the teams named on the lines they are a member of: one query
+// for all lines.
+func approverTeams(ctx context.Context, lines []*issues_model.CodeOwnerRule, people []*user_model.User) (map[int64]map[int64]bool, error) {
+	var teamIDs, userIDs []int64
+	for _, line := range lines {
+		for _, t := range line.Teams {
+			teamIDs = append(teamIDs, t.ID)
 		}
 	}
-	return ids, nil
+	for _, a := range people {
+		userIDs = append(userIDs, a.ID)
+	}
+	return organization.GetMemberships(ctx, approvers.Uniq(teamIDs), userIDs)
+}
+
+// lineApprovers returns the IDs of the approvers who are owners named on the line, directly or through a team
+// (teamsOf is approverTeams).
+func lineApprovers(line *issues_model.CodeOwnerRule, people []*user_model.User, teamsOf map[int64]map[int64]bool) map[int64]bool {
+	ids := map[int64]bool{}
+	for _, a := range people {
+		if slices.ContainsFunc(line.Users, func(u *user_model.User) bool { return u.ID == a.ID }) ||
+			slices.ContainsFunc(line.Teams, func(t *organization.Team) bool { return teamsOf[a.ID][t.ID] }) {
+			ids[a.ID] = true
+		}
+	}
+	return ids
 }
 
 // maxEligibleLookups is how many short sections of a rule get their eligible owners counted.
@@ -453,4 +532,119 @@ func ApprovalRulesFromAPI(ctx context.Context, owner *user_model.User, apiRules 
 		})
 	}
 	return rules, nil
+}
+
+// maxMergeBoxMarks is how many owners a rule of the merge box names.
+const maxMergeBoxMarks = 20
+
+// LoadIneligibleOwners returns copies of the statuses with Ineligible and CanApprove set, for a viewer who can change
+// the rule or CODEOWNERS (a code writer). The approvers a rule lists are named only to v.Details (repository admins),
+// the owners on the CODEOWNERS lines of an unsatisfied rule's changed files that no approval covers yet with the
+// reasons v may see. Both come from one eligibility check, so nobody is listed as able to approve who is marked as
+// unable to. The statuses themselves are left as they are: EvaluateApprovalRules shares them within a request.
+func LoadIneligibleOwners(ctx context.Context, repo *repo_model.Repository, v OwnerViewer, statuses []*ApprovalRuleStatus) ([]*ApprovalRuleStatus, error) {
+	statuses = slices.Clone(statuses)
+	for i, s := range statuses {
+		c := *s
+		statuses[i] = &c
+	}
+	type job struct {
+		s          *ApprovalRuleStatus
+		marks, can int // indexes into sets, -1 for none
+	}
+	var jobs []job
+	var sets []OwnerSet
+	var teamIDs []int64
+	for _, s := range statuses {
+		if s.Rule == nil {
+			continue
+		}
+		listed := v.Details && s.Rule.HasApprovers()
+		if s.Satisfied && !listed || !s.Satisfied && s.git == nil && !listed {
+			continue
+		}
+		jobs = append(jobs, job{s: s, marks: -1, can: -1})
+		if listed {
+			teamIDs = append(teamIDs, s.Rule.TeamIDs...)
+		}
+	}
+	if len(jobs) == 0 {
+		return statuses, nil
+	}
+	teams, err := db.GetByIDs(ctx, "id", approvers.Uniq(teamIDs), &organization.Team{})
+	if err != nil {
+		return nil, err
+	}
+	listedSet := func(r *git_model.ApprovalRule) OwnerSet {
+		set := OwnerSet{UserIDs: slices.Clone(r.UserIDs)}
+		for _, id := range r.TeamIDs {
+			if t := teams[id]; t != nil {
+				set.Teams = append(set.Teams, t)
+			}
+		}
+		return set
+	}
+	for i := range jobs {
+		j := &jobs[i]
+		listed := v.Details && j.s.Rule.HasApprovers()
+		if listed {
+			j.can = len(sets)
+			sets = append(sets, listedSet(j.s.Rule))
+		}
+		if j.s.Satisfied {
+			continue
+		}
+		set := OwnerSet{}
+		if listed {
+			set = listedSet(j.s.Rule)
+		}
+		if j.s.git != nil {
+			lines, err := j.s.unmetLines(ctx)
+			if err != nil {
+				return nil, err
+			}
+			for _, line := range lines {
+				l := CodeOwnerSet(line)
+				set.UserIDs, set.Teams = append(set.UserIDs, l.UserIDs...), append(set.Teams, l.Teams...)
+			}
+		}
+		j.marks = len(sets)
+		sets = append(sets, set)
+	}
+	checks, more, err := IneligibleOwners(ctx, repo, approvers.NewWriters(), v, sets, 1<<30)
+	if err != nil {
+		return nil, err
+	}
+	for _, j := range jobs {
+		if j.can >= 0 {
+			j.s.CanApprove = checks[j.can].Can
+		}
+		if j.marks >= 0 {
+			c := checks[j.marks]
+			j.s.Ineligible, j.s.IneligibleMore = c.Marks[:min(len(c.Marks), maxMergeBoxMarks)], more || len(c.Marks) > maxMergeBoxMarks
+		}
+	}
+	return statuses, nil
+}
+
+// unmetLines returns the CODEOWNERS lines matching the changed files in the scope of the rule that none of its
+// approvers is an owner of. The team membership of the approvers is loaded once for all lines.
+func (s *ApprovalRuleStatus) unmetLines(ctx context.Context) ([]*issues_model.CodeOwnerRule, error) {
+	seen := map[*issues_model.CodeOwnerRule]bool{}
+	var lines []*issues_model.CodeOwnerRule
+	for _, f := range s.files {
+		for _, line := range s.git.ownerLines[f] {
+			if !seen[line] {
+				seen[line] = true
+				lines = append(lines, line)
+			}
+		}
+	}
+	teamsOf, err := approverTeams(ctx, lines, s.Approvers)
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(lines, func(line *issues_model.CodeOwnerRule) bool {
+		return len(lineApprovers(line, s.Approvers, teamsOf)) > 0
+	}), nil
 }

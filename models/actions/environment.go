@@ -44,7 +44,7 @@ const (
 )
 
 var (
-	ErrEnvironmentNotFound = util.NewNotExistErrorf("environment does not exist")
+	ErrEnvironmentNotFound = secret_model.ErrEnvironmentNotFound
 	ErrEnvironmentExists   = util.NewAlreadyExistErrorf("environment already exists")
 	ErrEnvironmentLimit    = util.NewInvalidArgumentErrorf("too many environments in the repository")
 )
@@ -74,9 +74,10 @@ type ActionEnvironment struct {
 	// ReviewsRequired is the rule that a deployment needs a reviewer's approval. Only an edit of the reviewers sets or
 	// clears it, never the deletion of a listed user or team: an environment whose reviewers all vanished that way
 	// keeps holding its deployments (nobody can approve) until someone edits its rules, which is audited.
-	ReviewsRequired bool               `xorm:"NOT NULL DEFAULT false"`
-	Created         timeutil.TimeStamp `xorm:"created"`
-	Updated         timeutil.TimeStamp `xorm:"updated"`
+	ReviewsRequired   bool               `xorm:"NOT NULL DEFAULT false"`
+	CreatedByWorkflow bool               `xorm:"NOT NULL DEFAULT false"` // a job named it before it existed
+	Created           timeutil.TimeStamp `xorm:"created"`
+	Updated           timeutil.TimeStamp `xorm:"updated"`
 }
 
 func init() {
@@ -120,8 +121,9 @@ func (e *ActionEnvironment) Normalize() error {
 	e.Name = strings.Trim(e.Name, " ")
 	lower, ok := lowerName(e.Name)
 	e.LowerName = lower
-	// ":" delimits the environment in the subject of an ID token (`...:environment:<name>`), so neither it nor a space is allowed
-	if !ok || len(e.Name) > MaxEnvironmentName || strings.ContainsAny(e.Name, ": ") {
+	// ":" delimits the environment in the subject of an ID token (`...:environment:<name>`), so neither it nor a space is
+	// allowed; the name is a path segment of the API and the web, so it is never "." or "..", nor holds "/?#%\"
+	if !ok || len(e.Name) > MaxEnvironmentName || strings.ContainsAny(e.Name, ": /?#%\\") || strings.Trim(e.Name, ".") == "" {
 		return util.NewInvalidArgumentErrorf("invalid environment name")
 	}
 	if e.RefPolicy < EnvironmentRefAny || e.RefPolicy > EnvironmentRefPatterns {
@@ -259,9 +261,9 @@ func insertEnvironmentIfAbsent(ctx context.Context, e *ActionEnvironment) (bool,
 	if setting.Database.Type.IsMySQL() {
 		verb, suffix = "INSERT IGNORE INTO", ""
 	}
-	insert := verb + " action_environment (owner_id, repo_id, name, lower_name, ref_policy, ref_patterns, wait_timer_minutes, prevent_self_review, runner_labels, allowed_workflows, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)" + suffix
+	insert := verb + " action_environment (owner_id, repo_id, name, lower_name, ref_policy, ref_patterns, wait_timer_minutes, prevent_self_review, runner_labels, allowed_workflows, reviews_required, created_by_workflow, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)" + suffix
 	now := timeutil.TimeStampNow()
-	res, err := db.GetEngine(ctx).Exec(insert, e.OwnerID, e.RepoID, e.Name, e.LowerName, e.RefPolicy, string(patterns), e.WaitTimerMinutes, e.PreventSelfReview, string(labels), string(workflows), now, now)
+	res, err := db.GetEngine(ctx).Exec(insert, e.OwnerID, e.RepoID, e.Name, e.LowerName, e.RefPolicy, string(patterns), e.WaitTimerMinutes, e.PreventSelfReview, string(labels), string(workflows), e.ReviewsRequired, e.CreatedByWorkflow, now, now)
 	if err != nil {
 		return false, err
 	}
@@ -269,14 +271,18 @@ func insertEnvironmentIfAbsent(ctx context.Context, e *ActionEnvironment) (bool,
 	return n == 1, err
 }
 
-// CreateEnvironment validates and inserts a repository environment and records its creation. It returns
-// ErrEnvironmentExists when the name (ignoring case) is taken and ErrEnvironmentLimit past MaxEnvironmentsPerRepo.
-func CreateEnvironment(ctx context.Context, e *ActionEnvironment) error {
-	return createEnvironment(ctx, e, false)
+// CreateEnvironment validates and inserts a repository environment with its reviewers (see UpdateEnvironment) and
+// records its creation. It returns ErrEnvironmentExists when the name (ignoring case) is taken and ErrEnvironmentLimit
+// past MaxEnvironmentsPerRepo.
+func CreateEnvironment(ctx context.Context, e *ActionEnvironment, reviewers []ActionEnvironmentReviewer) error {
+	if err := audit_model.CheckOwnAct(ctx); err != nil {
+		return err
+	}
+	return createEnvironment(ctx, e, false, reviewers)
 }
 
 // createEnvironment inserts e; with auto, an environment that already exists is no error and e.ID stays 0.
-func createEnvironment(ctx context.Context, e *ActionEnvironment, auto bool) error {
+func createEnvironment(ctx context.Context, e *ActionEnvironment, auto bool, reviewers []ActionEnvironmentReviewer) error {
 	e.OwnerID = 0 // repository environments only, for now
 	if e.RepoID == 0 {
 		return util.NewInvalidArgumentErrorf("an environment belongs to a repository")
@@ -284,6 +290,11 @@ func createEnvironment(ctx context.Context, e *ActionEnvironment, auto bool) err
 	if err := e.Normalize(); err != nil {
 		return err
 	}
+	keys, err := reviewerListKeys(reviewers)
+	if err != nil {
+		return err
+	}
+	e.ReviewsRequired, e.CreatedByWorkflow = len(keys) > 0, auto
 	// The cap is checked before the insert, so concurrent creations can pass it together by a few. The refusal is
 	// returned outside the transaction below: an error from a nested transaction rolls the caller's back.
 	if n, err := db.GetEngine(ctx).Where("owner_id = 0 AND repo_id = ?", e.RepoID).Count(new(ActionEnvironment)); err != nil {
@@ -292,7 +303,7 @@ func createEnvironment(ctx context.Context, e *ActionEnvironment, auto bool) err
 		return ErrEnvironmentLimit
 	}
 	created := false
-	err := db.WithTx(ctx, func(ctx context.Context) error {
+	err = db.WithTx(ctx, func(ctx context.Context) error {
 		var err error
 		if created, err = insertEnvironmentIfAbsent(ctx, e); err != nil || !created {
 			return err
@@ -302,8 +313,12 @@ func createEnvironment(ctx context.Context, e *ActionEnvironment, auto bool) err
 			return err
 		}
 		*e = *stored
+		if err := insertReviewers(ctx, e.RepoID, e.ID, reviewers); err != nil {
+			return err
+		}
 		data := e.auditData()
 		data["auto"] = auto
+		data["reviewers"] = keys
 		return recordEnvironment(ctx, audit_model.LevelActions{Repo: "repo.actions_env.created"}, e, data)
 	})
 	if err != nil {
@@ -324,7 +339,7 @@ func GetOrCreateRepoEnvironment(ctx context.Context, repoID int64, name string) 
 		return env, err
 	}
 	e := &ActionEnvironment{RepoID: repoID, Name: name}
-	if err := createEnvironment(ctx, e, true); err != nil {
+	if err := createEnvironment(ctx, e, true, nil); err != nil {
 		return nil, err
 	}
 	if e.ID != 0 {
@@ -361,17 +376,34 @@ func GetRepoEnvironmentByID(ctx context.Context, repoID, id int64) (*ActionEnvir
 	return e, nil
 }
 
-// FindRepoEnvironments lists the environments of the repository by name.
-func FindRepoEnvironments(ctx context.Context, repoID int64) ([]*ActionEnvironment, error) {
+// FindRepoEnvironments lists a page of the environments of the repository by name, and how many it has.
+func FindRepoEnvironments(ctx context.Context, repoID int64, opts db.ListOptions) ([]*ActionEnvironment, int64, error) {
 	var envs []*ActionEnvironment
-	return envs, db.GetEngine(ctx).Where("owner_id = 0 AND repo_id = ?", repoID).OrderBy("lower_name").Find(&envs)
+	sess := db.GetEngine(ctx).Where("owner_id = 0 AND repo_id = ?", repoID).OrderBy("lower_name")
+	if opts.PageSize > 0 {
+		sess = db.SetSessionPagination(sess, &opts)
+	}
+	count, err := sess.FindAndCount(&envs)
+	return envs, count, err
 }
 
-// UpdateEnvironment validates and saves the rules of e (not its name) and records what changed.
-func UpdateEnvironment(ctx context.Context, e *ActionEnvironment) error {
+// UpdateEnvironment validates and saves the rules of e (its name only in letter case) and makes reviewers its whole
+// list of reviewers, and records one entry with what changed (none without a change). The environment requires reviews
+// when the list is not empty: editing the list is how that rule changes, also to none at all. Only the shape of the list
+// is checked here (at most MaxEnvironmentReviewers, each a user or a team, none twice); the caller checks that they
+// exist and that a team belongs to the owner of the repository.
+func UpdateEnvironment(ctx context.Context, e *ActionEnvironment, reviewers []ActionEnvironmentReviewer) error {
+	if err := audit_model.CheckOwnAct(ctx); err != nil {
+		return err
+	}
 	if err := e.Normalize(); err != nil {
 		return err
 	}
+	keys, err := reviewerListKeys(reviewers)
+	if err != nil {
+		return err
+	}
+	e.ReviewsRequired = len(keys) > 0
 	return db.WithTx(ctx, func(ctx context.Context) error {
 		if err := LockEnvironment(ctx, e.RepoID, e.ID); err != nil {
 			return err
@@ -384,13 +416,29 @@ func UpdateEnvironment(ctx context.Context, e *ActionEnvironment) error {
 		if stored.LowerName != e.LowerName {
 			return util.NewInvalidArgumentErrorf("an environment can't be renamed")
 		}
-		if changes := audit_model.Changes(stored.auditData(), e.auditData()); changes != nil {
-			if err := recordEnvironment(ctx, audit_model.LevelActions{Repo: "repo.actions_env.updated"}, e, changes); err != nil {
-				return err
-			}
+		before, err := FindEnvironmentReviewers(ctx, stored.ID)
+		if err != nil {
+			return err
 		}
-		_, err = db.GetEngine(ctx).ID(e.ID).Cols("name", "ref_policy", "ref_patterns", "wait_timer_minutes", "prevent_self_review", "runner_labels", "allowed_workflows").Update(e)
-		return err
+		old, now := stored.auditData(), e.auditData()
+		old["reviewers"], now["reviewers"] = reviewerKeys(before), keys
+		changes := audit_model.Changes(old, now)
+		if changes == nil {
+			return nil
+		}
+		if err := recordEnvironment(ctx, audit_model.LevelActions{Repo: "repo.actions_env.updated"}, e, changes); err != nil {
+			return err
+		}
+		if _, err := db.GetEngine(ctx).ID(e.ID).Cols("name", "ref_policy", "ref_patterns", "wait_timer_minutes", "prevent_self_review", "runner_labels", "allowed_workflows", "reviews_required").Update(e); err != nil {
+			return err
+		}
+		if slices.Equal(reviewerKeys(before), keys) {
+			return nil
+		}
+		if _, err := db.GetEngine(ctx).Where("environment_id = ?", e.ID).Delete(new(ActionEnvironmentReviewer)); err != nil {
+			return err
+		}
+		return insertReviewers(ctx, e.RepoID, e.ID, reviewers)
 	})
 }
 
@@ -398,13 +446,7 @@ func UpdateEnvironment(ctx context.Context, e *ActionEnvironment) error {
 // and returns ErrEnvironmentNotFound if it is gone. Every insert of a secret or variable of an environment and its delete
 // take it first, so a concurrent delete can't leave rows of a deleted environment behind. Call it inside a transaction.
 func LockEnvironment(ctx context.Context, repoID, id int64) error {
-	if err := secret_model.LockEnvironment(ctx, repoID, id); err != nil {
-		if errors.Is(err, util.ErrNotExist) {
-			return ErrEnvironmentNotFound
-		}
-		return err
-	}
-	return nil
+	return secret_model.LockEnvironment(ctx, repoID, id)
 }
 
 // DeleteEnvironment deletes the environment with its secrets and variables and records it. Its deployments stay as
@@ -413,6 +455,9 @@ func LockEnvironment(ctx context.Context, repoID, id int64) error {
 func DeleteEnvironment(ctx context.Context, e *ActionEnvironment, failUnpickedJobs func(context.Context) error) error {
 	if failUnpickedJobs == nil {
 		return errors.New("DeleteEnvironment needs a function that fails the jobs waiting for the environment")
+	}
+	if err := audit_model.CheckOwnAct(ctx); err != nil {
+		return err
 	}
 	return db.WithTx(ctx, func(ctx context.Context) error {
 		if err := LockEnvironment(ctx, e.RepoID, e.ID); err != nil {
@@ -451,4 +496,30 @@ func DeleteEnvironment(ctx context.Context, e *ActionEnvironment, failUnpickedJo
 		_, err = db.DeleteByID[ActionEnvironment](ctx, stored.ID)
 		return err
 	})
+}
+
+// countByEnvironment counts the rows of table (secret or action_variable) of each of the environments of the
+// repository, in one query.
+func countByEnvironment(ctx context.Context, table string, repoID int64, ids []int64) (map[int64]int64, error) {
+	var rows []struct {
+		EnvironmentID int64
+		N             int64
+	}
+	err := db.GetEngine(ctx).Table(table).Select("environment_id, COUNT(*) AS n").
+		Where("repo_id = ?", repoID).In("environment_id", ids).GroupBy("environment_id").Find(&rows)
+	out := make(map[int64]int64, len(rows))
+	for _, r := range rows {
+		out[r.EnvironmentID] = r.N
+	}
+	return out, err
+}
+
+// CountEnvironmentSecretsAndVariables counts the secrets and the variables of each of the environments of the
+// repository, with one query each.
+func CountEnvironmentSecretsAndVariables(ctx context.Context, repoID int64, ids []int64) (secrets, variables map[int64]int64, err error) {
+	if secrets, err = countByEnvironment(ctx, "secret", repoID, ids); err != nil {
+		return nil, nil, err
+	}
+	variables, err = countByEnvironment(ctx, "action_variable", repoID, ids)
+	return secrets, variables, err
 }

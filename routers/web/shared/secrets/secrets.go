@@ -54,6 +54,10 @@ func EditSecretPost(ctx *context.Context, ownerID, groupID, repoID, id int64, re
 	}
 
 	secret.Name = form.Name
+	if err := secret_model.ValidateValue(form.Data); err != nil {
+		ctx.JSONError(err.Error())
+		return
+	}
 	if form.Data != "" {
 		secret.SetData(util.ReserveLineBreakForTextarea(form.Data))
 	}

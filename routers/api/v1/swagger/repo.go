@@ -569,6 +569,20 @@ type swaggerSyncForkInfo struct {
 	Body api.SyncForkInfo `json:"body"`
 }
 
+// ActionEnvironment
+// swagger:response ActionEnvironment
+type swaggerActionEnvironment struct {
+	// in:body
+	Body api.ActionEnvironment `json:"body"`
+}
+
+// ActionEnvironmentList
+// swagger:response ActionEnvironmentList
+type swaggerActionEnvironmentList struct {
+	// in:body
+	Body []api.ActionEnvironment `json:"body"`
+}
+
 // ActionDeploymentList
 // swagger:response ActionDeploymentList
 type swaggerActionDeploymentList struct {

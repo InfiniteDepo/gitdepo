@@ -35,7 +35,7 @@ func TestAPIActionDeploymentsInProject(t *testing.T) {
 	stranger := getUserToken(t, "user5", auth_model.AccessTokenScopeWriteRepository)
 
 	env := &actions_model.ActionEnvironment{RepoID: repo.ID, Name: "proj-env"}
-	require.NoError(t, actions_model.CreateEnvironment(ctx, env))
+	require.NoError(t, actions_model.CreateEnvironment(ctx, env, nil))
 	_, err := db.GetEngine(ctx).Insert(&actions_model.ActionEnvironmentReviewer{EnvironmentID: env.ID, UserID: 2})
 	require.NoError(t, err)
 

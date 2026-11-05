@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	actions_model "forgejo.org/models/actions"
+	"forgejo.org/models/db"
 	user_model "forgejo.org/models/user"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/util"
@@ -39,11 +40,95 @@ func runOfRepo(ctx *context.APIContext) *actions_model.ActionRun {
 	return run
 }
 
+// deploymentData holds what the deployments of a page refer to, loaded with one query per table; users hold the ghost
+// for a user the doer can't see.
+type deploymentData struct {
+	jobs  map[int64]*actions_model.ActionRunJob
+	runs  map[int64]*actions_model.ActionRun
+	envs  map[int64]*actions_model.ActionEnvironment
+	users map[int64]*user_model.User
+}
+
+func loadDeploymentData(ctx *context.APIContext, ds []*actions_model.ActionDeployment) (*deploymentData, error) {
+	var jobIDs, runIDs, envIDs, userIDs []int64
+	for _, d := range ds {
+		jobIDs, runIDs, envIDs = append(jobIDs, d.JobID), append(runIDs, d.RunID), append(envIDs, d.EnvironmentID)
+		userIDs = append(userIDs, d.TriggerUserID, d.ReviewedBy)
+	}
+	data := &deploymentData{}
+	var err error
+	if data.jobs, err = findColumns[actions_model.ActionRunJob](ctx, jobIDs, "id", "repo_id", "name"); err != nil {
+		return nil, err
+	}
+	if data.runs, err = findColumns[actions_model.ActionRun](ctx, runIDs, "id", "repo_id", "index"); err != nil {
+		return nil, err
+	}
+	if data.envs, err = findColumns[actions_model.ActionEnvironment](ctx, envIDs, "id", "repo_id", "name"); err != nil {
+		return nil, err
+	}
+	userIDs = slices.DeleteFunc(slices.Compact(slices.Sorted(slices.Values(userIDs))), func(id int64) bool { return id == 0 })
+	if data.users, err = user_model.GetUsersByIDsWithBots(ctx, userIDs); err != nil {
+		return nil, err
+	}
+	// a user the doer can't see (e.g. a private account on a public repository) is shown as the ghost
+	for id, u := range data.users {
+		if !user_model.IsUserVisibleToViewer(ctx, u, ctx.Doer()) {
+			data.users[id] = user_model.NewGhostUser()
+		}
+	}
+	return data, nil
+}
+
+// findColumns loads the rows of ids by ID with only the named columns (run and job rows carry large payloads).
+func findColumns[T any](ctx *context.APIContext, ids []int64, columns ...string) (map[int64]*T, error) {
+	rows := map[int64]*T{}
+	if ids = slices.Compact(slices.Sorted(slices.Values(ids))); len(ids) == 0 {
+		return rows, nil
+	}
+	return rows, db.GetEngine(ctx).In("id", ids).Cols(columns...).Find(&rows)
+}
+
+// toActionDeployment converts what every list of deployments shows of d. Everything is read from the repository of
+// the request: a run, job or environment of another repository is left out.
+func (data *deploymentData) toActionDeployment(ctx *context.APIContext, d *actions_model.ActionDeployment) *api.ActionDeployment {
+	repo := ctx.Repo().Repository
+	item := &api.ActionDeployment{
+		ID: d.ID, JobID: d.JobID, Attempt: d.Attempt, Status: d.Status.String(), Reason: d.Reason,
+		ReviewComment: d.ReviewComment, Created: d.Created.AsTime(), RunID: d.RunID, Ref: d.Ref, CommitSHA: d.CommitSHA,
+		EnvironmentURL: d.URL,
+	}
+	if job, ok := data.jobs[d.JobID]; ok && job.RepoID == repo.ID {
+		item.JobName = job.Name
+	}
+	if run, ok := data.runs[d.RunID]; ok && run.RepoID == repo.ID {
+		run.Repo = repo
+		item.RunURL = run.HTMLURL()
+	}
+	if env, ok := data.envs[d.EnvironmentID]; ok && env.RepoID == repo.ID { // missing for a deleted environment
+		item.Environment = env.Name
+	}
+	if d.ReleaseAfterUnix > 0 {
+		t := d.ReleaseAfterUnix.AsTime()
+		item.ReleaseAfter = &t
+	}
+	if d.TriggerUserID != 0 {
+		_, u := user_model.GetUserFromMap(d.TriggerUserID, data.users)
+		item.TriggeredBy = convert.ToUser(ctx, u, ctx.Doer())
+	}
+	if d.ReviewedBy != 0 {
+		_, u := user_model.GetUserFromMap(d.ReviewedBy, data.users)
+		item.ReviewedBy = convert.ToUser(ctx, u, ctx.Doer())
+		t := d.ReviewedUnix.AsTime()
+		item.ReviewedAt = &t
+	}
+	return item
+}
+
 // toActionDeployments converts the deployments of the run for doer. What the doer may review is decided by the same
 // checker as the review itself, over the deployments that can be reviewed now; the environments and their reviewers
 // are loaded once.
 func toActionDeployments(ctx *context.APIContext, run *actions_model.ActionRun, ds []*actions_model.ActionDeployment) ([]*api.ActionDeployment, error) {
-	jobs, err := actions_model.GetRunJobsByRunID(ctx, run.ID)
+	data, err := loadDeploymentData(ctx, ds)
 	if err != nil {
 		return nil, err
 	}
@@ -55,40 +140,15 @@ func toActionDeployments(ctx *context.APIContext, run *actions_model.ActionRun, 
 	if err != nil {
 		return nil, err
 	}
-	users := map[int64]*user_model.User{}
 	out := make([]*api.ActionDeployment, 0, len(ds))
 	for _, d := range ds {
-		item := &api.ActionDeployment{
-			ID: d.ID, JobID: d.JobID, Attempt: d.Attempt, Status: d.Status.String(), Reason: d.Reason,
-			ReviewComment: d.ReviewComment, Created: d.Created.AsTime(), Reviewers: &api.ActionDeploymentReviewers{},
-		}
-		if i := slices.IndexFunc(jobs, func(j *actions_model.ActionRunJob) bool { return j.ID == d.JobID }); i >= 0 {
-			item.JobName = jobs[i].Name
-		}
-		if d.ReleaseAfterUnix > 0 {
-			t := d.ReleaseAfterUnix.AsTime()
-			item.ReleaseAfter = &t
-		}
-		if d.ReviewedBy != 0 {
-			u, ok := users[d.ReviewedBy]
-			if !ok {
-				if u, err = user_model.GetPossibleUserByID(ctx, d.ReviewedBy); err != nil && !user_model.IsErrUserNotExist(err) {
-					return nil, err
-				}
-				users[d.ReviewedBy] = u
-			}
-			if u != nil {
-				item.ReviewedBy = convert.ToUser(ctx, u, ctx.Doer())
-			}
-			t := d.ReviewedUnix.AsTime()
-			item.ReviewedAt = &t
-		}
+		item := data.toActionDeployment(ctx, d)
+		item.Reviewers = &api.ActionDeploymentReviewers{}
 		env, reviewers, err := checker.Environment(ctx, d.EnvironmentID)
 		if err != nil {
 			return nil, err
 		}
 		if env != nil { // nil for a deleted environment
-			item.Environment = env.Name
 			for _, r := range reviewers {
 				if r.TeamID > 0 {
 					item.Reviewers.Teams++

@@ -11,8 +11,10 @@ import (
 	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
+	secret_model "forgejo.org/models/secret"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/timeutil"
+	"forgejo.org/modules/util"
 
 	"xorm.io/builder"
 )
@@ -47,16 +49,6 @@ func init() {
 	db.RegisterModel(new(ActionVariable))
 }
 
-// lockGroup locks the project row (nothing for groupID 0), so that deleting the project (which deletes its variables)
-// and adding, changing or deleting one run one after the other.
-func lockGroup(ctx context.Context, ownerID, groupID int64) error {
-	if groupID == 0 {
-		return nil
-	}
-	_, err := repo_model.LockRepoGroup(ctx, ownerID, groupID)
-	return err
-}
-
 func InsertVariable(ctx context.Context, ownerID, groupID, repoID int64, name, data string) (*ActionVariable, error) {
 	return insertVariable(ctx, ownerID, groupID, repoID, 0, name, data)
 }
@@ -76,6 +68,9 @@ func insertVariable(ctx context.Context, ownerID, groupID, repoID, environmentID
 		groupID = 0
 	}
 
+	if err := secret_model.ValidateValue(data); err != nil {
+		return nil, err
+	}
 	variable := &ActionVariable{
 		OwnerID:       ownerID,
 		GroupID:       groupID,
@@ -85,13 +80,11 @@ func insertVariable(ctx context.Context, ownerID, groupID, repoID, environmentID
 		Data:          data,
 	}
 	return variable, db.WithTx(ctx, func(ctx context.Context) error {
-		if err := lockGroup(ctx, ownerID, groupID); err != nil {
+		if err := secret_model.LockLevel(ctx, ownerID, groupID, repoID, environmentID); err != nil {
 			return err
 		}
-		if environmentID != 0 {
-			if err := LockEnvironment(ctx, repoID, environmentID); err != nil {
-				return err
-			}
+		if err := secret_model.CheckEnvironmentCount(ctx, "action_variable", repoID, environmentID); err != nil {
+			return err
 		}
 		if err := db.Insert(ctx, variable); err != nil {
 			return err
@@ -159,14 +152,25 @@ func FindVariables(ctx context.Context, opts FindVariablesOpts) ([]*ActionVariab
 }
 
 func UpdateVariable(ctx context.Context, variable *ActionVariable) (bool, error) {
+	if err := secret_model.ValidateValue(variable.Data); err != nil {
+		return false, err
+	}
 	var count int64
 	err := db.WithTx(ctx, func(ctx context.Context) (err error) {
-		if err = lockGroup(ctx, variable.OwnerID, variable.GroupID); err != nil {
+		if err = secret_model.LockLevel(ctx, variable.OwnerID, variable.GroupID, variable.RepoID, variable.EnvironmentID); err != nil {
 			return err
 		}
 		stored := new(ActionVariable)
 		if has, err := db.GetEngine(ctx).ID(variable.ID).Where("owner_id = ? AND group_id = ? AND repo_id = ? AND environment_id = ?", variable.OwnerID, variable.GroupID, variable.RepoID, variable.EnvironmentID).Get(stored); err != nil || !has {
 			return err
+		}
+		if stored.Name != variable.Name {
+			if taken, err := db.GetEngine(ctx).Table("action_variable").Where("owner_id = ? AND group_id = ? AND repo_id = ? AND environment_id = ? AND name = ? AND id <> ?",
+				variable.OwnerID, variable.GroupID, variable.RepoID, variable.EnvironmentID, variable.Name, variable.ID).Exist(); err != nil {
+				return err
+			} else if taken {
+				return util.NewAlreadyExistErrorf("variable name %s already exists", variable.Name)
+			}
 		}
 		if valueChanged := stored.Data != variable.Data; valueChanged || stored.Name != variable.Name {
 			data := audit_model.Changes(map[string]any{"name": stored.Name}, map[string]any{"name": variable.Name})
@@ -204,7 +208,7 @@ func DeleteEnvironmentVariable(ctx context.Context, variableID, repoID, environm
 func deleteVariable(ctx context.Context, variableID, ownerID, groupID, repoID, environmentID int64) (bool, error) {
 	var count int64
 	err := db.WithTx(ctx, func(ctx context.Context) (err error) {
-		if err = lockGroup(ctx, ownerID, groupID); err != nil {
+		if err = secret_model.LockLevel(ctx, ownerID, groupID, repoID, environmentID); err != nil {
 			return err
 		}
 		stored := new(ActionVariable)

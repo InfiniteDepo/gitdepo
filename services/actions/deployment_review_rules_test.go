@@ -30,7 +30,7 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 	t.Run("reviewers added while the timer runs hold the job for an approval", func(t *testing.T) {
 		f := newReviewFixture(t, &actions_model.ActionEnvironment{WaitTimerMinutes: 5}, nil, nil)
 		assert.Equal(t, actions_model.DeploymentWaitingTimer, f.status(t))
-		require.NoError(t, SetEnvironmentReviewers(f.ctx, f.env, []int64{2}, nil))
+		require.NoError(t, setReviewers(f.ctx, f.env, []int64{2}, nil))
 		b, err := gateEnvironment(f.ctx, f.job)
 		require.NoError(t, err)
 		assert.Equal(t, behaviourHoldJob, b)
@@ -39,7 +39,7 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 
 	t.Run("reviewers removed by an edit release a job that waits for an approval", func(t *testing.T) {
 		f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{2}, nil)
-		require.NoError(t, SetEnvironmentReviewers(f.ctx, f.env, nil, nil))
+		require.NoError(t, setReviewers(f.ctx, f.env, nil, nil))
 		b, err := gateEnvironment(f.ctx, f.job)
 		require.NoError(t, err)
 		assert.Equal(t, behaviourExecuteJob, b)
@@ -49,7 +49,7 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 	t.Run("reviewers lost by a deletion keep holding, one entry per environment", func(t *testing.T) {
 		f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{2, 4}, nil)
 		other := newEnvironment(t, &actions_model.ActionEnvironment{Name: "other"})
-		require.NoError(t, SetEnvironmentReviewers(f.ctx, other, []int64{4}, nil))
+		require.NoError(t, setReviewers(f.ctx, other, []int64{4}, nil))
 		since := auditSince(t)
 		require.NoError(t, db.WithTx(f.ctx, func(ctx context.Context) error {
 			return actions_model.RemoveReviewers(ctx, actions_model.UserReviewerCond(4))
@@ -68,7 +68,7 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 		d := &actions_model.ActionDeployment{Status: actions_model.DeploymentWaitingReview, Created: 1 << 40}
 		nextDeploymentStatus(d, stored, "", 1)
 		assert.Equal(t, actions_model.DeploymentWaitingReview, d.Status)
-		require.NoError(t, SetEnvironmentReviewers(f.ctx, stored, nil, nil))
+		require.NoError(t, setReviewers(f.ctx, stored, nil, nil))
 		stored, err = actions_model.GetRepoEnvironmentByID(f.ctx, 63, other.ID)
 		require.NoError(t, err)
 		assert.False(t, stored.ReviewsRequired, "an edit is how the rule is lifted")
@@ -77,7 +77,7 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 	t.Run("deleting a team keeps the environment holding", func(t *testing.T) {
 		f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{2}, nil)
 		teamReadsActions(t, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3}))
-		require.NoError(t, SetEnvironmentReviewers(f.ctx, f.env, nil, []int64{2}))
+		require.NoError(t, setReviewers(f.ctx, f.env, nil, []int64{2}))
 		team, err := org_model.GetTeamByID(f.ctx, 2)
 		require.NoError(t, err)
 		since := auditSince(t)
@@ -91,7 +91,7 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 	t.Run("a transfer drops the teams of the old organization, audited, and keeps requiring a review", func(t *testing.T) {
 		f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{2}, nil)
 		teamReadsActions(t, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3}))
-		require.NoError(t, SetEnvironmentReviewers(f.ctx, f.env, []int64{2}, []int64{2})) // team 2 is organization 3's
+		require.NoError(t, setReviewers(f.ctx, f.env, []int64{2}, []int64{2})) // team 2 is organization 3's
 		require.NoError(t, db.WithTx(f.ctx, func(ctx context.Context) error {
 			return actions_model.RemoveReviewers(ctx, actions_model.ForeignTeamReviewerCond(63, 3))
 		}))
@@ -124,14 +124,14 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 		assert.Len(t, auditActions(t, since, "repo.actions_env.updated"), 1)
 		// a team of another organization, as after a restore to a new owner
 		require.NoError(t, db.WithTx(f.ctx, func(ctx context.Context) error {
-			require.NoError(t, actions_model.ReplaceEnvironmentReviewers(ctx, f.env, []actions_model.ActionEnvironmentReviewer{{UserID: 2}, {TeamID: 2}}))
+			require.NoError(t, replaceReviewers(ctx, f.env, []actions_model.ActionEnvironmentReviewer{{UserID: 2}, {TeamID: 2}}))
 			return actions_model.RemoveReviewers(ctx, actions_model.ForeignTeamReviewerCond(63, 6))
 		}))
 		rs, err := actions_model.FindEnvironmentReviewers(f.ctx, f.env.ID)
 		require.NoError(t, err)
 		assert.Len(t, rs, 1)
 		// deleting a team that reviews there
-		require.NoError(t, actions_model.ReplaceEnvironmentReviewers(f.ctx, f.env, []actions_model.ActionEnvironmentReviewer{{TeamID: 2}}))
+		require.NoError(t, replaceReviewers(f.ctx, f.env, []actions_model.ActionEnvironmentReviewer{{TeamID: 2}}))
 		team, err := org_model.GetTeamByID(f.ctx, 2)
 		require.NoError(t, err)
 		require.NoError(t, models.DeleteTeam(f.ctx, team))
@@ -165,7 +165,7 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 		defer test.MockVariableValue(&jobEmitterQueue, q)()
 		_, err = db.GetEngine(t.Context()).Exec("UPDATE action_run_job SET task_id = 0 WHERE id = ?", f.job.ID) // no runner took it
 		require.NoError(t, err)
-		require.NoError(t, SetEnvironmentReviewers(f.ctx, f.env, nil, nil))
+		require.NoError(t, setReviewers(f.ctx, f.env, nil, nil))
 		select {
 		case id := <-queued:
 			assert.Equal(t, f.run.ID, id)
@@ -181,7 +181,7 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 		defer test.MockVariableValue(&setting.Actions.DeploymentApprovalTimeout, 48*time.Hour)()
 		_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET created = ? WHERE job_id = ?", time.Now().Add(-49*time.Hour).Unix(), f.job.ID)
 		require.NoError(t, err)
-		require.NoError(t, actions_model.ReplaceEnvironmentReviewers(f.ctx, f.env, nil)) // no emitter pass, as in a race with the cron
+		require.NoError(t, replaceReviewers(f.ctx, f.env, nil)) // no emitter pass, as in a race with the cron
 		require.NoError(t, ExpireDeploymentReviews(f.ctx))
 		assert.Equal(t, actions_model.DeploymentWaitingReview, f.status(t), "not expired")
 		f.emit(t)
@@ -204,11 +204,11 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 		assert.False(t, check(audit_model.WithActor(t.Context(), actor)))
 	})
 
-	t.Run("an environment name has no colon or whitespace", func(t *testing.T) {
+	t.Run("an environment name has no colon, whitespace or path character and is not only dots", func(t *testing.T) {
 		require.NoError(t, unittest.PrepareTestDatabase())
-		for _, name := range []string{"a:b", "a b", "a\tb", "a\u00a0b", "a\u2003b"} {
+		for _, name := range []string{"a:b", "a b", "a\tb", "a\u00a0b", "a\u2003b", ".", "..", "a/b", "a?b", "a#b", "a%b", "a\\b"} {
 			require.Error(t, actions_model.CreateEnvironment(audit_model.WithSystem(t.Context(), "test"),
-				&actions_model.ActionEnvironment{RepoID: 63, Name: name}), name)
+				&actions_model.ActionEnvironment{RepoID: 63, Name: name}, nil), name)
 		}
 	})
 }
@@ -350,7 +350,7 @@ func TestApprovalRevokedWhenApproverIsNoLongerEligible(t *testing.T) {
 		return f
 	}
 	timerEnds := func(t *testing.T, f *reviewFixture) {
-		_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET release_after_unix = ? WHERE job_id = ?", time.Now().Add(-time.Minute).Unix(), f.job.ID)
+		_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET release_after_unix = ?, created = created - 86400 WHERE job_id = ?", time.Now().Add(-time.Minute).Unix(), f.job.ID) // the timer counts from the creation
 		require.NoError(t, err)
 	}
 
@@ -365,7 +365,7 @@ func TestApprovalRevokedWhenApproverIsNoLongerEligible(t *testing.T) {
 
 	for name, change := range map[string]func(t *testing.T, f *reviewFixture){
 		"removed from the reviewers": func(t *testing.T, f *reviewFixture) {
-			require.NoError(t, SetEnvironmentReviewers(f.ctx, f.env, []int64{2}, nil))
+			require.NoError(t, setReviewers(f.ctx, f.env, []int64{2}, nil))
 		},
 		"deactivated": func(t *testing.T, f *reviewFixture) {
 			_, err := db.GetEngine(t.Context()).Exec("UPDATE user SET is_active = ? WHERE id = 4", false)
@@ -414,8 +414,8 @@ func TestRevokeApprovalLostRace(t *testing.T) {
 	grantActionsRead(t, 4)
 	_, err := f.review(t, 4, true, "")
 	require.NoError(t, err)
-	require.NoError(t, SetEnvironmentReviewers(f.ctx, f.env, []int64{2}, nil)) // the approver is no reviewer any more
-	stale := f.deployment(t)                                                   // read before the race
+	require.NoError(t, setReviewers(f.ctx, f.env, []int64{2}, nil)) // the approver is no reviewer any more
+	stale := f.deployment(t)                                        // read before the race
 	_, err = db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET reviewed_by = 2 WHERE id = ?", stale.ID)
 	require.NoError(t, err) // somebody else approved meanwhile
 	env, err := actions_model.GetRepoEnvironmentByID(f.ctx, 63, f.env.ID)
@@ -477,4 +477,46 @@ func TestReviewRefusesEmptyJobsAndNoActor(t *testing.T) {
 
 	_, err = ReviewDeployments(f.ctx, doer, f.run, []int64{f.job.ID}, true, "")
 	require.NoError(t, err)
+}
+
+// The model checks the reviewers again in the transaction that inserts them, after the services' checks: a user or team
+// deleted meanwhile, or a team of an organization that no longer owns the repository, is refused there.
+func TestReviewerTeamsCheckedInTransaction(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := audit_model.WithSystem(t.Context(), "test")
+	e := &actions_model.ActionEnvironment{RepoID: 3, Name: "prod"} // repository 3 belongs to organization 3, team 1 too
+	require.NoError(t, actions_model.CreateEnvironment(ctx, e, []actions_model.ActionEnvironmentReviewer{{TeamID: 1}}))
+	for name, list := range map[string][]actions_model.ActionEnvironmentReviewer{
+		"a team of another organization": {{TeamID: 5}},
+		"a team that is gone":            {{TeamID: 99999}},
+		"a user that is gone":            {{TeamID: 1}, {UserID: 99999}},
+	} {
+		require.ErrorIs(t, actions_model.UpdateEnvironment(ctx, e, list), util.ErrInvalidArgument, name)
+		require.ErrorIs(t, actions_model.CreateEnvironment(ctx, &actions_model.ActionEnvironment{RepoID: 3, Name: "other"}, list), util.ErrInvalidArgument, name)
+	}
+	rs, err := actions_model.FindEnvironmentReviewers(ctx, e.ID)
+	require.NoError(t, err)
+	require.Len(t, rs, 1, "a refused list changes nothing")
+	assert.EqualValues(t, 1, rs[0].TeamID)
+	unittest.AssertNotExistsBean(t, &actions_model.ActionEnvironment{RepoID: 3, LowerName: "other"})
+}
+
+// The size of a reviewer list and its duplicates are refused before any account is looked up.
+func TestSaveEnvironmentChecksTheListFirst(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := audit_model.WithActor(t.Context(), &audit_model.Actor{Type: audit_model.ActorUser, ID: 2, Credential: audit_model.Credential{Type: audit_model.CredentialAccessToken, ID: 1}})
+	doer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	e := func() *actions_model.ActionEnvironment {
+		return &actions_model.ActionEnvironment{RepoID: 1, Name: "prod"}
+	}
+	_, err := SaveEnvironment(ctx, doer, e(), []int64{90001, 90002, 90003, 90004, 90005, 90006, 90007}, nil)
+	require.ErrorIs(t, err, util.ErrInvalidArgument)
+	assert.Contains(t, err.Error(), "too many reviewers", "not an unknown reviewer: nothing was looked up")
+	_, err = SaveEnvironment(ctx, doer, e(), []int64{90001, 90001}, nil)
+	require.ErrorIs(t, err, util.ErrInvalidArgument)
+	assert.Contains(t, err.Error(), "listed once")
+	_, err = SaveEnvironment(ctx, doer, e(), nil, []int64{90001, 90001})
+	assert.Contains(t, err.Error(), "listed once")
+	_, err = SaveEnvironment(ctx, doer, e(), []int64{90001}, nil)
+	assert.Contains(t, err.Error(), "unknown reviewer")
 }

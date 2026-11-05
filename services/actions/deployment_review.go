@@ -60,16 +60,6 @@ func ReviewCutoff() timeutil.TimeStamp {
 	return timeutil.TimeStampNow().Add(-int64(setting.Actions.DeploymentApprovalTimeout.Seconds()))
 }
 
-// notReviewersOwn tells that the request is not the reviewer's own act: it is made under sudo, or with a credential that
-// another party holds on the user's behalf (an OAuth2 grant, or an authorized integration that workflow code can use).
-// This is the rule of auth_service.IsHeldByUser, read from the request's actor, which every authentication fills; a
-// request without an actor can't be told from those, so it fails closed.
-func notReviewersOwn(ctx context.Context) bool {
-	actor := audit_model.ActorFromContext(ctx)
-	return actor == nil || (actor.SudoByID != 0 ||
-		actor.Credential.Type == audit_model.CredentialOAuth2Grant || actor.Credential.Type == audit_model.CredentialAuthorizedIntegration)
-}
-
 // reviewEnvironment is an environment of the run with its reviewers and whether the doer is one of them.
 type reviewEnvironment struct {
 	env       *actions_model.ActionEnvironment // nil if the environment is deleted
@@ -136,7 +126,7 @@ func (c *ReviewChecker) doerMayAct(ctx context.Context) (bool, error) {
 	doer, repo := c.doer, c.run.Repo
 	// a decision is its reviewer's own: under sudo, or with a credential another party holds for the reviewer, nobody
 	// reviews, so can_review says what the review call will
-	if notReviewersOwn(ctx) {
+	if !audit_model.IsOwnAct(ctx) {
 		doer = nil
 	}
 	if doer != nil && doer.ID > 0 && !doer.IsActions() && !doer.IsAccessTokenBot() && !doer.IsOrganization() && doer.IsActive && !doer.ProhibitLogin {
@@ -207,7 +197,7 @@ func notWaiting(runID int64) error {
 // authorized integration, is refused: a decision about a deployment is its reviewer's own, so neither an
 // administrator nor an application can give it in somebody's name.
 func ReviewDeployments(ctx context.Context, doer *user_model.User, run *actions_model.ActionRun, jobIDs []int64, approve bool, comment string) ([]*actions_model.ActionDeployment, error) {
-	if notReviewersOwn(ctx) {
+	if !audit_model.IsOwnAct(ctx) {
 		return nil, ErrReviewForbidden
 	}
 	if len(jobIDs) == 0 {

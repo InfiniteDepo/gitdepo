@@ -283,3 +283,14 @@ func TestInconsistentOwnerTeam(t *testing.T) {
 	unittest.AssertExistsAndLoadBean(t, &organization.TeamUnit{ID: 1005, AccessMode: perm.AccessModeRead})
 	unittest.AssertExistsAndLoadBean(t, &organization.TeamUnit{ID: 1006, AccessMode: perm.AccessModeRead})
 }
+
+func TestGetMemberships(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	// team 2 has users 2 and 4
+	got, err := organization.GetMemberships(t.Context(), []int64{2}, []int64{2, 4, 5, 8})
+	require.NoError(t, err)
+	assert.Equal(t, map[int64]map[int64]bool{2: {2: true}, 4: {2: true}}, got, "users in none of the teams have no key")
+	got, err = organization.GetMemberships(t.Context(), nil, []int64{2})
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}

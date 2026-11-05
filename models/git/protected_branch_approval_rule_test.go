@@ -5,10 +5,13 @@ package git_test
 
 import (
 	"fmt"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unittest"
@@ -132,6 +135,36 @@ func TestSetApprovalRules(t *testing.T) {
 	assert.Empty(t, rules)
 }
 
+// A user in very many teams must not make the lookup fail: the IDs are matched in chunks, and an ID that is only
+// part of another one matches nothing.
+func TestFindApprovalRulesListingManyTeams(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := t.Context()
+	rule := &git_model.ProtectedBranch{RepoID: 1, RuleName: "listing"}
+	require.NoError(t, db.Insert(ctx, rule))
+	require.NoError(t, db.Insert(ctx, &git_model.ApprovalRule{ProtectedBranchID: rule.ID, Name: "Teams", RequiredCount: 1, TeamIDs: []int64{250, 15}, UserIDs: []int64{77}}))
+
+	teams := make([]int64, 400)
+	for i := range teams {
+		teams[i] = int64(1000 + i)
+	}
+	found, err := git_model.FindApprovalRulesListing(ctx, nil, teams)
+	require.NoError(t, err)
+	assert.Empty(t, found)
+
+	found, err = git_model.FindApprovalRulesListing(ctx, []int64{1}, append(teams, 250))
+	require.NoError(t, err)
+	require.Len(t, found, 1, "found through the team, once, though the chunks repeat nothing")
+	assert.Equal(t, "Teams", found[0].Name)
+
+	found, err = git_model.FindApprovalRulesListing(ctx, []int64{7, 5}, []int64{25})
+	require.NoError(t, err)
+	assert.Empty(t, found, "7 is not 77, 25 is not 250 or 15")
+	found, err = git_model.FindApprovalRulesListing(ctx, nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, found)
+}
+
 func TestValidateGlobPattern(t *testing.T) {
 	for _, ok := range []string{"", "feature/*", "release/**", "src/**/*.go", "{docs,api}/**", "docs/**", "a?b", strings.Repeat("a", 255)} {
 		require.NoError(t, git_model.ValidateGlobPattern(ok, '.', '/'), "%q", ok)
@@ -228,13 +261,77 @@ func TestApprovalRulePathMatchingSharedBudget(t *testing.T) {
 			assert.True(t, r.AppliesTo(budget, files), "fails closed")
 		}
 	}
-	// 20 files of 4 KiB against 100 patterns is about 8 Mi / 1 of the budget: only the first rule fits
-	assert.Equal(t, 59, undecided)
-	// about 0.3 s; without the shared budget it was about 13 s
-	assert.Less(t, time.Since(start), 3*slowdown*time.Second)
+	// a rule takes about 100 patterns of about 20 instructions times 80 KiB: a few rules fit, the rest fail closed
+	assert.Less(t, undecided, 60)
+	assert.Greater(t, undecided, 50)
+	// about 1 s; without the shared budget it was about 13 s
+	assert.Less(t, time.Since(start), 4*slowdown*time.Second)
 
 	// a rule that fits in what is left is still matched
 	small := &git_model.ApprovalRule{PathPatterns: "docs/**"}
 	matches, decided := small.MatchesPaths(budget, []string{"docs/a.md"})
 	assert.True(t, matches && decided)
+}
+
+// The work of a match is path bytes times instructions, and only the literal prefix for a path that an anchored
+// pattern can't match: Take refuses what is beyond what is left.
+func TestPathMatchBudgetTake(t *testing.T) {
+	heavy := git_model.NewPathPattern(regexp.MustCompile(`^.*(a|b|/){1,1000}x$`))
+	file := strings.Repeat("a", 1<<10)
+	budget := git_model.NewPathMatchBudget()
+	// the heavy pattern has thousands of instructions: a few hundred KiB of paths take the whole budget
+	files := []string{}
+	for budget.Take([]string{file}, []git_model.PathPattern{heavy}) {
+		files = append(files, file)
+	}
+	assert.Greater(t, len(files), 10)
+	assert.Less(t, len(files), 1000)
+	assert.True(t, budget.Take([]string{"a.go"}, []git_model.PathPattern{git_model.NewPathPattern(regexp.MustCompile(`^.*\.go$`))}), "a small match still fits")
+
+	// a CODEOWNERS file of 1000 prefix lines and 1000 changed files outside them cost little: the paths start with
+	// none of the prefixes but one
+	lines := make([]git_model.PathPattern, 1000)
+	for i := range lines {
+		lines[i] = git_model.NewPathPattern(regexp.MustCompile(fmt.Sprintf(`^team%04d/.*$`, i)))
+	}
+	paths := make([]string, 1000)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("team0001/vendor/github.com/example/module%04d/file.go", i)
+	}
+	budget = git_model.NewPathMatchBudget()
+	require.True(t, budget.Take(paths, lines))
+	for range 10 {
+		require.True(t, budget.Take(paths, lines), "each about 40 MiB of the 512 MiB")
+	}
+
+	// a prefix that ignores case is no literal prefix: the whole path is charged
+	folded := git_model.NewPathPattern(regexp.MustCompile(`^(?i)team0001/.*$`))
+	budget = git_model.NewPathMatchBudget()
+	big := strings.Repeat("x", 64<<10)
+	n := 0
+	for budget.Take([]string{big}, []git_model.PathPattern{folded}) {
+		n++
+	}
+	assert.Less(t, n, 1000)
+
+	// the regexp reads an invalid byte as U+FFFD: a prefix holding it is no literal prefix, the whole path is charged
+	replacement := git_model.NewPathPattern(regexp.MustCompile("^\uFFFD(?:.*?){200}x$"))
+	invalid := "\x80" + strings.Repeat("ab/", 1360)
+	assert.True(t, replacement.MatchString("\x80"+strings.Repeat("ab/", 10)+"x"), "the pattern matches the invalid byte")
+	budget = git_model.NewPathMatchBudget()
+	n = 0
+	for budget.Take([]string{invalid}, []git_model.PathPattern{replacement}) {
+		n++
+	}
+	assert.Less(t, n, 1000)
+
+	// every match costs a minimum, however soon it fails
+	cheap := git_model.NewPathPattern(regexp.MustCompile(`^a`))
+	many := slices.Repeat([]string{"b"}, 1<<20)
+	budget = git_model.NewPathMatchBudget()
+	n = 0
+	for budget.Take(many, []git_model.PathPattern{cheap}) {
+		n++
+	}
+	assert.Less(t, n, 20)
 }
