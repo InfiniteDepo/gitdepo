@@ -360,7 +360,8 @@ func getViewResponse(ctx *app_context.Context, req *ViewRequest, runIndex, jobIn
 
 	var err error
 	if resp.State.Run.Deployments, err = viewDeployments(ctx, run, jobs); err != nil {
-		ctx.Error(http.StatusInternalServerError, err.Error())
+		log.Error("viewDeployments for run %d: %v", run.ID, err) // the client gets no internal text
+		ctx.Error(http.StatusInternalServerError)
 		return nil
 	}
 

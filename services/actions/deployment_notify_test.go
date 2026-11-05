@@ -167,6 +167,10 @@ func TestDeploymentMails(t *testing.T) {
 		require.NoError(t, db.Insert(t.Context(), other))
 		mailDeploymentReviewers(f.ctx, f.run, "deploy", f.env, other)
 		assert.Len(t, sent.review, 1, "the first job's mail covers it")
+		// another server's pass that also finds them waiting: the mail is claimed already
+		mailDeploymentReviewers(f.ctx, f.run, "deploy", f.env, first)
+		mailDeploymentReviewers(f.ctx, f.run, "deploy", f.env, other)
+		assert.Len(t, sent.review, 1, "claimed once")
 
 		other.Attempt++ // a rerun of that job alone
 		_, err := db.GetEngine(t.Context()).ID(other.ID).Cols("attempt").Update(other)
@@ -184,6 +188,8 @@ func TestDeploymentMails(t *testing.T) {
 		require.NoError(t, err)
 		mailDeploymentDecided(f.ctx, f.env, other)
 		assert.Equal(t, []int64{2}, sent.decided, "one rejection mail for both")
+		mailDeploymentDecided(f.ctx, f.env, f.deployment(t))
+		assert.Equal(t, []int64{2}, sent.decided, "claimed once")
 	})
 }
 
@@ -282,4 +288,19 @@ func TestFindEnvironmentLastApprovers(t *testing.T) {
 	found, err = FindEnvironmentLastApprovers(t.Context(), []int64{2})
 	require.NoError(t, err)
 	assert.Empty(t, found, "an environment that requires no review")
+}
+
+// "Waiting for a reviewer" names only the listed users who can approve: not one who can't sign in, nor the trigger
+// user the self-review rule bars.
+func TestRunReviewersNames(t *testing.T) {
+	defer unittest.OverrideFixtures("services/actions/TestGetSecretsOfJob")()
+	f := newReviewFixture(t, &actions_model.ActionEnvironment{PreventSelfReview: true}, []int64{2, 4, 5}, nil)
+	_, err := db.GetEngine(t.Context()).Exec("UPDATE `user` SET is_active = ? WHERE id = 5", false)
+	require.NoError(t, err)
+	reviewers, err := actions_model.FindEnvironmentReviewers(t.Context(), f.env.ID)
+	require.NoError(t, err)
+	owner := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	r, err := LoadRunReviewers(t.Context(), owner, f.run, []*actions_model.ActionEnvironment{f.env}, map[int64][]*actions_model.ActionEnvironmentReviewer{f.env.ID: reviewers})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"user4"}, r.Names(f.env, f.deployment(t)))
 }

@@ -373,7 +373,8 @@ func TestActionsDeploymentsWeb(t *testing.T) {
 	})
 }
 
-// The deployments view runs a fixed number of queries, whatever the number of deployments, runs, jobs and users.
+// The deployments view runs a fixed number of queries, whatever the number of deployments, runs, jobs and users,
+// private ones included.
 func TestActionsDeploymentsWebQueries(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
 	ctx := audit_model.WithSystem(t.Context(), "test")
@@ -386,6 +387,8 @@ func TestActionsDeploymentsWebQueries(t *testing.T) {
 			n++
 			u := &user_model.User{Name: fmt.Sprintf("dq-%d", n), Email: fmt.Sprintf("dq-%d@example.com", n), IsActive: true}
 			require.NoError(t, user_model.CreateUser(db.DefaultContext, u))
+			u.Visibility = api.VisibleTypePrivate // decided by a query, not per user
+			require.NoError(t, user_model.UpdateUserCols(db.DefaultContext, u, "visibility"))
 			run := &actions_model.ActionRun{RepoID: repo.ID, OwnerID: repo.OwnerID, Index: int64(9000 + n), Title: fmt.Sprintf("run %d", n), TriggerUserID: u.ID, Status: actions_model.StatusBlocked}
 			require.NoError(t, db.Insert(db.DefaultContext, run))
 			job := &actions_model.ActionRunJob{RunID: run.ID, RepoID: repo.ID, OwnerID: repo.OwnerID, Name: "deploy", Attempt: 1, Status: actions_model.StatusBlocked, Handle: fmt.Sprintf("dq-%d", n)}
@@ -436,7 +439,8 @@ func insertWaitingRun(t *testing.T, repo *repo_model.Repository, env *actions_mo
 }
 
 // Who may review is shown only to those who may change the repository's Actions: an anonymous visitor and a reader of
-// a public repository learn no reviewer, team or count from the run page, its JSON or the deployments view.
+// a public repository learn no reviewer, team or count from the run page, its JSON, the deployments view or the API's
+// list of the run's deployments (which only tells them whether they may review).
 func TestActionsDeploymentsReviewersHidden(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
 	ctx := audit_model.WithSystem(t.Context(), "test")
@@ -470,6 +474,18 @@ func TestActionsDeploymentsReviewersHidden(t *testing.T) {
 			s.MakeRequest(t, NewRequest(t, "GET", fmt.Sprintf("/org3/%s/actions/deployments?environment=prod", repo.Name)), http.StatusOK).Body.String(),
 		}
 	}
+	apiLink := fmt.Sprintf("/api/v1/repos/org3/%s/actions/runs/%d/deployments", repo.Name, run.ID)
+	readerToken := getUserToken(t, "user5", auth_model.AccessTokenScopeReadRepository)
+	for name, req := range map[string]*RequestWrapper{"anonymous": NewRequest(t, "GET", apiLink), "reader": NewRequest(t, "GET", apiLink).AddTokenAuth(readerToken)} {
+		var ds []*api.ActionDeployment
+		DecodeJSON(t, MakeRequest(t, req, http.StatusOK), &ds)
+		require.Len(t, ds, 1, name)
+		assert.Equal(t, api.ActionDeploymentReviewers{}, *ds[0].Reviewers, name)
+	}
+	var ds []*api.ActionDeployment
+	DecodeJSON(t, MakeRequest(t, NewRequest(t, "GET", apiLink).AddTokenAuth(token), http.StatusOK), &ds)
+	assert.Equal(t, api.ActionDeploymentReviewers{Users: 1, Teams: 1}, *ds[0].Reviewers, "the owner")
+
 	for name, s := range map[string]*TestSession{"anonymous": emptyTestSession(t), "reader": loginUser(t, "user5")} {
 		for i, body := range pages(t, s) {
 			for _, leak := range []string{"hidden-reviewer", "secret-deployers", "Waiting for a reviewer", "No eligible reviewer", "reviewers"} {

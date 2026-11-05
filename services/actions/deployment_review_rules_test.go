@@ -643,7 +643,7 @@ func TestCheckEnvironmentReviewersOutsiders(t *testing.T) {
 		require.NoError(t, db.Insert(ctx, &repo_model.RepoUnit{RepoID: repo.ID, Type: unit.TypeActions}))
 		check := decide(repo, owner)
 		assert.Equal(t, map[string]string{"user:1": ReviewerOutsider, "user:4": ReviewerOutsider, "user:8": ReviewerOutsider, "user:9": ReviewerOutsider, "user:24": ReviewerOutsider}, check.Ineligible)
-		assert.False(t, check.NoReviewer[1], "an outsider may approve a public repository's deployments")
+		assert.True(t, check.NoReviewer[1], "reading a public repository is not enough to approve its deployments")
 		assert.NotContains(t, readers(check), int64(1))
 		assert.NotContains(t, readers(check), int64(8))
 
@@ -651,7 +651,7 @@ func TestCheckEnvironmentReviewersOutsiders(t *testing.T) {
 		check = decide(repo, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1}))
 		assert.Equal(t, ReviewerTwoFactor, check.Ineligible["user:4"])
 		assert.Equal(t, ReviewerNotUsable, check.Ineligible["user:9"])
-		assert.Empty(t, check.Ineligible["user:24"])
+		assert.Equal(t, ReviewerOutsider, check.Ineligible["user:24"], "usable, but without a membership path")
 	})
 
 	t.Run("a public repository of a user", func(t *testing.T) {

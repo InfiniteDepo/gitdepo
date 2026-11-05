@@ -10,6 +10,7 @@ import (
 	actions_model "forgejo.org/models/actions"
 	"forgejo.org/models/db"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/structs"
 )
 
 // DeploymentData holds what a page of deployments of one repository refers to, loaded with one query per table and
@@ -45,16 +46,31 @@ func LoadDeploymentData(ctx context.Context, doer *user_model.User, repoID int64
 }
 
 // VisibleUsers loads the users of the IDs (0 left out), with the ghost for a user the doer can't see (e.g. a private
-// account on a public repository).
+// account on a public repository): the accounts that aren't public are decided together, by the rule of the user
+// search (user_model.BuildCanSeeUserCondition), in one query.
 func VisibleUsers(ctx context.Context, doer *user_model.User, ids []int64) (map[int64]*user_model.User, error) {
 	ids = slices.DeleteFunc(slices.Compact(slices.Sorted(slices.Values(ids))), func(id int64) bool { return id == 0 })
 	users, err := user_model.GetUsersByIDsWithBots(ctx, ids)
 	if err != nil {
 		return nil, err
 	}
+	var hidden []int64
 	for id, u := range users {
-		if !user_model.IsUserVisibleToViewer(ctx, u, doer) {
+		if id > 0 && u.Visibility != structs.VisibleTypePublic {
+			hidden = append(hidden, id)
+		} else if id <= 0 && !user_model.IsUserVisibleToViewer(ctx, u, doer) {
 			users[id] = user_model.NewGhostUser()
+		}
+	}
+	if cond := user_model.BuildCanSeeUserCondition(doer); cond != nil && len(hidden) > 0 {
+		var visible []int64
+		if err := db.GetEngine(ctx).Table("user").Where(cond).In("`user`.id", hidden).Cols("`user`.id").Find(&visible); err != nil {
+			return nil, err
+		}
+		for _, id := range hidden {
+			if !slices.Contains(visible, id) {
+				users[id] = user_model.NewGhostUser()
+			}
 		}
 	}
 	return users, nil

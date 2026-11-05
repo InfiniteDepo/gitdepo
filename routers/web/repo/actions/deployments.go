@@ -108,13 +108,6 @@ func userName(users map[int64]*user_model.User, id int64) string {
 	return u.GetDisplayName()
 }
 
-// seesReviewers tells if the doer is shown who may review the run's deployments, and that nobody can: those who may
-// change the repository's Actions. Everyone else, readers of a public repository included, learns nothing about the
-// reviewers, their accounts or their memberships.
-func seesReviewers(ctx *app_context.Context) bool {
-	return ctx.Doer != nil && ctx.Repo.CanWrite(unit.TypeActions)
-}
-
 // viewDeployments builds the Deployments panel of the run, nil if no job of it names an environment, with a fixed
 // number of queries however many jobs wait. Who may review is decided by the checker of the review itself.
 func viewDeployments(ctx *app_context.Context, run *actions_model.ActionRun, jobs []*actions_model.ActionRunJob) (*ViewDeployments, error) {
@@ -176,7 +169,7 @@ func viewDeployments(ctx *app_context.Context, run *actions_model.ActionRun, job
 		return nil, nil //nolint:nilnil // nil means no job of the current attempts names an environment
 	}
 	var runReviewers *actions_service.RunReviewers
-	if len(waitingEnvs) > 0 && seesReviewers(ctx) {
+	if len(waitingEnvs) > 0 && actions_service.SeesReviewers(ctx.Doer, ctx.Repo.Permission) {
 		envs := slices.Collect(maps.Values(waitingEnvs))
 		if runReviewers, err = actions_service.LoadRunReviewers(ctx, ctx.Doer, run, envs, envReviewers); err != nil {
 			return nil, err
@@ -281,7 +274,7 @@ func waitingText(ctx *app_context.Context, run *actions_model.ActionRun, env *ac
 			}
 			return
 		}
-		if names := reviewers.Names(env.ID); len(names) > 0 {
+		if names := reviewers.Names(env, d); len(names) > 0 {
 			item.Text = ctx.Locale.TrString("actions.deployments.waiting_for", strings.Join(names[:min(len(names), maxReviewerNames)], ", "))
 		}
 	}

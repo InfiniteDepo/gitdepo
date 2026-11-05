@@ -146,7 +146,7 @@ const (
 	ReviewerNoAccess   = "no_access"    // can't read the repository's Actions
 	ReviewerNoneInTeam = "none_in_team" // a team none of whose members can approve
 	// ReviewerOutsider is a user without a membership path to the repository (memberPath), whatever their account:
-	// such a user can't be added (ErrReviewerNotMember), and one listed before is not decided for the doer
+	// such a user can't be added (ErrReviewerNotMember) or approve, and one listed before is not decided for the doer
 	ReviewerOutsider = "outsider"
 )
 
@@ -161,21 +161,33 @@ func memberPath(row *accessreport.Row) bool {
 }
 
 // reviewerIneligibility is what holds for a reviewer on every deployment of the repository (whose owner is loaded): a
-// usable person with read access to its Actions. It returns "" if u may review, otherwise why not.
+// usable person with a membership path to it and read access to its Actions (approverReason). It returns "" if u may
+// review, otherwise why not.
 func reviewerIneligibility(ctx context.Context, repo *repo_model.Repository, u *user_model.User) (string, error) {
 	if !usableReviewer(u) {
 		return ReviewerNotUsable, nil
 	}
-	if missing, err := withoutTwoFactor(ctx, repo.Owner, []int64{u.ID}); err != nil || missing.Contains(u.ID) {
-		return ReviewerTwoFactor, err
-	}
-	perm, err := access_model.GetUserRepoPermission(ctx, repo, u)
+	missing, err := withoutTwoFactor(ctx, repo.Owner, []int64{u.ID})
 	if err != nil {
 		return "", err
-	} else if !perm.CanRead(unit.TypeActions) {
-		return ReviewerNoAccess, nil
 	}
-	return "", nil
+	rows, err := accessreport.Compute(ctx, accessreport.Options{RepoIDs: []int64{repo.ID}, Users: []int64{u.ID}, RepoPermission: true})
+	if err != nil {
+		return "", err
+	}
+	for _, row := range rows {
+		if row.User != nil && row.User.ID == u.ID {
+			return approverReason(row, missing), nil
+		}
+	}
+	return ReviewerOutsider, nil
+}
+
+// SeesReviewers is the one rule of who is shown the reviewers of a repository's deployments (their names, their
+// number, that nobody can approve): a signed-in user who may change its Actions. Everyone else, readers of a public
+// repository included, learns nothing about the reviewers, their accounts or their memberships.
+func SeesReviewers(doer *user_model.User, perm access_model.Permission) bool {
+	return doer != nil && perm.CanWrite(unit.TypeActions)
 }
 
 // twoFactorRequired tells if deployment approval in a repository of owner requires two-factor authentication: the
@@ -221,8 +233,8 @@ func usableReviewer(u *user_model.User) bool {
 // deployment at this moment by the rules every deployment shares (those of one run, such as self-review, are left out).
 type EnvironmentReviewerCheck struct {
 	// Ineligible maps a reviewer key (ActionEnvironmentReviewer.Key) to why it can't approve; absent = can. A listed
-	// user without a membership path gets ReviewerOutsider whatever their account (for NoReviewer they count as able
-	// to approve where any signed-in user can read the repository's Actions).
+	// user without a membership path gets ReviewerOutsider whatever their account, unless the doer is a site
+	// administrator.
 	Ineligible map[string]string
 	NoReviewer map[int64]bool // environment ID -> it requires reviews and no listed reviewer can approve
 	// Users are the listed users that exist (members of listed teams not included)
@@ -283,15 +295,6 @@ func CheckEnvironmentReviewers(ctx context.Context, repo *repo_model.Repository,
 		return nil, err
 	}
 	check := &EnvironmentReviewerCheck{Ineligible: map[string]string{}, NoReviewer: map[int64]bool{}, Users: map[int64]*user_model.User{}, Approvers: map[int64][]int64{}}
-	// whether an outsider may approve: the pseudo-row of signed-in users (not the one of the members of a private owner
-	// organization) reads the repository's Actions
-	outsiderMay := false
-	for _, row := range rows {
-		if row.User == nil && row.Team == nil && row.DeployKey == nil && row.OrgDeployKey == nil && row.AccessToken == nil &&
-			!row.Anonymous && len(row.Paths) > 0 && row.Paths[0].Kind != accessreport.KindOrgMember && row.Perm.CanRead(unit.TypeActions) {
-			outsiderMay = true
-		}
-	}
 	detailed := doer != nil && doer.IsAdmin
 	listed := container.SetOf(listedIDs...)
 	decided := map[int64]string{} // a user without a row is no individual or no longer exists
@@ -300,20 +303,16 @@ func CheckEnvironmentReviewers(ctx context.Context, repo *repo_model.Repository,
 		if row.User == nil {
 			continue
 		}
-		member := memberPath(row)
 		why := approverReason(row, missing)
 		if why == "" {
 			eligible.Add(row.User.ID)
-		}
-		if !member && !detailed {
+			check.Readers = append(check.Readers, row.User)
+		} else if !memberPath(row) && !detailed {
 			why = ReviewerOutsider
 		}
 		decided[row.User.ID] = why
 		if listed.Contains(row.User.ID) {
 			check.Users[row.User.ID] = row.User
-		}
-		if why == "" && member {
-			check.Readers = append(check.Readers, row.User)
 		}
 	}
 	reason := func(id int64) string {
@@ -322,15 +321,13 @@ func CheckEnvironmentReviewers(ctx context.Context, repo *repo_model.Repository,
 		}
 		return ReviewerNotUsable
 	}
-	// a team can approve as soon as one member can; a member without a path counts where outsiders may approve
+	// a team can approve as soon as one member can
 	keyReason := func(r *actions_model.ActionEnvironmentReviewer) string {
 		if r.TeamID == 0 {
 			return reason(r.UserID)
 		}
-		for _, uid := range members[r.TeamID] {
-			if why := reason(uid); why == "" || (why == ReviewerOutsider && outsiderMay) {
-				return ""
-			}
+		if slices.ContainsFunc(members[r.TeamID], eligible.Contains) {
+			return ""
 		}
 		return ReviewerNoneInTeam
 	}
@@ -339,7 +336,7 @@ func CheckEnvironmentReviewers(ctx context.Context, repo *repo_model.Repository,
 		approvers := container.Set[int64]{}
 		for _, r := range reviewers[env.ID] {
 			why := keyReason(r)
-			if why == "" || (why == ReviewerOutsider && outsiderMay) {
+			if why == "" {
 				possible = true
 			}
 			if why != "" {
@@ -361,8 +358,10 @@ func CheckEnvironmentReviewers(ctx context.Context, repo *repo_model.Repository,
 	return check, nil
 }
 
-// approverReason is reviewerIneligibility on a row of accessreport.Compute (which replays GetUserRepoPermission),
-// with missing the users withoutTwoFactor returned for the repository's owner.
+// approverReason is the one rule of who may approve, on a row of accessreport.Compute (which replays
+// GetUserRepoPermission), with missing the users withoutTwoFactor returned for the repository's owner: a usable person
+// with a membership path to the repository (memberPath) who reads its Actions. Reading a public repository is not
+// enough: a former collaborator or member listed as a reviewer can't approve.
 func approverReason(row *accessreport.Row, missing container.Set[int64]) string {
 	switch {
 	case !usableReviewer(row.User):
@@ -371,6 +370,8 @@ func approverReason(row *accessreport.Row, missing container.Set[int64]) string 
 		return ReviewerTwoFactor
 	case !row.Perm.CanRead(unit.TypeActions):
 		return ReviewerNoAccess
+	case !memberPath(row):
+		return ReviewerOutsider
 	}
 	return ""
 }
@@ -440,34 +441,41 @@ func ReviewDeployments(ctx context.Context, doer *user_model.User, run *actions_
 	if err != nil {
 		return nil, err
 	}
+	jobs, err := actions_model.GetRunJobsByRunID(ctx, run.ID)
+	if err != nil {
+		return nil, err
+	}
+	all, err := actions_model.FindRunDeployments(ctx, run.ID)
+	if err != nil {
+		return nil, err
+	}
+	// who may review comes first, so a user who may not is always refused and starts no pass of the gate
+	for _, id := range jobIDs {
+		i := slices.IndexFunc(jobs, func(j *actions_model.ActionRunJob) bool { return j.ID == id })
+		if i < 0 {
+			return nil, util.NewInvalidArgumentErrorf("job %d is not a job of the run", id)
+		}
+		j := slices.IndexFunc(all, func(d *actions_model.ActionDeployment) bool { return d.JobID == id && d.Attempt == jobs[i].Attempt })
+		if j < 0 {
+			return nil, ErrReviewForbidden // nobody reviews a job that doesn't deploy
+		}
+		if ok, err := checker.May(ctx, all[j]); err != nil {
+			return nil, err
+		} else if !ok {
+			return nil, ErrReviewForbidden // all or nothing
+		}
+	}
 	cutoff := ReviewCutoff()
 	waiting, err := actions_model.FindReviewableDeployments(ctx, run.ID, cutoff)
 	if err != nil {
 		return nil, err
 	}
-	jobs, err := actions_model.GetRunJobsByRunID(ctx, run.ID)
-	if err != nil {
-		return nil, err
-	}
 	for _, id := range jobIDs {
-		if !slices.ContainsFunc(jobs, func(j *actions_model.ActionRunJob) bool { return j.ID == id }) {
-			return nil, util.NewInvalidArgumentErrorf("job %d is not a job of the run", id)
-		}
 		if !slices.ContainsFunc(waiting, func(d *actions_model.ActionDeployment) bool { return d.JobID == id }) {
 			return nil, notWaiting(run.ID)
 		}
 	}
-	waiting = slices.DeleteFunc(waiting, func(d *actions_model.ActionDeployment) bool { return !slices.Contains(jobIDs, d.JobID) })
-
-	var selected []*actions_model.ActionDeployment
-	for _, d := range waiting {
-		if ok, err := checker.May(ctx, d); err != nil {
-			return nil, err
-		} else if !ok {
-			return nil, ErrReviewForbidden // all or nothing
-		}
-		selected = append(selected, d)
-	}
+	selected := slices.DeleteFunc(waiting, func(d *actions_model.ActionDeployment) bool { return !slices.Contains(jobIDs, d.JobID) })
 
 	now := timeutil.TimeStampNow()
 	action := "repo.actions_deployment.approved"

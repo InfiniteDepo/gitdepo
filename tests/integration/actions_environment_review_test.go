@@ -187,9 +187,11 @@ func TestActionsEnvironmentReviews(t *testing.T) {
 			assert.Equal(t, "deploy", ds[0].JobName)
 			assert.Equal(t, job.ID, ds[0].JobID)
 			assert.True(t, ds[0].Reviewers.CanReview)
-			assert.Equal(t, 1, ds[0].Reviewers.Users)
+			assert.Zero(t, ds[0].Reviewers.Users, "only who may change the repository's Actions is told the reviewers")
 			assert.Zero(t, ds[0].Reviewers.Teams)
-			assert.False(t, list(ownerToken, run, http.StatusOK)[0].Reviewers.CanReview, "the owner is not a listed reviewer")
+			owned := list(ownerToken, run, http.StatusOK)[0].Reviewers
+			assert.False(t, owned.CanReview, "the owner is not a listed reviewer")
+			assert.Equal(t, 1, owned.Users)
 			list(strangerToken, run, http.StatusNotFound)
 
 			// nobody else may: not the owner, not a site administrator, not a reader who isn't listed, not a stranger

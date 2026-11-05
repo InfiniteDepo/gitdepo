@@ -91,6 +91,7 @@ func toActionDeployments(ctx *context.APIContext, run *actions_model.ActionRun, 
 	if err != nil {
 		return nil, err
 	}
+	seesReviewers := actions_service.SeesReviewers(ctx.Doer(), ctx.Repo().Permission)
 	out := make([]*api.ActionDeployment, 0, len(ds))
 	for _, d := range ds {
 		item := toActionDeployment(ctx, data, d)
@@ -99,7 +100,7 @@ func toActionDeployments(ctx *context.APIContext, run *actions_model.ActionRun, 
 		if err != nil {
 			return nil, err
 		}
-		if env != nil { // nil for a deleted environment
+		if env != nil && seesReviewers { // nil for a deleted environment
 			for _, r := range reviewers {
 				if r.TeamID > 0 {
 					item.Reviewers.Teams++

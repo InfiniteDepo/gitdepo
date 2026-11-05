@@ -606,3 +606,45 @@ func TestEnvironmentReviewers(t *testing.T) {
 		assert.EqualValues(t, 0, count())
 	})
 }
+
+// A former collaborator still listed as a reviewer can read a public repository's Actions, but without a membership
+// path they can't approve, aren't mailed and aren't offered as a reviewer.
+func TestReviewDeploymentsFormerMember(t *testing.T) {
+	defer unittest.OverrideFixtures("services/actions/TestGetSecretsOfJob")()
+	f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{2, 4}, nil)
+	_, err := db.GetEngine(t.Context()).Exec("UPDATE repository SET is_private = ? WHERE id = 63", false)
+	require.NoError(t, err)
+	revokeActionsRead(t, 4)
+	user4 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 4})
+	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 63})
+	require.NoError(t, repo.LoadOwner(t.Context()))
+	why, err := reviewerIneligibility(t.Context(), repo, user4)
+	require.NoError(t, err)
+	assert.Equal(t, ReviewerOutsider, why, "reads the public repository, but is no member")
+
+	_, err = f.review(t, 4, true, "")
+	require.ErrorIs(t, err, ErrReviewForbidden)
+	assert.Equal(t, actions_model.DeploymentWaitingReview, f.status(t))
+
+	ids, check, err := DeploymentApprovers(t.Context(), unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2}), f.run, f.env, f.deployment(t))
+	require.NoError(t, err)
+	assert.Equal(t, []int64{2}, ids, "the review mail goes to user2 only")
+	assert.Equal(t, ReviewerOutsider, check.Ineligible["user:4"])
+	for _, u := range check.Readers {
+		assert.NotEqual(t, int64(4), u.ID, "not offered in the picker")
+	}
+}
+
+// Who may review is decided before whether the deployment still waits: a user who may not is refused whatever its
+// state, so they learn nothing and start no pass of the gate.
+func TestReviewDeploymentsForbiddenBeforeNotWaiting(t *testing.T) {
+	defer unittest.OverrideFixtures("services/actions/TestGetSecretsOfJob")()
+	f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{2, 4}, nil)
+	_, err := f.review(t, 2, false, "no")
+	require.NoError(t, err)
+	grantActionsRead(t, 5) // reads the repository's Actions, isn't listed
+	_, err = f.review(t, 5, true, "")
+	require.ErrorIs(t, err, ErrReviewForbidden)
+	_, err = f.review(t, 4, true, "")
+	require.ErrorIs(t, err, ErrReviewNotWaiting, "a reviewer is told it doesn't wait")
+}
