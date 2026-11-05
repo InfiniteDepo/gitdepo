@@ -248,10 +248,11 @@ func insertEnvironmentIfAbsent(ctx context.Context, e *ActionEnvironment) (bool,
 	if err != nil {
 		return false, err
 	}
-	insert := "INSERT INTO action_environment (owner_id, repo_id, name, lower_name, ref_policy, ref_patterns, wait_timer_minutes, prevent_self_review, runner_labels, allowed_workflows, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (owner_id, repo_id, lower_name) DO NOTHING"
+	verb, suffix := "INSERT INTO", " ON CONFLICT (owner_id, repo_id, lower_name) DO NOTHING"
 	if setting.Database.Type.IsMySQL() {
-		insert = "INSERT IGNORE INTO action_environment (owner_id, repo_id, name, lower_name, ref_policy, ref_patterns, wait_timer_minutes, prevent_self_review, runner_labels, allowed_workflows, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+		verb, suffix = "INSERT IGNORE INTO", ""
 	}
+	insert := verb + " action_environment (owner_id, repo_id, name, lower_name, ref_policy, ref_patterns, wait_timer_minutes, prevent_self_review, runner_labels, allowed_workflows, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)" + suffix
 	now := timeutil.TimeStampNow()
 	res, err := db.GetEngine(ctx).Exec(insert, e.OwnerID, e.RepoID, e.Name, e.LowerName, e.RefPolicy, string(patterns), e.WaitTimerMinutes, e.PreventSelfReview, string(labels), string(workflows), now, now)
 	if err != nil {
@@ -383,6 +384,17 @@ func UpdateEnvironment(ctx context.Context, e *ActionEnvironment) error {
 	})
 }
 
+// LockEnvironment takes the row lock of the environment (a no-op UPDATE: a write lock on SQLite, a row lock elsewhere)
+// and returns ErrEnvironmentNotFound if it is gone. Every insert of a secret or variable of an environment and its delete
+// take it first, so a concurrent delete can't leave rows of a deleted environment behind. Call it inside a transaction.
+func LockEnvironment(ctx context.Context, repoID, id int64) error {
+	if _, err := db.Exec(ctx, "UPDATE `action_environment` SET repo_id = repo_id WHERE repo_id = ? AND id = ?", repoID, id); err != nil {
+		return err
+	}
+	_, err := GetRepoEnvironmentByID(ctx, repoID, id)
+	return err
+}
+
 // DeleteEnvironment deletes the environment with its secrets and variables and records it. Its deployments stay as
 // history. It doesn't touch the jobs that wait for the environment: failUnpickedJobs does, in the same transaction and
 // before the rows go (it is required, so no caller forgets them). Only services/actions DeleteEnvironment should call it.
@@ -391,6 +403,9 @@ func DeleteEnvironment(ctx context.Context, e *ActionEnvironment, failUnpickedJo
 		return errors.New("DeleteEnvironment needs a function that fails the jobs waiting for the environment")
 	}
 	return db.WithTx(ctx, func(ctx context.Context) error {
+		if err := LockEnvironment(ctx, e.RepoID, e.ID); err != nil {
+			return err
+		}
 		if err := failUnpickedJobs(ctx); err != nil {
 			return err
 		}

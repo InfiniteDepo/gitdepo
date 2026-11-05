@@ -1072,3 +1072,23 @@ func TestEmitterUnsupportedEnvironmentJobFailsAlone(t *testing.T) {
 	run := unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRun{ID: 900})
 	assert.Zero(t, run.PreExecutionErrorCode, "the run has no workflow error")
 }
+
+// Only a text that can't be evaluated is an invalid name; an error of the stored payload (or the database) is not, so
+// the pass of the emitter is repeated instead of refusing the job for good.
+func TestEvaluateEnvironmentTextErrors(t *testing.T) {
+	defer unittest.OverrideFixtures("services/actions/TestGetSecretsOfJob")()
+	require.NoError(t, unittest.PrepareTestDatabase())
+	job := gateJob(t, envWorkflow("    environment: prod\n"), "refs/heads/main")
+	require.NoError(t, job.LoadRun(t.Context()))
+	require.NoError(t, job.Run.LoadRepo(t.Context()))
+
+	name, err := evaluateEnvironmentText(t.Context(), job, nil, "plain")
+	require.NoError(t, err)
+	assert.Equal(t, "plain", name)
+
+	broken := *job
+	broken.WorkflowPayload = []byte("{{{ not yaml")
+	_, err = evaluateEnvironmentText(t.Context(), &broken, nil, "${{ vars.X }}")
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, errInvalidEnvironmentText)
+}

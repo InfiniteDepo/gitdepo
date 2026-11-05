@@ -359,7 +359,7 @@ func TestReviewDeployments(t *testing.T) {
 				_, err := f.review(t, tc.doer, true, "")
 				if tc.allowed {
 					require.NoError(t, err)
-					assert.EqualValues(t, tc.doer, f.deployment(t).ReviewedBy)
+					assert.Equal(t, tc.doer, f.deployment(t).ReviewedBy)
 				} else {
 					require.ErrorIs(t, err, ErrReviewForbidden)
 					assert.Equal(t, actions_model.DeploymentWaitingReview, f.status(t))

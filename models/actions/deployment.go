@@ -142,15 +142,23 @@ func FindExpiredReviews(ctx context.Context, cutoff timeutil.TimeStamp, limit in
 		OrderBy("created, id").Limit(limit).Find(&ds)
 }
 
-// FindDueDeploymentRunIDs returns the runs, at most limit, the longest due first, with a blocked job whose deployment waits for a wait timer
-// that ended.
+// FindDueDeploymentRunIDs returns the runs, at most limit, with a blocked job whose deployment waits for a wait timer
+// that ended, the ones looked at longest ago first (TouchDueDeployments moves a run whose pass failed to the back, so
+// runs that always fail can't starve the others).
 func FindDueDeploymentRunIDs(ctx context.Context, now timeutil.TimeStamp, limit int) ([]int64, error) {
 	var ids []int64
 	return ids, db.GetEngine(ctx).Table("action_deployment").
 		Join("INNER", "action_run_job", "action_run_job.id = action_deployment.job_id AND action_run_job.attempt = action_deployment.attempt").
 		Where("action_deployment.status = ? AND action_deployment.release_after_unix <= ? AND action_run_job.status = ?", DeploymentWaitingTimer, now, StatusBlocked).
 		Select("action_deployment.run_id").GroupBy("action_deployment.run_id").
-		OrderBy("MIN(action_deployment.release_after_unix), action_deployment.run_id").Limit(limit).Find(&ids)
+		OrderBy("MIN(action_deployment.updated), action_deployment.run_id").Limit(limit).Find(&ids)
+}
+
+// TouchDueDeployments sets the update time of the run's deployments that wait for a timer to now.
+func TouchDueDeployments(ctx context.Context, runID int64, now timeutil.TimeStamp) error {
+	_, err := db.GetEngine(ctx).Table("action_deployment").Where("run_id = ? AND status = ?", runID, DeploymentWaitingTimer).
+		Update(map[string]any{"updated": now})
+	return err
 }
 
 // CancelOpenDeployments marks the deployments of the job that still wait as cancelled.

@@ -106,6 +106,17 @@ func insertEncryptedSecret(ctx context.Context, ownerID, groupID, repoID, enviro
 		if err := LockGroup(ctx, ownerID, groupID); err != nil {
 			return err
 		}
+		if environmentID != 0 {
+			// the row lock of the environment, as models/actions LockEnvironment takes it (it can't be imported here)
+			if _, err := db.Exec(ctx, "UPDATE `action_environment` SET repo_id = repo_id WHERE repo_id = ? AND id = ?", repoID, environmentID); err != nil {
+				return err
+			}
+			if ok, err := db.GetEngine(ctx).Table("action_environment").Where("repo_id = ? AND id = ?", repoID, environmentID).Exist(); err != nil {
+				return err
+			} else if !ok {
+				return fmt.Errorf("%w: environment %d", util.ErrNotExist, environmentID)
+			}
+		}
 		if err := db.Insert(ctx, secret); err != nil {
 			return err
 		}

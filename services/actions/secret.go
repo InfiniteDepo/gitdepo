@@ -47,7 +47,7 @@ func getSecretsOfJob(ctx context.Context, job *actions_model.ActionRunJob) (map[
 		return withEnvironmentSecrets(ctx, job, secrets)
 	}
 
-	if job.Run.IsForkPullRequest && job.Run.TriggerEvent != actions_module.GithubEventPullRequestTarget {
+	if isForkRun(job.Run) {
 		// ignore secrets for fork pull request, except GITHUB_TOKEN, GITEA_TOKEN and FORGEJO_TOKEN which are automatically generated.
 		// for the tasks triggered by pull_request_target event, they could access the secrets because they will run in the context of the base branch
 		// see the documentation: https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#pull_request_target
@@ -72,7 +72,7 @@ func getSecretsOfJob(ctx context.Context, job *actions_model.ActionRunJob) (map[
 // over the others; a job of a fork pull request gets none (the early return above), a job of a reusable workflow gets
 // those of its own payload.
 func withEnvironmentSecrets(ctx context.Context, job *actions_model.ActionRunJob, secrets map[string]string) (map[string]string, error) {
-	if job.EnvironmentName == "" || (job.Run.IsForkPullRequest && job.Run.TriggerEvent != actions_module.GithubEventPullRequestTarget) {
+	if job.EnvironmentName == "" || isForkRun(job.Run) {
 		return secrets, nil
 	}
 	environmentSecrets, err := getEnvironmentSecrets(ctx, job)

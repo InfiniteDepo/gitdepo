@@ -52,6 +52,10 @@ func jobHasEnvironment(job *actions_model.ActionRunJob) (bool, error) {
 // allows there (github, needs, strategy, matrix, vars, inputs). jobparser interpolates the name of a job with them, so
 // the text is parsed as the name of the job's own payload, which holds its matrix and, for a job of a reusable workflow,
 // the inputs of the call.
+// errInvalidEnvironmentText marks a text of the workflow that can't be evaluated. Any other error of
+// evaluateEnvironmentText (the database, the stored payload) is transient: the pass of the emitter is repeated.
+var errInvalidEnvironmentText = errors.New("the environment text could not be evaluated")
+
 func evaluateEnvironmentText(ctx context.Context, job *actions_model.ActionRunJob, vars map[string]string, raw string) (string, error) {
 	if !strings.Contains(raw, "${{") {
 		return raw, nil
@@ -87,9 +91,9 @@ func evaluateEnvironmentText(ctx context.Context, job *actions_model.ActionRunJo
 		jobparser.EnableNamespaces(),
 	)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %w", errInvalidEnvironmentText, err)
 	} else if len(parsed) != 1 {
-		return "", errors.New("the environment of the job could not be evaluated")
+		return "", fmt.Errorf("%w: the text gave %d jobs", errInvalidEnvironmentText, len(parsed))
 	}
 	_, j = parsed[0].Job()
 	return j.Name, nil
@@ -122,6 +126,83 @@ func refAllowed(ctx context.Context, repoID int64, env *actions_model.ActionEnvi
 	}
 	rules, err := git_model.GetMatchedProtectedBranchRules(ctx, repoID, name)
 	return len(rules) > 0, err
+}
+
+// resolveNewEnvironment evaluates the name of the environment of a job that has no deployment yet and finds or creates
+// it, and sets the environment and URL of d. A refusal is a reason; only an error of the database or of the stored
+// payload is an error (the pass is repeated), never an invalid name.
+func resolveNewEnvironment(ctx context.Context, job *actions_model.ActionRunJob, jobEnv *actions_module.JobEnvironment, d *actions_model.ActionDeployment) (env *actions_model.ActionEnvironment, reason string, err error) {
+	run := job.Run
+	vars, err := actions_model.GetVariablesOfRun(ctx, run)
+	if err != nil {
+		return nil, "", err
+	}
+	if jobEnv.Unsupported {
+		return env, actions_model.DeploymentReasonUnsupported, nil
+	}
+	name, err := evaluateEnvironmentText(ctx, job, vars, jobEnv.Name)
+	if errors.Is(err, errInvalidEnvironmentText) {
+		return env, actions_model.DeploymentReasonInvalidName, nil
+	} else if err != nil {
+		return nil, "", err
+	}
+	if name = strings.Trim(name, " "); name == "" {
+		return env, actions_model.DeploymentReasonInvalidName, nil
+	}
+	env, err = findOrCreateEnvironment(ctx, run, name)
+	switch {
+	case errors.Is(err, actions_model.ErrEnvironmentNotFound) && isForkRun(run):
+		return env, actions_model.DeploymentReasonNotFound, nil
+	case errors.Is(err, actions_model.ErrEnvironmentLimit):
+		return env, actions_model.DeploymentReasonEnvironmentLimit, nil
+	case errors.Is(err, util.ErrInvalidArgument):
+		return env, actions_model.DeploymentReasonInvalidName, nil
+	case err != nil:
+		return nil, "", err
+	}
+	d.EnvironmentID = env.ID
+	if url, err := evaluateEnvironmentText(ctx, job, vars, jobEnv.URL); err == nil {
+		d.URL = actions_model.DeploymentURL(url)
+	}
+	return env, "", nil
+}
+
+// refusalReason returns why the environment's rules refuse the run, "" if they don't.
+func refusalReason(ctx context.Context, run *actions_model.ActionRun, env *actions_model.ActionEnvironment) (string, error) {
+	if ok, err := refAllowed(ctx, run.RepoID, env, run.Ref); err != nil {
+		return "", err
+	} else if !ok {
+		return actions_model.DeploymentReasonRefNotAllowed, nil
+	}
+	if !env.AllowsWorkflow(run.WorkflowID) {
+		// run.WorkflowID is the file of the run, so a job of a reusable workflow is decided by the file that called
+		// it, never by the called one (a workflow author can't pick the called file's name to pass)
+		return actions_model.DeploymentReasonWorkflowNotAllowed, nil
+	}
+	return "", nil
+}
+
+// nextDeploymentStatus sets the status of d after this pass, from the one it has (0 for a new deployment).
+func nextDeploymentStatus(d *actions_model.ActionDeployment, env *actions_model.ActionEnvironment, reason string, hasReviewers bool, now timeutil.TimeStamp) {
+	if reason != "" { // env may be nil
+		d.Status, d.Reason = actions_model.DeploymentRefused, reason
+		return
+	}
+	timer := now + timeutil.TimeStamp(env.WaitTimerMinutes)*60
+	switch prior := d.Status; {
+	case prior == 0 && hasReviewers:
+		// the review and the wait timer run in parallel: the job needs an approval and the timer due
+		d.Status = actions_model.DeploymentWaitingReview
+		if env.WaitTimerMinutes > 0 {
+			d.ReleaseAfterUnix = timer
+		}
+	case prior == actions_model.DeploymentWaitingReview: // only ReviewDeployments or the expiry moves it
+	case prior == 0 && env.WaitTimerMinutes > 0:
+		d.Status, d.ReleaseAfterUnix = actions_model.DeploymentWaitingTimer, timer
+	case prior == actions_model.DeploymentWaitingTimer && now < d.ReleaseAfterUnix:
+	default:
+		d.Status = actions_model.DeploymentReleased
+	}
 }
 
 // gateEnvironment is the one place that lets a job with an environment through, called when the job would run. It
@@ -161,29 +242,8 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 			RepoID: job.RepoID, RunID: job.RunID, JobID: job.ID, Attempt: job.Attempt,
 			Ref: ref, CommitSHA: run.CommitSHA, TriggerUserID: run.TriggerUserID,
 		}
-		vars, err := actions_model.GetVariablesOfRun(ctx, run)
-		if err != nil {
+		if env, reason, err = resolveNewEnvironment(ctx, job, jobEnv, d); err != nil {
 			return behaviourError, err
-		}
-		name, err := evaluateEnvironmentText(ctx, job, vars, jobEnv.Name)
-		if jobEnv.Unsupported {
-			reason = actions_model.DeploymentReasonUnsupported
-		} else if name = strings.Trim(name, " "); err != nil || name == "" {
-			reason = actions_model.DeploymentReasonInvalidName
-		} else if env, err = findOrCreateEnvironment(ctx, run, name); errors.Is(err, actions_model.ErrEnvironmentNotFound) && isForkRun(run) {
-			reason = actions_model.DeploymentReasonNotFound
-		} else if errors.Is(err, actions_model.ErrEnvironmentLimit) {
-			reason = actions_model.DeploymentReasonEnvironmentLimit
-		} else if errors.Is(err, util.ErrInvalidArgument) {
-			reason = actions_model.DeploymentReasonInvalidName
-		} else if err != nil {
-			return behaviourError, err
-		}
-		if env != nil {
-			d.EnvironmentID = env.ID
-			if url, err := evaluateEnvironmentText(ctx, job, vars, jobEnv.URL); err == nil {
-				d.URL = actions_model.DeploymentURL(url)
-			}
 		}
 	} else {
 		switch d.Status {
@@ -202,19 +262,13 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 		}
 	}
 
+	hasReviewers := false
 	if reason == "" {
 		// the rules of the environment apply to a waiting job as they are now
-		if ok, err := refAllowed(ctx, job.RepoID, env, run.Ref); err != nil {
+		if reason, err = refusalReason(ctx, run, env); err != nil {
 			return behaviourError, err
-		} else if !ok {
-			reason = actions_model.DeploymentReasonRefNotAllowed
-		} else if !env.AllowsWorkflow(run.WorkflowID) {
-			// run.WorkflowID is the file of the run, so a job of a reusable workflow is decided by the file that called
-			// it, never by the called one (a workflow author can't pick the called file's name to pass)
-			reason = actions_model.DeploymentReasonWorkflowNotAllowed
 		}
 	}
-	hasReviewers := false
 	if reason == "" && d.Status == 0 {
 		if hasReviewers, err = actions_model.HasEnvironmentReviewers(ctx, env.ID); err != nil {
 			return behaviourError, err
@@ -222,23 +276,7 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 	}
 
 	prior := d.Status
-	now := timeutil.TimeStampNow()
-	switch {
-	case reason != "":
-		d.Status, d.Reason = actions_model.DeploymentRefused, reason
-	case prior == 0 && hasReviewers:
-		// the review and the wait timer run in parallel: the job needs an approval and the timer due
-		d.Status = actions_model.DeploymentWaitingReview
-		if env.WaitTimerMinutes > 0 {
-			d.ReleaseAfterUnix = now + timeutil.TimeStamp(env.WaitTimerMinutes)*60
-		}
-	case prior == actions_model.DeploymentWaitingReview: // only ReviewDeployments or the expiry moves it
-	case prior == 0 && env.WaitTimerMinutes > 0:
-		d.Status, d.ReleaseAfterUnix = actions_model.DeploymentWaitingTimer, now+timeutil.TimeStamp(env.WaitTimerMinutes)*60
-	case prior == actions_model.DeploymentWaitingTimer && now < d.ReleaseAfterUnix:
-	default:
-		d.Status = actions_model.DeploymentReleased
-	}
+	nextDeploymentStatus(d, env, reason, hasReviewers, timeutil.TimeStampNow())
 	if err := saveDeployment(ctx, d, isNew, prior); err != nil {
 		return behaviourError, err
 	}
@@ -362,7 +400,7 @@ func getVariablesOfJob(ctx context.Context, job *actions_model.ActionRunJob) (ma
 	if err != nil {
 		return nil, err
 	}
-	if job.Run.IsForkPullRequest && job.Run.TriggerEvent != actions_module.GithubEventPullRequestTarget {
+	if isForkRun(job.Run) {
 		return vars, nil
 	}
 	envVars, err := actions_model.FindVariables(ctx, actions_model.FindVariablesOpts{RepoID: env.RepoID, EnvironmentID: env.ID})
@@ -385,6 +423,10 @@ func StartDueDeployments(ctx context.Context) error {
 	for _, runID := range runIDs {
 		if err := EmitJobsIfReady(runID); err != nil {
 			log.Error("EmitJobsIfReady for run %d after a wait timer: %v", runID, err)
+			// to the back of the line, so that a run that always fails doesn't starve the others
+			if err := actions_model.TouchDueDeployments(ctx, runID, timeutil.TimeStampNow()); err != nil {
+				log.Error("TouchDueDeployments for run %d: %v", runID, err)
+			}
 		}
 	}
 	return nil

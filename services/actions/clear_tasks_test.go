@@ -105,3 +105,30 @@ func TestCancelAbandonedJobsKeepsHeldJob(t *testing.T) {
 	require.NoError(t, CancelAbandonedJobs(t.Context()))
 	assert.Equal(t, actions_model.StatusCancelled, unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRunJob{ID: 601}).Status)
 }
+
+// A held job is the gate's only while its timer runs or a review waits: with the start_due_deployments task off, a job
+// whose timer ended is abandoned like any other, and a review has its own expiry.
+func TestCancelAbandonedJobsTimerEnded(t *testing.T) {
+	defer unittest.OverrideFixtures("services/actions/TestCancelAbandonedJobs")()
+	require.NoError(t, unittest.PrepareTestDatabase())
+
+	notifier := notify_service.NewMockNotifier(t)
+	notifier.On("Run").Return().Maybe()
+	notifier.On("WorkflowJobCompleted", mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+	notifier.On("WorkflowRunStatusChanged", mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+	notify_service.RegisterNotifier(notifier)
+	defer notify_service.UnregisterNotifier(notifier)
+
+	held := unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRunJob{ID: 601})
+	require.NoError(t, db.Insert(t.Context(), &actions_model.ActionDeployment{
+		RepoID: held.RepoID, RunID: held.RunID, JobID: held.ID, Attempt: held.Attempt,
+		Status: actions_model.DeploymentWaitingReview, ReleaseAfterUnix: timeutil.TimeStampNow() - 3600,
+	}))
+	require.NoError(t, CancelAbandonedJobs(t.Context()))
+	assert.Equal(t, actions_model.StatusBlocked, unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRunJob{ID: 601}).Status, "waiting for a review")
+
+	_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET status = ? WHERE job_id = 601", actions_model.DeploymentWaitingTimer)
+	require.NoError(t, err)
+	require.NoError(t, CancelAbandonedJobs(t.Context()))
+	assert.Equal(t, actions_model.StatusCancelled, unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRunJob{ID: 601}).Status, "the timer ended")
+}

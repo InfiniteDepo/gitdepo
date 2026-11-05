@@ -259,7 +259,7 @@ func generateTaskContext(t *actions_model.ActionTask, ac *repo_model.ActionsConf
 
 	// Override the setting from the workflow is this is coming from a fork pull request
 	// and this isn't a pull_request_target event.
-	if run.IsForkPullRequest && run.TriggerEvent != actions_module.GithubEventPullRequestTarget {
+	if isForkRun(run) {
 		enableOpenIDConnect = false
 	}
 

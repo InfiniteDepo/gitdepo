@@ -91,10 +91,13 @@ func CancelAbandonedJobs(ctx context.Context) error {
 		now := timeutil.TimeStampNow()
 		for _, job := range jobs {
 			if job.Status.IsBlocked() {
-				// a job that the gate of its environment holds (wait timer) isn't abandoned: the gate releases or fails it
+				// a job that the gate of its environment holds isn't abandoned
 				if d, err := actions_model.GetDeployment(ctx, job.ID, job.Attempt); err != nil {
 					return err
-				} else if d != nil && d.Status.IsWaiting() {
+				} else if d != nil && (d.Status == actions_model.DeploymentWaitingReview ||
+					(d.Status == actions_model.DeploymentWaitingTimer && now < d.ReleaseAfterUnix)) {
+					// a review has its own expiry; a timer still running is the gate's. A timer that ended and wasn't
+					// acted on (the start_due_deployments task is off) leaves the job abandoned like any other.
 					continue
 				}
 			}

@@ -4,12 +4,16 @@
 package actions
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
+	secret_model "forgejo.org/models/secret"
 	"forgejo.org/models/unittest"
 	"forgejo.org/modules/timeutil"
+	"forgejo.org/modules/util"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -160,4 +164,49 @@ func TestDeploymentReviewStates(t *testing.T) {
 	unpicked, err := FindUnpickedEnvironmentJobs(ctx, 4, 0)
 	require.NoError(t, err)
 	assert.Empty(t, unpicked)
+}
+
+// A run whose pass failed goes to the back of the due list, so runs that always fail can't starve the others.
+func TestDueDeploymentsRotate(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := db.DefaultContext
+	now := timeutil.TimeStampNow()
+	_, err := db.GetEngine(ctx).Exec("UPDATE action_run_job SET status = ? WHERE id IN (192, 193)", StatusBlocked)
+	require.NoError(t, err)
+	for _, d := range []*ActionDeployment{
+		{RepoID: 4, RunID: 791, JobID: 192, Attempt: 3, Status: DeploymentWaitingTimer, ReleaseAfterUnix: now - 100},
+		{RepoID: 4, RunID: 792, JobID: 193, Attempt: 1, Status: DeploymentWaitingTimer, ReleaseAfterUnix: now - 50},
+	} {
+		require.NoError(t, db.Insert(ctx, d))
+	}
+	_, err = db.GetEngine(ctx).Exec("UPDATE action_deployment SET updated = ? WHERE run_id = 791", now-1000)
+	require.NoError(t, err)
+	_, err = db.GetEngine(ctx).Exec("UPDATE action_deployment SET updated = ? WHERE run_id = 792", now-500)
+	require.NoError(t, err)
+	runs, err := FindDueDeploymentRunIDs(ctx, now, 1)
+	require.NoError(t, err)
+	assert.Equal(t, []int64{791}, runs)
+	require.NoError(t, TouchDueDeployments(ctx, 791, now))
+	runs, err = FindDueDeploymentRunIDs(ctx, now, 1)
+	require.NoError(t, err)
+	assert.Equal(t, []int64{792}, runs, "the failed run is behind the other")
+}
+
+// Secrets and variables of an environment that is gone are refused, and leave no row.
+func TestEnvironmentRowLock(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := audit_model.WithSystem(db.DefaultContext, "test")
+	env := &ActionEnvironment{RepoID: 1, Name: "locked"}
+	require.NoError(t, CreateEnvironment(ctx, env))
+	require.NoError(t, db.WithTx(ctx, func(ctx context.Context) error { return LockEnvironment(ctx, 1, env.ID) }))
+	require.ErrorIs(t, LockEnvironment(ctx, 1, env.ID+1000), ErrEnvironmentNotFound)
+	require.ErrorIs(t, LockEnvironment(ctx, 2, env.ID), ErrEnvironmentNotFound, "another repository's environment")
+
+	require.NoError(t, DeleteEnvironment(ctx, env, func(context.Context) error { return nil }))
+	_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 1, env.ID, "late", "value")
+	require.ErrorIs(t, err, util.ErrNotExist)
+	_, err = InsertEnvironmentVariable(ctx, 1, env.ID, "late", "value")
+	require.ErrorIs(t, err, ErrEnvironmentNotFound)
+	unittest.AssertNotExistsBean(t, &secret_model.Secret{EnvironmentID: env.ID})
+	unittest.AssertNotExistsBean(t, &ActionVariable{EnvironmentID: env.ID})
 }

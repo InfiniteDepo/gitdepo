@@ -88,6 +88,11 @@ func insertVariable(ctx context.Context, ownerID, groupID, repoID, environmentID
 		if err := lockGroup(ctx, ownerID, groupID); err != nil {
 			return err
 		}
+		if environmentID != 0 {
+			if err := LockEnvironment(ctx, repoID, environmentID); err != nil {
+				return err
+			}
+		}
 		if err := db.Insert(ctx, variable); err != nil {
 			return err
 		}
