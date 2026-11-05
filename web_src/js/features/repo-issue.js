@@ -204,12 +204,19 @@ export function initRepoIssueCodeCommentCancel() {
 }
 
 export function initRepoPullRequestUpdate() {
+  // updating the branch is a push: ask first when it makes the doer's approval stop counting
+  document.querySelector('form.update-branch-form[data-confirm]')?.addEventListener('submit', (e) => {
+    if (!window.confirm(e.currentTarget.getAttribute('data-confirm'))) e.preventDefault();
+  });
+
   // Pull Request update button
   const pullUpdateButton = document.querySelector('.update-button > button');
   if (!pullUpdateButton) return;
 
   pullUpdateButton.addEventListener('click', async function (e) {
     e.preventDefault();
+    const confirmText = this.getAttribute('data-confirm');
+    if (confirmText && !window.confirm(confirmText)) return;
     const redirect = this.getAttribute('data-redirect');
     this.classList.add('is-loading');
     let response;

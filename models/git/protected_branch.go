@@ -59,6 +59,7 @@ type ProtectedBranch struct {
 	BlockOnOutdatedBranch         bool     `xorm:"NOT NULL DEFAULT false"`
 	DismissStaleApprovals         bool     `xorm:"NOT NULL DEFAULT false"`
 	IgnoreStaleApprovals          bool     `xorm:"NOT NULL DEFAULT false"`
+	IgnorePusherApprovals         bool     `xorm:"NOT NULL DEFAULT false"`
 	RequireSignedCommits          bool     `xorm:"NOT NULL DEFAULT false"`
 	ProtectedFilePatterns         string   `xorm:"TEXT"`
 	UnprotectedFilePatterns       string   `xorm:"TEXT"`

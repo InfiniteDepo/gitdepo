@@ -2068,6 +2068,30 @@ func ViewIssue(ctx *context.Context) {
 				return
 			}
 			ctx.Data["UncountedApprovals"] = uncounted
+			// approvals of users who pushed to the pull request, where a rule ignores them; updating the branch is a push
+			var pushedApprovers []*user_model.User
+			for _, pb := range pbs {
+				pushed, err := pull_service.PusherApprovers(ctx, pb, pull)
+				if err != nil {
+					log.Error("PusherApprovers for %-v: %v", pull, err)
+					continue
+				}
+				for _, u := range pushed {
+					if !slices.ContainsFunc(pushedApprovers, func(o *user_model.User) bool { return o.ID == u.ID }) {
+						pushedApprovers = append(pushedApprovers, u)
+					}
+				}
+			}
+			ctx.Data["PusherApprovals"] = pushedApprovers
+			if ctx.Doer != nil && slices.ContainsFunc(pbs, func(pb *git_model.ProtectedBranch) bool { return pb.IgnorePusherApprovals }) &&
+				!slices.ContainsFunc(pushedApprovers, func(u *user_model.User) bool { return u.ID == ctx.Doer.ID }) {
+				approvers, err := issues_model.ValidReviewers(ctx, &git_model.ProtectedBranch{}, pull, issues_model.ReviewTypeApprove)
+				if err != nil {
+					ctx.ServerError("ValidReviewers", err)
+					return
+				}
+				ctx.Data["UpdateBranchConfirm"] = slices.ContainsFunc(approvers, func(u *user_model.User) bool { return u.ID == ctx.Doer.ID })
+			}
 			if len(approvalRules) > 0 {
 				ctx.Data["ApprovalRules"] = approvalRules
 				if ctx.Repo.IsAdmin() {

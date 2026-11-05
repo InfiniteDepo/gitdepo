@@ -562,6 +562,19 @@ func CheckPullBranchProtections(ctx context.Context, pr *issues_model.PullReques
 	return nil, nil
 }
 
+// withPusherNote names the approvals that do not count because their authors pushed to the pull request.
+func withPusherNote(ctx context.Context, pb *git_model.ProtectedBranch, pr *issues_model.PullRequest, reason string) string {
+	pushed, err := PusherApprovers(ctx, pb, pr)
+	if err != nil {
+		log.Error("PusherApprovers for %-v: %v", pr, err)
+		return reason
+	}
+	if len(pushed) == 0 {
+		return reason
+	}
+	return fmt.Sprintf("%s (%d approval(s) of users who pushed to this pull request do not count)", reason, len(pushed))
+}
+
 func checkPullBranchProtection(ctx context.Context, pr *issues_model.PullRequest, pb *git_model.ProtectedBranch, skipProtectedFilesCheck, queued bool) (*git_model.ProtectedBranch, error) {
 	isPass, err := isPullCommitStatusPass(ctx, pr, pb)
 	if err != nil {
@@ -575,7 +588,7 @@ func checkPullBranchProtection(ctx context.Context, pr *issues_model.PullRequest
 
 	if !issues_model.HasEnoughApprovals(ctx, pb, pr) {
 		return pb, models.ErrDisallowedToMerge{
-			Reason: "Does not have enough approvals",
+			Reason: withPusherNote(ctx, pb, pr, "Does not have enough approvals"),
 		}
 	}
 	statuses, err := EvaluateApprovalRules(ctx, pb, pr)
@@ -584,7 +597,7 @@ func checkPullBranchProtection(ctx context.Context, pr *issues_model.PullRequest
 	}
 	for _, s := range statuses {
 		if !s.Satisfied {
-			return pb, models.ErrDisallowedToMerge{Reason: s.Reason()}
+			return pb, models.ErrDisallowedToMerge{Reason: withPusherNote(ctx, pb, pr, s.Reason())}
 		}
 	}
 	if issues_model.MergeBlockedByRejectedReview(ctx, pb, pr) {

@@ -14,6 +14,16 @@
 					{{if .UncoveredFiles}}{{ctx.Locale.Tr "repo.pulls.approval_rule_uncovered" .UncoveredFiles}}{{end}}
 					{{if $.ApprovalRuleEligible}}{{with index $.ApprovalRuleEligible .Rule.ID}}<span class="text grey">{{ctx.Locale.Tr "repo.pulls.approval_rule_eligible" .}}</span>{{end}}{{end}}
 					{{if .Approvers}}<span class="text grey">({{range $i, $u := .Approvers}}{{if $i}}, {{end}}{{$u.Name}}{{end}})</span>{{end}}
+					{{if .CodeOwnersErrorLine}}<div>{{ctx.Locale.Tr "repo.pulls.codeowners_error" $.Issue.PullRequest.BaseBranch .CodeOwnersErrorLine}}</div>{{end}}
+					{{range .Shortfalls}}
+						<div class="codeowners-shortfall">
+							{{if $.Permission.CanRead $.UnitTypeCode}}
+								{{if lt .Eligible .Required}}{{ctx.Locale.Tr "repo.pulls.codeowners_section_unreachable" .Name .Required .Eligible}}{{else}}{{ctx.Locale.Tr "repo.pulls.codeowners_section_short" .Name .Required .Granted}}{{end}}
+							{{else}}
+								{{ctx.Locale.Tr "repo.pulls.codeowners_section_hidden"}}
+							{{end}}
+						</div>
+					{{end}}
 				</li>
 			{{end}}
 		</ul>
@@ -23,5 +33,11 @@
 	<div class="item text grey uncounted-approval">
 		{{svg "octicon-info"}}
 		{{ctx.Locale.Tr "owned_token.approval_uncounted" .}}
+	</div>
+{{end}}
+{{range .PusherApprovals}}
+	<div class="item text grey pusher-approval">
+		{{svg "octicon-info"}}
+		{{ctx.Locale.Tr "repo.pulls.approval_pushed" .Name}}
 	</div>
 {{end}}

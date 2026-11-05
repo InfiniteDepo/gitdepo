@@ -919,12 +919,28 @@ func GetGrantedApprovalsCount(ctx context.Context, protectBranch *git_model.Prot
 		}
 		return int64(len(approvers))
 	}
+	// before the query is built: in a transaction the engine is one shared session, which a query of its own would consume
+	var pushers map[int64]bool
+	if protectBranch.IgnorePusherApprovals {
+		var err error
+		if pushers, err = PullPushers(ctx, pr); err != nil {
+			log.Error("GetGrantedApprovalsCount: %v", err)
+			return 0
+		}
+	}
 	sess := db.GetEngine(ctx).Where("issue_id = ?", pr.IssueID).
 		And("type = ?", ReviewTypeApprove).
 		And("official = ?", true).
 		And("dismissed = ?", false)
 	if protectBranch.IgnoreStaleApprovals {
 		sess = sess.And("stale = ?", false)
+	}
+	if len(pushers) > 0 {
+		ids := make([]int64, 0, len(pushers))
+		for id := range pushers {
+			ids = append(ids, id)
+		}
+		sess = sess.And(builder.NotIn("reviewer_id", ids))
 	}
 	approvals, err := sess.Count(new(Review))
 	if err != nil {
@@ -1051,45 +1067,159 @@ func MergeBlockedByUnresolvedConversations(ctx context.Context, protectBranch *g
 	return len(unresolved) > 0
 }
 
+// MaxCodeOwnerSectionApprovals is the largest number of approvals a CODEOWNERS section can ask for. A larger number is
+// a malformed header: it is never lowered, since that would weaken the requirement.
+const MaxCodeOwnerSectionApprovals = 1000
+
+// CodeOwnerSection is a section of a CODEOWNERS file, `[Name]`, `[Name][N]` or the optional `^[Name]` (GitLab syntax).
+// Lines before the first header belong to the default section.
+type CodeOwnerSection struct {
+	Name     string
+	Required int  // approvals needed from the owners of the lines that match a changed file
+	Optional bool // owners get review requests, but nothing blocks
+}
+
+// CodeOwners is a parsed CODEOWNERS file.
+type CodeOwners struct {
+	Rules    []*CodeOwnerRule
+	Warnings []string
+	// ErrorLine is the line of the first malformed section header, 0 if there is none. The file can't be trusted then:
+	// every code owner requirement is unsatisfied.
+	ErrorLine int
+}
+
 // GetCodeOwnersFromReader returns the code owners configuration
 // Return warning messages on parsing errors
 // We're trying to do the best we can when parsing a file.
 // Invalid lines are skipped. Non-existent users and teams too.
 func GetCodeOwnersFromReader(ctx context.Context, rc io.ReadCloser, truncated bool) ([]*CodeOwnerRule, []string) {
+	owners := ParseCodeOwners(ctx, rc, truncated)
+	return owners.Rules, owners.Warnings
+}
+
+// ParseCodeOwners parses a CODEOWNERS file. A section header is never compiled as a pattern.
+func ParseCodeOwners(ctx context.Context, rc io.ReadCloser, truncated bool) *CodeOwners {
 	defer rc.Close()
 	scanner := bufio.NewScanner(rc)
 
-	var rules []*CodeOwnerRule
-	var warnings []string
+	owners := &CodeOwners{}
+	sections := map[string]*CodeOwnerSection{} // by lower case name: duplicates merge
+	current := &CodeOwnerSection{Required: 1}
+	var defaults *CodeOwnerRule // the default owners of the current header, in Users and Teams
 	line := 0
 	for scanner.Scan() {
 		line++
 
-		tokens := TokenizeCodeOwnersLine(scanner.Text())
-		if len(tokens) == 0 {
-			continue
-		} else if len(tokens) < 2 {
-			warnings = append(warnings, fmt.Sprintf("Line: %d: incorrect format", line))
+		text := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(text, "[") || strings.HasPrefix(text, "^[") {
+			section, rest, err := parseCodeOwnersHeader(text)
+			if err != nil {
+				if owners.ErrorLine == 0 {
+					owners.ErrorLine = line
+				}
+				owners.Warnings = append(owners.Warnings, fmt.Sprintf("Line: %d: incorrect section header: %s", line, err))
+				// the lines below are not attributed to any section: the file fails closed as a whole
+				current, defaults = &CodeOwnerSection{Required: 1}, nil
+				continue
+			}
+			key := strings.ToLower(section.Name)
+			if known := sections[key]; known != nil {
+				if known.Required != section.Required && !known.Optional && !section.Optional {
+					owners.Warnings = append(owners.Warnings, fmt.Sprintf("Line: %d: section %q is repeated with another number of approvals, the larger one counts", line, section.Name))
+				}
+				known.Required = max(known.Required, section.Required)
+				known.Optional = known.Optional && section.Optional
+				section = known
+			} else {
+				sections[key] = section
+			}
+			current, defaults = section, nil
+			if tokens := TokenizeCodeOwnersLine(rest); len(tokens) > 0 {
+				users, teams, wr := resolveCodeOwners(ctx, tokens)
+				for _, w := range wr {
+					owners.Warnings = append(owners.Warnings, fmt.Sprintf("Line: %d: %s", line, w))
+				}
+				if len(users)+len(teams) > 0 {
+					defaults = &CodeOwnerRule{Users: users, Teams: teams}
+				} else {
+					owners.Warnings = append(owners.Warnings, fmt.Sprintf("Line: %d: no users/groups matched", line))
+				}
+			}
 			continue
 		}
-		rule, wr := ParseCodeOwnersLine(ctx, tokens)
-		for _, w := range wr {
-			warnings = append(warnings, fmt.Sprintf("Line: %d: %s", line, w))
+
+		tokens := TokenizeCodeOwnersLine(text)
+		if len(tokens) == 0 {
+			continue
+		}
+		var rule *CodeOwnerRule
+		if len(tokens) < 2 {
+			if defaults == nil {
+				owners.Warnings = append(owners.Warnings, fmt.Sprintf("Line: %d: incorrect format", line))
+				continue
+			}
+			var wr []string
+			if rule, wr = newCodeOwnerRule(tokens[0]); rule != nil {
+				rule.Users, rule.Teams = defaults.Users, defaults.Teams
+			}
+			for _, w := range wr {
+				owners.Warnings = append(owners.Warnings, fmt.Sprintf("Line: %d: %s", line, w))
+			}
+		} else {
+			var wr []string
+			rule, wr = ParseCodeOwnersLine(ctx, tokens)
+			for _, w := range wr {
+				owners.Warnings = append(owners.Warnings, fmt.Sprintf("Line: %d: %s", line, w))
+			}
 		}
 		if rule == nil {
 			continue
 		}
-
-		rules = append(rules, rule)
+		rule.Section = current
+		owners.Rules = append(owners.Rules, rule)
 	}
 	if err := scanner.Err(); err != nil {
-		warnings = append(warnings, err.Error())
+		owners.Warnings = append(owners.Warnings, err.Error())
 	}
 	if truncated {
-		warnings = append(warnings, fmt.Sprintf("File too big: truncated while on line %d", line))
+		owners.Warnings = append(owners.Warnings, fmt.Sprintf("File too big: truncated while on line %d", line))
 	}
 
-	return rules, warnings
+	return owners
+}
+
+// parseCodeOwnersHeader parses `[Name]`, `[Name][N]`, `^[Name]` or `^[Name][N]` at the start of text and returns
+// what follows it (default owners and a comment). N is ignored in an optional section.
+func parseCodeOwnersHeader(text string) (section *CodeOwnerSection, rest string, err error) {
+	section = &CodeOwnerSection{Required: 1}
+	if text, section.Optional = strings.CutPrefix(text, "^"); section.Optional {
+		section.Required = 0
+	}
+	name, rest, ok := strings.Cut(strings.TrimPrefix(text, "["), "]")
+	if !ok {
+		return nil, "", errors.New("missing ]")
+	}
+	if section.Name = strings.TrimSpace(name); section.Name == "" {
+		return nil, "", errors.New("empty section name")
+	}
+	if num, after, hasCount := strings.Cut(strings.TrimPrefix(rest, "["), "]"); strings.HasPrefix(rest, "[") {
+		if !hasCount {
+			return nil, "", errors.New("missing ] after the number of approvals")
+		}
+		// digits only and a bounded length: no sign, no overflow
+		n, convErr := strconv.Atoi(num)
+		if num == "" || len(num) > 4 || strings.Trim(num, "0123456789") != "" || convErr != nil || n < 1 || n > MaxCodeOwnerSectionApprovals {
+			return nil, "", fmt.Errorf("the number of approvals must be between 1 and %d", MaxCodeOwnerSectionApprovals)
+		}
+		if !section.Optional {
+			section.Required = n
+		}
+		rest = after
+	}
+	if rest != "" && !strings.HasPrefix(rest, " ") && !strings.HasPrefix(rest, "\t") && !strings.HasPrefix(rest, "#") {
+		return nil, "", errors.New("unexpected text after the header")
+	}
+	return section, rest, nil
 }
 
 type CodeOwnerRule struct {
@@ -1097,25 +1227,44 @@ type CodeOwnerRule struct {
 	Negative bool
 	Users    []*user_model.User
 	Teams    []*org_model.Team
+	Section  *CodeOwnerSection // nil is the default section
 }
 
-func ParseCodeOwnersLine(ctx context.Context, tokens []string) (*CodeOwnerRule, []string) {
-	var err error
+// newCodeOwnerRule compiles the pattern of a line.
+func newCodeOwnerRule(pattern string) (*CodeOwnerRule, []string) {
 	rule := &CodeOwnerRule{
 		Users:    make([]*user_model.User, 0),
 		Teams:    make([]*org_model.Team, 0),
-		Negative: strings.HasPrefix(tokens[0], "!"),
+		Negative: strings.HasPrefix(pattern, "!"),
 	}
+	var err error
+	if rule.Rule, err = regexp.Compile(fmt.Sprintf("^%s$", strings.TrimPrefix(pattern, "!"))); err != nil {
+		return nil, []string{fmt.Sprintf("incorrect codeowner regexp: %s", err)}
+	}
+	return rule, nil
+}
 
-	warnings := make([]string, 0)
+func ParseCodeOwnersLine(ctx context.Context, tokens []string) (*CodeOwnerRule, []string) {
+	rule, warnings := newCodeOwnerRule(tokens[0])
+	if rule == nil {
+		return nil, warnings
+	}
+	var wr []string
+	rule.Users, rule.Teams, wr = resolveCodeOwners(ctx, tokens[1:])
+	warnings = append(warnings, wr...)
 
-	rule.Rule, err = regexp.Compile(fmt.Sprintf("^%s$", strings.TrimPrefix(tokens[0], "!")))
-	if err != nil {
-		warnings = append(warnings, fmt.Sprintf("incorrect codeowner regexp: %s", err))
+	if (len(rule.Users) == 0) && (len(rule.Teams) == 0) {
+		warnings = append(warnings, "no users/groups matched")
 		return nil, warnings
 	}
 
-	for _, user := range tokens[1:] {
+	return rule, warnings
+}
+
+// resolveCodeOwners looks up the users and teams named by the tokens, skipping and warning about unknown ones.
+func resolveCodeOwners(ctx context.Context, tokens []string) (users []*user_model.User, teams []*org_model.Team, warnings []string) {
+	users, teams = make([]*user_model.User, 0), make([]*org_model.Team, 0)
+	for _, user := range tokens {
 		user = strings.TrimPrefix(user, "@")
 
 		// Only @org/team can contain slashes
@@ -1133,15 +1282,15 @@ func ParseCodeOwnersLine(ctx context.Context, tokens []string) (*CodeOwnerRule, 
 				warnings = append(warnings, fmt.Sprintf("incorrect codeowner organization: %s", user))
 				continue
 			}
-			teams, err := org.LoadTeams(ctx)
+			orgTeams, err := org.LoadTeams(ctx)
 			if err != nil {
 				warnings = append(warnings, fmt.Sprintf("incorrect codeowner team: %s", user))
 				continue
 			}
 
-			for _, team := range teams {
+			for _, team := range orgTeams {
 				if team.Name == teamName {
-					rule.Teams = append(rule.Teams, team)
+					teams = append(teams, team)
 				}
 			}
 		} else {
@@ -1150,16 +1299,10 @@ func ParseCodeOwnersLine(ctx context.Context, tokens []string) (*CodeOwnerRule, 
 				warnings = append(warnings, fmt.Sprintf("incorrect codeowner user: %s", user))
 				continue
 			}
-			rule.Users = append(rule.Users, u)
+			users = append(users, u)
 		}
 	}
-
-	if (len(rule.Users) == 0) && (len(rule.Teams) == 0) {
-		warnings = append(warnings, "no users/groups matched")
-		return nil, warnings
-	}
-
-	return rule, warnings
+	return users, teams, warnings
 }
 
 func TokenizeCodeOwnersLine(line string) []string {

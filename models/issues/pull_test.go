@@ -5,6 +5,8 @@ package issues_test
 
 import (
 	"fmt"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -597,4 +599,68 @@ func TestPullRequest_LoadHeadRepoTrashed(t *testing.T) {
 	assert.Nil(t, pr.HeadRepo)
 	require.NoError(t, pr.LoadBaseRepo(t.Context()))
 	assert.EqualValues(t, 10, pr.BaseRepo.ID)
+}
+
+func parseCodeOwnersText(t *testing.T, text string) *issues_model.CodeOwners {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	return issues_model.ParseCodeOwners(t.Context(), io.NopCloser(strings.NewReader(text)), false)
+}
+
+func TestParseCodeOwnersSections(t *testing.T) {
+	owners := parseCodeOwnersText(t, strings.Join([]string{
+		".* @user2",
+		"[Docs][2] @user4 # default owners",
+		"docs/.*",
+		"docs/x/.* @user2",
+		"^[Optional][9]",
+		"opt/.* @user2",
+		"[docs]", // the same section again, case-insensitively
+		"more/.*",
+		"[Docs][3]",
+		"",
+	}, "\n"))
+	assert.Zero(t, owners.ErrorLine)
+	require.Len(t, owners.Rules, 4, "headers are no patterns")
+	assert.Equal(t, 1, owners.Rules[0].Section.Required, "before any header: the default section")
+	assert.Equal(t, "Docs", owners.Rules[1].Section.Name)
+	assert.Equal(t, 3, owners.Rules[1].Section.Required, "duplicate sections merge, the larger number counts")
+	assert.Same(t, owners.Rules[1].Section, owners.Rules[2].Section)
+	require.Len(t, owners.Rules[1].Users, 1)
+	assert.EqualValues(t, 4, owners.Rules[1].Users[0].ID, "a line without owners takes the default owners")
+	assert.True(t, owners.Rules[3].Section.Optional)
+	assert.Contains(t, owners.Warnings, "Line: 8: incorrect format", "the default owners belong to their header, not to the merged section")
+	assert.Contains(t, strings.Join(owners.Warnings, "\n"), "repeated with another number of approvals")
+}
+
+func TestParseCodeOwnersHeaderIsNoPattern(t *testing.T) {
+	owners := parseCodeOwnersText(t, "[Docs] @user2\ndocs/.* @user2\n")
+	require.Len(t, owners.Rules, 1)
+	assert.False(t, owners.Rules[0].Rule.MatchString("D"), "[Docs] used to be a character class")
+}
+
+func TestParseCodeOwnersMalformedHeaders(t *testing.T) {
+	for _, header := range []string{
+		"[Docs", "[Docs][0]", "[Docs][x]", "[Docs][-1]", "[Docs][+1]", "[]", "[ ]", "[Docs][2", "[Docs][1001]",
+		"[Docs][99999999999999999999999]", "[Docs]x", "[Docs][2]x", "^[Docs", "^[]", "[Docs][]",
+	} {
+		owners := parseCodeOwnersText(t, ".* @user2\n"+header+" @user2\n")
+		assert.Equal(t, 2, owners.ErrorLine, header)
+		assert.Contains(t, strings.Join(owners.Warnings, "\n"), "Line: 2: incorrect section header", header)
+	}
+	for _, header := range []string{"[Docs][1000]", "[Docs][1]", "^[Docs][0]", "[Docs]\t@user2", "[Two words][2]", "[Docs] # comment"} {
+		owners := parseCodeOwnersText(t, header+"\n")
+		if header == "^[Docs][0]" {
+			assert.NotZero(t, owners.ErrorLine, "the number of an optional section is checked too: "+header)
+			continue
+		}
+		assert.Zero(t, owners.ErrorLine, header)
+	}
+}
+
+func TestParseCodeOwnersNoHeaders(t *testing.T) {
+	owners := parseCodeOwnersText(t, ".* @user2\ndocs/.*\n!x/.* @user4 @nobody\n")
+	require.Len(t, owners.Rules, 2)
+	assert.Zero(t, owners.ErrorLine)
+	assert.Equal(t, []string{"Line: 2: incorrect format", "Line: 3: incorrect codeowner user: nobody"}, owners.Warnings)
+	assert.True(t, owners.Rules[1].Negative)
 }

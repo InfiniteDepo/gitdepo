@@ -344,10 +344,18 @@ func ValidReviewers(ctx context.Context, pb *git_model.ProtectedBranch, pr *Pull
 
 	// an organization rule that dismisses stale approvals never counts them, even when undismissed
 	skipStale := reviewType == ReviewTypeApprove && (pb.IgnoreStaleApprovals || pb.OrgID != 0 && pb.DismissStaleApprovals)
+	// computed once for all reviewers, an error counts no approval
+	var pushers map[int64]bool
+	if reviewType == ReviewTypeApprove && pb.IgnorePusherApprovals {
+		var err error
+		if pushers, err = PullPushers(ctx, pr); err != nil {
+			return nil, err
+		}
+	}
 	var reviewers []*user_model.User
 	for _, r := range reviews {
 		if latest[r.ReviewerID] != r || r.Type != reviewType || r.Dismissed ||
-			(skipStale && r.Stale) || r.ReviewerID == pr.Issue.PosterID {
+			(skipStale && r.Stale) || r.ReviewerID == pr.Issue.PosterID || pushers[r.ReviewerID] {
 			continue
 		}
 		u, err := user_model.GetUserByID(ctx, r.ReviewerID)
