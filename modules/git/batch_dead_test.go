@@ -100,3 +100,25 @@ func TestExactRefLookupProcesses(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, ok)
 }
+
+// A name with a line break or NUL is never written to the shared batch process: it would be read as two requests and
+// leave the answers of every later lookup shifted by one.
+func TestBatchRefusesLineBreaks(t *testing.T) {
+	repo, err := OpenRepository(t.Context(), filepath.Join(testReposDir, "repo1_bare"))
+	require.NoError(t, err)
+	defer repo.Close()
+	assert.True(t, repo.IsBranchExist("master"))
+	for _, name := range []string{"master\nnope", "nope\nmaster", "master\n\n", "ma\x00ster", "master\r\nnope"} {
+		assert.False(t, repo.IsReferenceExist(name), "%q", name)
+		assert.False(t, repo.IsBranchExist(name), "%q", name)
+		_, err := repo.GetRefCommitID(name)
+		require.Error(t, err, "%q", name)
+		assert.False(t, repo.IsObjectExist(name), "%q", name)
+		// later lookups on the same repository are still answered for their own request
+		assert.True(t, repo.IsBranchExist("master"), "%q", name)
+		assert.False(t, repo.IsBranchExist("nope"), "%q", name)
+		id, err := repo.GetRefCommitID("refs/heads/master")
+		require.NoError(t, err)
+		assert.Len(t, id, 40)
+	}
+}
