@@ -2108,27 +2108,14 @@ func ViewIssue(ctx *context.Context) {
 			}
 			if len(approvalRules) > 0 {
 				ctx.Data["ApprovalRules"] = approvalRules
-				if ctx.Repo.IsAdmin() {
-					// who can approve is shown to repository admins only
-					eligible := make(map[int64]string, len(approvalRules))
-					for _, r := range approvalRules {
-						names := []string{}
-						users, err := user_model.GetUserByIDs(ctx, r.Rule.UserIDs)
-						if err != nil {
-							ctx.ServerError("GetUserByIDs", err)
-							return
-						}
-						for _, u := range users {
-							names = append(names, u.Name)
-						}
-						for _, id := range r.Rule.TeamIDs {
-							if t, err := organization.GetTeamByID(ctx, id); err == nil {
-								names = append(names, "@"+t.Name)
-							}
-						}
-						eligible[r.Rule.ID] = strings.Join(names, ", ")
+				// who can't approve is shown only to those who can change the rule or CODEOWNERS: to anyone else the
+				// mark would tell whether an account can sign in
+				if ctx.Repo.CanWrite(unit.TypeCode) {
+					if marked, err := pull_service.LoadIneligibleOwners(ctx, pull.BaseRepo, pull_service.NewOwnerViewer(ctx, ctx.Doer, pull.BaseRepo, ctx.Repo.IsAdmin()), approvalRules); err != nil {
+						log.Error("LoadIneligibleOwners for %-v: %v", pull, err)
+					} else {
+						ctx.Data["ApprovalRules"] = marked
 					}
-					ctx.Data["ApprovalRuleEligible"] = eligible
 				}
 				ctx.Data["IsBlockedByApprovalRules"] = ctx.Data["IsBlockedByApprovalRules"] == true || slices.ContainsFunc(approvalRules, func(s *pull_service.ApprovalRuleStatus) bool { return !s.Satisfied })
 			}

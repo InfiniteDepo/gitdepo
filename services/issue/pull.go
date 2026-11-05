@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	git_model "forgejo.org/models/git"
 	issues_model "forgejo.org/models/issues"
 	org_model "forgejo.org/models/organization"
 	access_model "forgejo.org/models/perm/access"
@@ -26,7 +27,7 @@ type ReviewRequestNotifier struct {
 }
 
 // LoadCodeOwnerRules reads the CODEOWNERS file of the commit. truncated is true when the file is too big and was only read in part.
-func LoadCodeOwnerRules(ctx context.Context, commit *git.Commit) (owners *issues_model.CodeOwners, truncated bool, err error) {
+func LoadCodeOwnerRules(ctx context.Context, ownerID int64, commit *git.Commit) (owners *issues_model.CodeOwners, truncated bool, err error) {
 	for _, file := range []string{"CODEOWNERS", "docs/CODEOWNERS", ".gitea/CODEOWNERS", ".forgejo/CODEOWNERS"} {
 		blob, err := commit.GetBlobByPath(file)
 		if git.IsErrNotExist(err) {
@@ -39,11 +40,21 @@ func LoadCodeOwnerRules(ctx context.Context, commit *git.Commit) (owners *issues
 			return nil, false, err
 		}
 		truncated = size > setting.UI.MaxDisplayFileSize
-		owners = issues_model.ParseCodeOwners(ctx, rc, truncated)
+		owners = issues_model.ParseCodeOwners(ctx, ownerID, rc, truncated)
 		owners.File = file
 		return owners, truncated, nil
 	}
 	return &issues_model.CodeOwners{}, false, nil
+}
+
+// CodeOwnerPatterns returns the patterns of the CODEOWNERS lines, to charge their matching to a
+// git_model.PathMatchBudget.
+func CodeOwnerPatterns(rules []*issues_model.CodeOwnerRule) []git_model.PathPattern {
+	patterns := make([]git_model.PathPattern, len(rules))
+	for i, rule := range rules {
+		patterns[i] = git_model.NewPathPattern(rule.Rule)
+	}
+	return patterns
 }
 
 // CodeOwnerRulesOfFile returns the CODEOWNERS lines that apply to the file, the way PullRequestCodeOwnersReview matches them.
@@ -84,7 +95,7 @@ func PullRequestCodeOwnersReview(ctx context.Context, issue *issues_model.Issue,
 		return nil, err
 	}
 
-	owners, _, _ := LoadCodeOwnerRules(ctx, commit)
+	owners, _, _ := LoadCodeOwnerRules(ctx, pr.BaseRepo.OwnerID, commit)
 	var rules []*issues_model.CodeOwnerRule
 	if owners != nil {
 		rules = owners.Rules
@@ -102,11 +113,18 @@ func PullRequestCodeOwnersReview(ctx context.Context, issue *issues_model.Issue,
 		return nil, err
 	}
 
+	// the matching is bounded like the approval rules' (see git_model.PathMatchBudget): past it nobody is asked, and
+	// a rule that requires code owners can't be met anyway
+	if !git_model.NewPathMatchBudget().Take(changedFiles, CodeOwnerPatterns(rules)) {
+		log.Warn("%-v: the changes are too large to check against CODEOWNERS, no code owner is asked for a review", pr)
+		return nil, nil
+	}
+
 	uniqUsers := make(map[int64]*user_model.User)
 	uniqTeams := make(map[string]*org_model.Team)
 	for _, rule := range rules {
 		for _, f := range changedFiles {
-			if (rule.Rule.MatchString(f) && !rule.Negative) || (!rule.Rule.MatchString(f) && rule.Negative) {
+			if rule.Rule.MatchString(f) != rule.Negative {
 				for _, u := range rule.Users {
 					uniqUsers[u.ID] = u
 				}

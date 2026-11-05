@@ -254,7 +254,7 @@ func CheckEnvironmentReviewers(ctx context.Context, repo *repo_model.Repository,
 			why = ReviewerOutsider
 		case !usableReviewer(row.User):
 			why = ReviewerNotUsable
-		case row.TwoFactorBlocked:
+		case row.TwoFactorStranger:
 			why = ReviewerTwoFactor
 		case !row.Perm.CanRead(unit.TypeActions):
 			why = ReviewerNoAccess

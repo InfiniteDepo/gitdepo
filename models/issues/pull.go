@@ -1101,17 +1101,10 @@ type CodeOwners struct {
 	File string
 }
 
-// GetCodeOwnersFromReader returns the code owners configuration
-// Return warning messages on parsing errors
-// We're trying to do the best we can when parsing a file.
-// Invalid lines are skipped. Non-existent users and teams too.
-func GetCodeOwnersFromReader(ctx context.Context, rc io.ReadCloser, truncated bool) ([]*CodeOwnerRule, []string) {
-	owners := ParseCodeOwners(ctx, rc, truncated)
-	return owners.Rules, owners.Warnings
-}
-
-// ParseCodeOwners parses a CODEOWNERS file. A section header is never compiled as a pattern.
-func ParseCodeOwners(ctx context.Context, rc io.ReadCloser, truncated bool) *CodeOwners {
+// ParseCodeOwners parses a CODEOWNERS file of a repository of the owner ownerID. A section header is never compiled
+// as a pattern. A team resolves only within the owner's organization: a team of another organization is as unknown as
+// one that doesn't exist, and warned about in the same words.
+func ParseCodeOwners(ctx context.Context, ownerID int64, rc io.ReadCloser, truncated bool) *CodeOwners {
 	defer rc.Close()
 	scanner := bufio.NewScanner(rc)
 
@@ -1155,14 +1148,14 @@ func ParseCodeOwners(ctx context.Context, rc io.ReadCloser, truncated bool) *Cod
 			}
 			current, defaults = section, nil
 			if tokens := TokenizeCodeOwnersLine(rest); len(tokens) > 0 {
-				users, teams, wr := resolveCodeOwners(ctx, tokens)
+				users, teams, wr := resolveCodeOwners(ctx, ownerID, tokens)
 				for _, w := range wr {
 					owners.Warnings = append(owners.Warnings, fmt.Sprintf("Line: %d: %s", line, w))
 				}
-				if len(users)+len(teams) > 0 {
-					defaults = &CodeOwnerRule{Users: users, Teams: teams}
-				} else {
-					owners.Warnings = append(owners.Warnings, fmt.Sprintf("Line: %d: no users/groups matched", line))
+				// owners that all fail to resolve leave the lines below with no owner, which blocks them
+				defaults = &CodeOwnerRule{Users: users, Teams: teams}
+				if len(users)+len(teams) == 0 {
+					owners.Warnings = append(owners.Warnings, fmt.Sprintf("Line: %d: %s", line, noOwnersMatched))
 				}
 			}
 			continue
@@ -1187,7 +1180,7 @@ func ParseCodeOwners(ctx context.Context, rc io.ReadCloser, truncated bool) *Cod
 			}
 		} else {
 			var wr []string
-			rule, wr = ParseCodeOwnersLine(ctx, tokens)
+			rule, wr = ParseCodeOwnersLine(ctx, ownerID, tokens)
 			for _, w := range wr {
 				owners.Warnings = append(owners.Warnings, fmt.Sprintf("Line: %d: %s", line, w))
 			}
@@ -1199,7 +1192,7 @@ func ParseCodeOwners(ctx context.Context, rc io.ReadCloser, truncated bool) *Cod
 			fail("more than %d pattern lines", MaxCodeOwnerLines)
 			break
 		}
-		rule.Section = current
+		rule.Section, rule.Line = current, line
 		owners.Rules = append(owners.Rules, rule)
 	}
 	if err := scanner.Err(); err != nil {
@@ -1256,6 +1249,7 @@ type CodeOwnerRule struct {
 	Users    []*user_model.User
 	Teams    []*org_model.Team
 	Section  *CodeOwnerSection // the default section (Required 1, no name) of a line above every header
+	Line     int               // the line of the pattern in the file
 }
 
 // newCodeOwnerRule compiles the pattern of a line.
@@ -1272,25 +1266,26 @@ func newCodeOwnerRule(pattern string) (*CodeOwnerRule, []string) {
 	return rule, nil
 }
 
-func ParseCodeOwnersLine(ctx context.Context, tokens []string) (*CodeOwnerRule, []string) {
+const noOwnersMatched = "no users/groups matched: this line blocks merges of the files it matches until it is fixed"
+
+func ParseCodeOwnersLine(ctx context.Context, ownerID int64, tokens []string) (*CodeOwnerRule, []string) {
 	rule, warnings := newCodeOwnerRule(tokens[0])
 	if rule == nil {
 		return nil, warnings
 	}
 	var wr []string
-	rule.Users, rule.Teams, wr = resolveCodeOwners(ctx, tokens[1:])
+	rule.Users, rule.Teams, wr = resolveCodeOwners(ctx, ownerID, tokens[1:])
 	warnings = append(warnings, wr...)
 
-	if (len(rule.Users) == 0) && (len(rule.Teams) == 0) {
-		warnings = append(warnings, "no users/groups matched")
-		return nil, warnings
+	// a line whose owners all fail to resolve is kept without owners: no approval can cover its files, so it blocks
+	if len(rule.Users)+len(rule.Teams) == 0 {
+		warnings = append(warnings, noOwnersMatched)
 	}
-
 	return rule, warnings
 }
 
 // resolveCodeOwners looks up the users and teams named by the tokens, skipping and warning about unknown ones.
-func resolveCodeOwners(ctx context.Context, tokens []string) (users []*user_model.User, teams []*org_model.Team, warnings []string) {
+func resolveCodeOwners(ctx context.Context, ownerID int64, tokens []string) (users []*user_model.User, teams []*org_model.Team, warnings []string) {
 	users, teams = make([]*user_model.User, 0), make([]*org_model.Team, 0)
 	for _, user := range tokens {
 		user = strings.TrimPrefix(user, "@")
@@ -1305,9 +1300,10 @@ func resolveCodeOwners(ctx context.Context, tokens []string) (users []*user_mode
 			orgName := s[0]
 			teamName := s[1]
 
+			// the same answer for a missing organization, a foreign one and a missing team
 			org, err := org_model.GetOrgByName(ctx, orgName)
-			if err != nil {
-				warnings = append(warnings, fmt.Sprintf("incorrect codeowner organization: %s", user))
+			if err != nil || org.ID != ownerID {
+				warnings = append(warnings, fmt.Sprintf("incorrect codeowner team: %s", user))
 				continue
 			}
 			orgTeams, err := org.LoadTeams(ctx)
@@ -1316,10 +1312,15 @@ func resolveCodeOwners(ctx context.Context, tokens []string) (users []*user_mode
 				continue
 			}
 
+			found := false
 			for _, team := range orgTeams {
 				if team.Name == teamName {
 					teams = append(teams, team)
+					found = true
 				}
+			}
+			if !found {
+				warnings = append(warnings, fmt.Sprintf("incorrect codeowner team: %s", user))
 			}
 		} else {
 			u, err := user_model.GetUserByName(ctx, user)

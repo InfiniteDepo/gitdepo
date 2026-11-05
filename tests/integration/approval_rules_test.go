@@ -13,6 +13,8 @@ import (
 	"time"
 
 	auth_model "forgejo.org/models/auth"
+	"forgejo.org/models/db"
+	issues_model "forgejo.org/models/issues"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/services/forms"
 	"forgejo.org/tests"
@@ -100,7 +102,14 @@ func (e *approvalRulesEnv) approve(user string, index int64) {
 	ctx.Session.MakeRequest(e.t, req, http.StatusOK)
 }
 
+// apiMerge merges the pull request once its conflict check has finished: a push starts that check in a goroutine, and
+// the merge refuses a pull request that is still being checked ("Please try again later").
 func (e *approvalRulesEnv) apiMerge(ctx APITestContext, index int64, force bool, expected int) string {
+	require.Eventually(e.t, func() bool {
+		pr := &issues_model.PullRequest{}
+		has, err := db.GetEngine(db.DefaultContext).Where("base_repo_id = 1 AND `index` = ?", index).Get(pr)
+		return err == nil && has && pr.Status != issues_model.PullRequestStatusChecking && !pullTaskRunning()
+	}, 15*time.Second, 50*time.Millisecond)
 	req := NewRequestWithJSON(e.t, "POST", fmt.Sprintf("/api/v1/repos/user2/repo1/pulls/%d/merge", index), &forms.MergePullRequestForm{Do: "merge", ForceMerge: force}).AddTokenAuth(ctx.Token)
 	return ctx.Session.MakeRequest(e.t, req, expected).Body.String()
 }

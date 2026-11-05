@@ -6,9 +6,12 @@ package git
 import (
 	"context"
 	"regexp"
+	"regexp/syntax"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"forgejo.org/models/db"
 	"forgejo.org/models/organization"
@@ -16,6 +19,8 @@ import (
 	"forgejo.org/modules/glob"
 	"forgejo.org/modules/timeutil"
 	"forgejo.org/modules/util"
+
+	"xorm.io/builder"
 )
 
 // MaxApprovalRules is the number of approval rules a protected branch rule can have.
@@ -48,7 +53,7 @@ type ApprovalRule struct {
 
 // pathMatcher holds the compiled path patterns of a rule; invalid if a stored pattern is beyond the limits.
 type pathMatcher struct {
-	patterns []*regexp.Regexp
+	patterns []PathPattern
 	invalid  bool
 }
 
@@ -144,31 +149,84 @@ func (r *ApprovalRule) IsApprover(ctx context.Context, userID int64) (bool, erro
 }
 
 // Bounds of approval-rule path matching. A rule holds at most maxPathPatterns patterns of maxPathPatternBytes in
-// total, and one evaluation of the rules of a pull request (every rule of every level, see PathMatchBudget) may take
-// at most maxPathMatchWork path bytes times patterns (10,000 files of 100 bytes against 8 patterns, under 0.4 s for the
-// slowest patterns); beyond it the files are not matched.
+// total, and one evaluation of a pull request (every rule of every level and the CODEOWNERS lines, see
+// PathMatchBudget) may take at most maxPathMatchWork; beyond it the files are not matched.
 const (
 	maxPathPatterns     = 100
 	maxPathPatternBytes = 8 << 10
-	maxPathMatchWork    = 8 << 20
+	// MaxPathMatchWork is path bytes times instructions of the compiled patterns (see PathPattern): about 1 s for
+	// ordinary CODEOWNERS lines and glob patterns, about 3 s for the slowest ones per instruction (about 6 ns per byte
+	// and instruction). A pattern with a literal prefix (`docs/…`) is charged only that prefix for a path that doesn't
+	// start with it, so 1000 changed files against a CODEOWNERS file of 1000 such lines fit many times over.
+	MaxPathMatchWork = 512 << 20
+	// matchCallWork is charged for every match of a path against a pattern on top of the bytes it reads: a call costs
+	// about 100 ns however soon it fails.
+	matchCallWork = 32
 )
 
-// PathMatchBudget is the work left for matching the path patterns of approval rules in one evaluation of a pull
-// request. Share one budget between all rules and levels the evaluation looks at, so the work doesn't grow with the
-// number of rules.
+// PathMatchBudget is the work left for matching paths in one evaluation of the approval rules of a pull request:
+// the path patterns of the rules and the CODEOWNERS lines. Share one budget between all rules and levels the
+// evaluation looks at, so the work doesn't grow with the number of rules.
 type PathMatchBudget struct {
 	left int
 }
 
 // NewPathMatchBudget returns the budget of one evaluation.
 func NewPathMatchBudget() *PathMatchBudget {
-	return &PathMatchBudget{left: maxPathMatchWork}
+	return &PathMatchBudget{left: MaxPathMatchWork}
 }
 
-// take takes work from the budget, false (and nothing taken) if less is left.
-func (b *PathMatchBudget) take(work int) bool {
-	if work > b.left {
-		return false
+// PathPattern is a compiled path pattern with what matching it costs (see PathMatchBudget).
+type PathPattern struct {
+	*regexp.Regexp
+	insts  int    // instructions of the compiled program
+	prefix string // the literal an anchored pattern starts with, "" if none
+}
+
+// NewPathPattern returns re with its cost. Go's regular expressions run in time linear in the input and the number of
+// instructions of the program, so path bytes times instructions bounds the time of a match. A pattern anchored at
+// the start with a literal (`^docs/.*$`) fails on the first bytes of a path without that literal: only those are
+// charged then. The regexp reads an invalid UTF-8 byte of a path as U+FFFD, so a prefix holding U+FFFD can't be
+// compared with the path's bytes: such a pattern is charged in full. A pattern that can't be parsed again costs more
+// than any budget.
+func NewPathPattern(re *regexp.Regexp) PathPattern {
+	p := PathPattern{Regexp: re, insts: MaxPathMatchWork + 1}
+	parsed, err := syntax.Parse(re.String(), syntax.Perl)
+	if err != nil {
+		return p
+	}
+	parsed = parsed.Simplify()
+	prog, err := syntax.Compile(parsed)
+	if err != nil {
+		return p
+	}
+	p.insts = len(prog.Inst)
+	if parsed.Op == syntax.OpConcat && len(parsed.Sub) > 1 && parsed.Sub[0].Op == syntax.OpBeginText {
+		if lit := parsed.Sub[1]; lit.Op == syntax.OpLiteral && lit.Flags&syntax.FoldCase == 0 && !slices.Contains(lit.Rune, utf8.RuneError) {
+			p.prefix = string(lit.Rune)
+		}
+	}
+	return p
+}
+
+// cost is the work of matching the path against the pattern.
+func (p PathPattern) cost(path string) int {
+	if p.prefix != "" && !strings.HasPrefix(path, p.prefix) {
+		return matchCallWork + len(p.prefix) + 1
+	}
+	return matchCallWork + len(path)*p.insts
+}
+
+// Take takes the work of matching the paths against the patterns from the budget, false (and nothing taken) if less
+// is left.
+func (b *PathMatchBudget) Take(paths []string, patterns []PathPattern) bool {
+	work := 0
+	for _, p := range patterns {
+		for _, path := range paths {
+			if work += p.cost(path); work > b.left {
+				return false
+			}
+		}
 	}
 	b.left -= work
 	return true
@@ -200,18 +258,16 @@ func (r *ApprovalRule) FilesInScope(budget *PathMatchBudget, changedFiles []stri
 	if len(m.patterns) == 0 {
 		return nil, true
 	}
-	work := 0
-	for _, f := range changedFiles {
-		// a sum over the files can't overflow: they are bounded by the size of a diff
-		work += len(f) * len(m.patterns)
+	paths := make([]string, len(changedFiles))
+	for i, f := range changedFiles {
+		paths[i] = strings.ToLower(strings.TrimSpace(f))
 	}
-	if !budget.take(work) {
+	if !budget.Take(paths, m.patterns) {
 		return nil, false
 	}
-	inScope = make([]bool, len(changedFiles))
-	for i, f := range changedFiles {
-		f = strings.ToLower(strings.TrimSpace(f))
-		inScope[i] = slices.ContainsFunc(m.patterns, func(g *regexp.Regexp) bool { return g.MatchString(f) })
+	inScope = make([]bool, len(paths))
+	for i, f := range paths {
+		inScope[i] = slices.ContainsFunc(m.patterns, func(g PathPattern) bool { return g.MatchString(f) })
 	}
 	return inScope, true
 }
@@ -236,7 +292,7 @@ func (r *ApprovalRule) pathMatcher() *pathMatcher {
 			r.paths.invalid = true
 			return r.paths
 		}
-		r.paths.patterns = append(r.paths.patterns, g)
+		r.paths.patterns = append(r.paths.patterns, NewPathPattern(g))
 	}
 	return r.paths
 }
@@ -298,4 +354,50 @@ func compileGlobPattern(expr string, separators ...rune) (*regexp.Regexp, error)
 		return nil, util.NewInvalidArgumentErrorf("%v", err)
 	}
 	return g, nil
+}
+
+// listingChunk is how many IDs one query of FindApprovalRulesListing matches: every ID is four LIKE terms, and the
+// query builder refuses a condition that is too deep.
+const listingChunk = 50
+
+// FindApprovalRulesListing returns the approval rules, of every level, that list one of the users or one of the
+// teams. The JSON lists are matched as text first (they are stored as `[1,2,3]`), in queries of listingChunk IDs
+// each, and checked exactly after, so a rule can't be matched by an ID that is only part of another one.
+func FindApprovalRulesListing(ctx context.Context, userIDs, teamIDs []int64) ([]*ApprovalRule, error) {
+	type term struct {
+		col string
+		id  int64
+	}
+	var terms []term
+	for _, id := range userIDs {
+		terms = append(terms, term{"user_i_ds", id})
+	}
+	for _, id := range teamIDs {
+		terms = append(terms, term{"team_i_ds", id})
+	}
+	byID := map[int64]*ApprovalRule{}
+	for chunk := range slices.Chunk(terms, listingChunk) {
+		cond := builder.NewCond()
+		for _, t := range chunk {
+			s := strconv.FormatInt(t.id, 10)
+			cond = cond.Or(builder.Like{t.col, "[" + s + ","}).Or(builder.Like{t.col, "," + s + ","}).
+				Or(builder.Like{t.col, "," + s + "]"}).Or(builder.Eq{t.col: "[" + s + "]"})
+		}
+		var found []*ApprovalRule
+		if err := db.GetEngine(ctx).Where(cond).Find(&found); err != nil {
+			return nil, err
+		}
+		for _, r := range found {
+			byID[r.ID] = r
+		}
+	}
+	rules := make([]*ApprovalRule, 0, len(byID))
+	for _, r := range byID {
+		if slices.ContainsFunc(userIDs, func(id int64) bool { return slices.Contains(r.UserIDs, id) }) ||
+			slices.ContainsFunc(teamIDs, func(id int64) bool { return slices.Contains(r.TeamIDs, id) }) {
+			rules = append(rules, r)
+		}
+	}
+	slices.SortFunc(rules, func(a, b *ApprovalRule) int { return int(a.ID - b.ID) })
+	return rules, nil
 }

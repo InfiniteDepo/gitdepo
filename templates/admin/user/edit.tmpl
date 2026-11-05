@@ -4,6 +4,17 @@
 			{{ctx.Locale.Tr "admin.users.edit_account"}}
 		</h4>
 		<div class="ui attached segment">
+			{{if .LastApproverWarnings}}
+			<div class="ui warning message last-approver-warnings tw-text-left">
+				<div class="header">{{ctx.Locale.Tr "admin.users.last_approver_header" (ctx.Locale.TrString "admin.users.is_activated") (ctx.Locale.TrString "admin.users.prohibit_login")}}</div>
+				<ul class="tw-m-0">
+					{{range .LastApproverWarnings}}
+						<li>{{if .Link}}<a href="{{.Link}}">{{.Text}}</a>{{else}}{{.Text}}{{end}} ({{.Kind}})</li>
+					{{end}}
+					{{if .LastApproverMore}}<li>{{ctx.Locale.Tr "admin.users.last_approver_more" .LastApproverMore}}</li>{{end}}
+				</ul>
+			</div>
+			{{end}}
 			<form class="ui form" action="./edit" method="post">
 				{{template "base/disable_form_autofill"}}
 				<div class="field {{if .Err_UserName}}error{{end}}">

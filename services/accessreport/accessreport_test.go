@@ -229,7 +229,19 @@ func assertUsersMatch(t *testing.T, repos []*repo_model.Repository, users []*use
 			assertSamePerm(t, expected, row.Perm, fmt.Sprintf("listed user %d on repo %d", u.ID, repo.ID))
 			blocked, err := u.TwoFactorBlocked(ctx, repo.Owner)
 			require.NoError(t, err)
-			assert.Equal(t, blocked, row.TwoFactorBlocked, "2FA of user %d on repo %d", u.ID, repo.ID)
+			assert.Equal(t, blocked, row.TwoFactorStranger, "2FA of user %d on repo %d", u.ID, repo.ID)
+			assert.False(t, row.TwoFactorBlocked, "set only under IgnoreTwoFactor")
+		}
+		// under IgnoreTwoFactor nobody is computed as a stranger, and TwoFactorBlocked tells whom the requirement holds
+		ignored, err := Compute(ctx, Options{RepoIDs: []int64{repo.ID}, Users: uids, RepoPermission: true, IgnoreTwoFactor: true})
+		require.NoError(t, err)
+		for _, u := range users {
+			if row := findRow(ignored, repo.ID, u.ID); row != nil {
+				blocked, err := u.TwoFactorBlocked(ctx, repo.Owner)
+				require.NoError(t, err)
+				assert.False(t, row.TwoFactorStranger, "user %d on repo %d", u.ID, repo.ID)
+				assert.Equal(t, blocked, row.TwoFactorBlocked, "user %d on repo %d", u.ID, repo.ID)
+			}
 		}
 	}
 }
