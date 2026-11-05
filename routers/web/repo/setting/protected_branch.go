@@ -582,13 +582,18 @@ func approvalRulesFromForm(ctx *context.Context, owner *user_model.User) ([]*git
 		if strings.TrimSpace(name) == "" {
 			continue
 		}
-		count, _ := strconv.ParseInt(field("approval_rule_count", i), 10, 64)
+		count, err := strconv.ParseInt(field("approval_rule_count", i), 10, 64)
+		if err != nil {
+			return nil, util.NewInvalidArgumentErrorf("approval rule %q needs a number of approvals", name)
+		}
 		rules = append(rules, &api.ApprovalRule{
 			Name: name, RequiredCount: count,
-			Usernames:         list(field("approval_rule_users", i)),
-			Teams:             list(field("approval_rule_teams", i)),
-			PathPatterns:      field("approval_rule_paths", i),
-			RequireCodeOwners: field("approval_rule_code_owners", i) == "true",
+			Usernames:           list(field("approval_rule_users", i)),
+			Teams:               list(field("approval_rule_teams", i)),
+			PathPatterns:        field("approval_rule_paths", i),
+			RequireCodeOwners:   field("approval_rule_code_owners", i) == "true",
+			RequestReviews:      field("approval_rule_request_reviews", i) == "true",
+			SourceBranchPattern: field("approval_rule_source_branch", i),
 		})
 	}
 	return pull_service.ApprovalRulesFromAPI(ctx, owner, rules)

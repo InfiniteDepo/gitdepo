@@ -139,6 +139,9 @@ type Review struct {
 	MergeBase string `xorm:"VARCHAR(64)"`
 	Stale     bool   `xorm:"NOT NULL DEFAULT false"`
 	Dismissed bool   `xorm:"NOT NULL DEFAULT false"`
+	// Advisory is a review request of an approval rule that only requests reviews: it never blocks a merge, under any
+	// protected branch rule
+	Advisory bool `xorm:"NOT NULL DEFAULT false"`
 
 	CreatedUnix timeutil.TimeStamp `xorm:"INDEX created"`
 	UpdatedUnix timeutil.TimeStamp `xorm:"INDEX updated"`
@@ -410,7 +413,8 @@ func GetRequestedReviewerIDs(ctx context.Context, issueID int64) ([]int64, error
 		Where("issue_id = ? AND type = ? AND reviewer_id > 0", issueID, ReviewTypeRequest).Find(&ids)
 }
 
-// orgRuleHasReviewRequests returns whether a pending review request goes to an official reviewer or team of the organization rule.
+// orgRuleHasReviewRequests returns whether a pending review request goes to an official reviewer or team of the
+// organization rule. An advisory request never counts.
 func orgRuleHasReviewRequests(ctx context.Context, pb *git_model.ProtectedBranch, pr *PullRequest) (bool, error) {
 	// only an approval or rejection answers a request, a comment or pending review doesn't
 	var reviews []*Review
@@ -426,7 +430,7 @@ func orgRuleHasReviewRequests(ctx context.Context, pb *git_model.ProtectedBranch
 	}
 	for _, r := range reviews {
 		switch {
-		case r.Type != ReviewTypeRequest:
+		case r.Type != ReviewTypeRequest || r.Advisory:
 			continue
 		case r.ReviewerTeamID > 0:
 			team, err := organization.GetTeamByID(ctx, r.ReviewerTeamID)
@@ -791,6 +795,31 @@ func InsertReviews(ctx context.Context, reviews []*Review) error {
 	}
 
 	return committer.Commit()
+}
+
+// MarkReviewRequestAdvisory makes a review request advisory and unofficial, so that it can't block a merge.
+func MarkReviewRequestAdvisory(ctx context.Context, reviewID int64) error {
+	_, err := db.GetEngine(ctx).Exec("UPDATE `review` SET official = ?, advisory = ? WHERE id = ?", false, true, reviewID)
+	return err
+}
+
+// MakeAdvisoryRequestOfficial turns an advisory review request of the reviewer, or of the team if set, into a normal
+// one, official if they can make official reviews. It is used when a rule with a count starts to ask them.
+func MakeAdvisoryRequestOfficial(ctx context.Context, issue *Issue, reviewer *user_model.User, team *organization.Team) (err error) {
+	cond := builder.Eq{"issue_id": issue.ID, "type": ReviewTypeRequest, "advisory": true}
+	var official bool
+	if team != nil {
+		cond["reviewer_team_id"] = team.ID
+		official, err = IsOfficialReviewerTeam(ctx, issue, team)
+	} else {
+		cond["reviewer_id"] = reviewer.ID
+		official, err = IsOfficialReviewer(ctx, issue, reviewer)
+	}
+	if err != nil {
+		return err
+	}
+	_, err = db.GetEngine(ctx).Table("review").Where(cond).Update(map[string]any{"advisory": false, "official": official})
+	return err
 }
 
 // AddReviewRequest add a review request from one reviewer
