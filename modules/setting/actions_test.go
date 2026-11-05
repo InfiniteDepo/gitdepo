@@ -336,6 +336,9 @@ func Test_getDeploymentApprovalTimeoutForActions(t *testing.T) {
 		"[actions]\nDEPLOYMENT_APPROVAL_TIMEOUT = 59m\n",
 		"[actions]\nDEPLOYMENT_APPROVAL_TIMEOUT = 8761h\n",
 		"[actions]\nDEPLOYMENT_APPROVAL_TIMEOUT = -1h\n",
+		"[actions]\nDEPLOYMENT_APPROVAL_TIMEOUT = 0\n",
+		"[actions]\nDEPLOYMENT_APPROVAL_TIMEOUT = 0s\n",
+		"[actions]\nDEPLOYMENT_APPROVAL_TIMEOUT = -1\n",
 		"[actions]\nDEPLOYMENT_APPROVAL_TIMEOUT = soon\n",
 	} {
 		cfg, err := NewConfigProviderFromData(iniStr)

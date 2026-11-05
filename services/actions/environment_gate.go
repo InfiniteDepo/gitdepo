@@ -15,6 +15,7 @@ import (
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
 	secret_model "forgejo.org/models/secret"
+	user_model "forgejo.org/models/user"
 	actions_module "forgejo.org/modules/actions"
 	"forgejo.org/modules/cache"
 	"forgejo.org/modules/container"
@@ -289,7 +290,16 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 	}
 
 	prior := d.Status
-	nextDeploymentStatus(d, env, reason, timeutil.TimeStampNow())
+	now := timeutil.TimeStampNow()
+	if reason == "" && !isNew && prior == actions_model.DeploymentWaitingTimer && d.ReviewedBy != 0 && env != nil && env.ReviewsRequired && d.ReleaseAfterUnix <= now {
+		// about to be released on an approval: the approver must still be one who may review
+		if revoked, err := revokeApprovalIfIneligible(ctx, run, env, d); err != nil {
+			return behaviourError, err
+		} else if revoked {
+			return behaviourHoldJob, nil
+		}
+	}
+	nextDeploymentStatus(d, env, reason, now)
 	if err := saveDeployment(ctx, d, isNew, prior); err != nil {
 		return behaviourError, err
 	}
@@ -318,6 +328,43 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 	}
 	return behaviourExecuteJob, nil
 }
+
+// revokeApprovalIfIneligible withdraws the approval of d when its approver may no longer review it (removed from the
+// reviewers or the team, deactivated, lost access, ...): the deployment waits for a review again, with the review
+// cleared, and the change is recorded. It reports if it did.
+func revokeApprovalIfIneligible(ctx context.Context, run *actions_model.ActionRun, env *actions_model.ActionEnvironment, d *actions_model.ActionDeployment) (bool, error) {
+	approver, err := user_model.GetUserByID(ctx, d.ReviewedBy)
+	if err != nil && !user_model.IsErrUserNotExist(err) {
+		return false, err
+	}
+	if approver != nil {
+		checker, err := NewReviewChecker(ctx, approver, run)
+		if err != nil {
+			return false, err
+		}
+		if ok, err := checker.May(ctx, d); err != nil || ok {
+			return false, err
+		}
+	}
+	revokedBy := d.ReviewedBy
+	err = db.WithTx(ctx, func(ctx context.Context) error {
+		if moved, err := actions_model.RevokeDeploymentApproval(ctx, d); err != nil {
+			return err
+		} else if !moved {
+			return errApprovalMoved
+		}
+		return recordDeploymentReview(ctx, run.Repo, env, d, audit_model.Event{
+			Action: "repo.actions_deployment.approval_revoked", Result: audit_model.ResultSuccess,
+			Data: map[string]any{"revoked_reviewer_id": revokedBy},
+		}, 0)
+	})
+	if errors.Is(err, errApprovalMoved) {
+		return false, nil // another pass decided first; this one looks again next time
+	}
+	return err == nil, err
+}
+
+var errApprovalMoved = errors.New("the approval changed meanwhile")
 
 // saveDeployment inserts a new deployment, or moves an existing one from prior to its status; a deployment that
 // another server moved meanwhile is an error, so that the pass of the emitter is repeated.

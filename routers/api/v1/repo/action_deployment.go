@@ -166,7 +166,9 @@ func ReviewActionRunDeployments(ctx *context.APIContext) {
 	// summary: Approve or reject the deployments of a workflow run that wait for a review
 	// description: >
 	//   Only a reviewer listed by the environment, or a member of a listed team, who can read the repository's Actions
-	//   may review; site administrators have no exception. One approval releases a job once its wait timer is due,
+	//   may review; site administrators have no exception, and neither does a request made under sudo or with an OAuth2
+	//   grant or an authorized integration (use the reviewer's own access token or session). The jobs to review must be
+	//   named. One approval releases a job once its wait timer is due,
 	//   one rejection fails it. Nothing changes unless every named deployment can be reviewed.
 	// consumes:
 	// - application/json
@@ -202,6 +204,8 @@ func ReviewActionRunDeployments(ctx *context.APIContext) {
 	//     "$ref": "#/responses/notFound"
 	//   "422":
 	//     "$ref": "#/responses/validationError"
+	//   "423":
+	//     "$ref": "#/responses/repoArchivedError"
 
 	run := runOfRepo(ctx)
 	if run == nil {
@@ -212,8 +216,8 @@ func ReviewActionRunDeployments(ctx *context.APIContext) {
 		ctx.Error(http.StatusUnprocessableEntity, "state", "state must be approved or rejected")
 		return
 	}
-	if len(form.JobIDs) > maxReviewJobs {
-		ctx.Error(http.StatusUnprocessableEntity, "job_ids", "too many jobs")
+	if len(form.JobIDs) == 0 || len(form.JobIDs) > maxReviewJobs {
+		ctx.Error(http.StatusUnprocessableEntity, "job_ids", "name between 1 and 100 jobs")
 		return
 	}
 	ds, err := actions_service.ReviewDeployments(ctx, ctx.Doer(), run, slices.Compact(slices.Sorted(slices.Values(form.JobIDs))), form.State == "approved", form.Comment)

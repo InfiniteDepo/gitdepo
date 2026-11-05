@@ -6,6 +6,7 @@ package actions
 import (
 	"context"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"unicode"
@@ -57,6 +58,15 @@ func reviewComment(comment string, approve bool) (string, error) {
 // by the gate or the expiry task, and can no longer be approved.
 func ReviewCutoff() timeutil.TimeStamp {
 	return timeutil.TimeStampNow().Add(-int64(setting.Actions.DeploymentApprovalTimeout.Seconds()))
+}
+
+// notReviewersOwn tells that the request is not the reviewer's own act: it is made under sudo, or with a credential that
+// another party holds on the user's behalf (an OAuth2 grant, or an authorized integration that workflow code can use).
+// This is the rule of auth_service.IsHeldByUser, read from the request's actor, which every authentication fills.
+func notReviewersOwn(ctx context.Context) bool {
+	actor := audit_model.ActorFromContext(ctx)
+	return actor != nil && (actor.SudoByID != 0 ||
+		actor.Credential.Type == audit_model.CredentialOAuth2Grant || actor.Credential.Type == audit_model.CredentialAuthorizedIntegration)
 }
 
 // reviewEnvironment is an environment of the run with its reviewers and whether the doer is one of them.
@@ -123,8 +133,9 @@ func (c *ReviewChecker) doerMayAct(ctx context.Context) (bool, error) {
 	}
 	ok := false
 	doer, repo := c.doer, c.run.Repo
-	// a decision is its reviewer's own: under sudo nobody reviews, so can_review says what the review call will
-	if actor := audit_model.ActorFromContext(ctx); actor != nil && actor.SudoByID != 0 {
+	// a decision is its reviewer's own: under sudo, or with a credential another party holds for the reviewer, nobody
+	// reviews, so can_review says what the review call will
+	if notReviewersOwn(ctx) {
 		doer = nil
 	}
 	if doer != nil && doer.ID > 0 && !doer.IsActions() && !doer.IsAccessTokenBot() && !doer.IsOrganization() && doer.IsActive && !doer.ProhibitLogin {
@@ -191,10 +202,11 @@ func notWaiting(runID int64) error {
 // the doer may review when jobIDs is empty. One approval releases a job (when its wait timer is due too), one
 // rejection fails it. Nothing changes unless every deployment can be reviewed: a job that doesn't wait any more
 // (another reviewer, the expiry or a cancel came first, or it waited longer than the timeout) is ErrReviewNotWaiting,
-// a deployment the doer may not review is ErrReviewForbidden. A review made under sudo is refused: a decision about
-// a deployment is its reviewer's own, so there is no way for an administrator to give it in somebody's name.
+// a deployment the doer may not review is ErrReviewForbidden. A review made under sudo, or with an OAuth2 grant or an
+// authorized integration, is refused: a decision about a deployment is its reviewer's own, so neither an
+// administrator nor an application can give it in somebody's name.
 func ReviewDeployments(ctx context.Context, doer *user_model.User, run *actions_model.ActionRun, jobIDs []int64, approve bool, comment string) ([]*actions_model.ActionDeployment, error) {
-	if actor := audit_model.ActorFromContext(ctx); actor != nil && actor.SudoByID != 0 {
+	if notReviewersOwn(ctx) {
 		return nil, ErrReviewForbidden
 	}
 	comment, err := reviewComment(comment, approve)
@@ -291,10 +303,13 @@ func recordDeploymentReview(ctx context.Context, repo *repo_model.Repository, en
 	if env != nil {
 		ev.TargetName = env.Name
 	}
-	ev.Data = map[string]any{
+	if ev.Data == nil {
+		ev.Data = map[string]any{}
+	}
+	maps.Copy(ev.Data, map[string]any{
 		"environment_id": d.EnvironmentID, "ref": d.Ref, "run_id": d.RunID, "job_id": d.JobID, "attempt": d.Attempt,
 		"comment_length": commentLength,
-	}
+	})
 	return audit_model.Record(ctx, ev)
 }
 

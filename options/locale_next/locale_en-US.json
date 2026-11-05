@@ -2221,6 +2221,7 @@
 	"admin.audit.action.repo.actions_runs.cleaned": "Removed expired Actions runs",
 	"admin.audit.action.repo.actions_runs.deleted_old": "Deleted old Actions runs",
 	"admin.audit.action.repo.actions_deployment.approved": "Approved a deployment to environment %s",
+	"admin.audit.action.repo.actions_deployment.approval_revoked": "The approval of a deployment to environment %s was withdrawn: its approver may no longer review",
 	"admin.audit.action.repo.actions_deployment.expired": "A deployment to environment %s expired without a review",
 	"admin.audit.action.repo.actions_deployment.refused": "Refused a deployment to environment %s",
 	"admin.audit.action.repo.actions_deployment.rejected": "Rejected a deployment to environment %s",

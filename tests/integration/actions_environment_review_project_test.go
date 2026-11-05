@@ -61,12 +61,12 @@ func TestAPIActionDeploymentsInProject(t *testing.T) {
 		assert.Equal(t, "waiting_review", out[0].Status)
 
 		// a user without access to the private repository gets 404, and the deployment stays waiting
-		MakeRequest(t, NewRequestWithJSON(t, "POST", base+"/review", api.ReviewDeploymentsOption{State: "approved"}).AddTokenAuth(stranger), http.StatusNotFound)
+		MakeRequest(t, NewRequestWithJSON(t, "POST", base+"/review", api.ReviewDeploymentsOption{State: "approved", JobIDs: []int64{job.ID}}).AddTokenAuth(stranger), http.StatusNotFound)
 		assert.Equal(t, actions_model.DeploymentWaitingReview, unittest.AssertExistsAndLoadBean(t, &actions_model.ActionDeployment{ID: dep.ID}).Status)
 	}
 
 	base := fmt.Sprintf("/api/v1/repos/org3/%s/repo3/-/actions/runs/%d/deployments", group.Name, run.ID)
-	MakeRequest(t, NewRequestWithJSON(t, "POST", base+"/review", api.ReviewDeploymentsOption{State: "rejected"}).AddTokenAuth(owner), http.StatusUnprocessableEntity)
-	MakeRequest(t, NewRequestWithJSON(t, "POST", base+"/review", api.ReviewDeploymentsOption{State: "rejected", Comment: "no"}).AddTokenAuth(owner), http.StatusOK)
+	MakeRequest(t, NewRequestWithJSON(t, "POST", base+"/review", api.ReviewDeploymentsOption{State: "rejected", JobIDs: []int64{job.ID}}).AddTokenAuth(owner), http.StatusUnprocessableEntity)
+	MakeRequest(t, NewRequestWithJSON(t, "POST", base+"/review", api.ReviewDeploymentsOption{State: "rejected", Comment: "no", JobIDs: []int64{job.ID}}).AddTokenAuth(owner), http.StatusOK)
 	assert.Equal(t, actions_model.DeploymentRejected, unittest.AssertExistsAndLoadBean(t, &actions_model.ActionDeployment{ID: dep.ID}).Status)
 }

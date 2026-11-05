@@ -112,6 +112,14 @@ func TestActionsEnvironmentReviews(t *testing.T) {
 		basePath := fmt.Sprintf("/api/v1/repos/%s/%s/actions/runs", user2.Name, repo.Name)
 		review := func(token string, run *actions_model.ActionRun, opts api.ReviewDeploymentsOption, status int) []*api.ActionDeployment {
 			t.Helper()
+			if opts.JobIDs == nil { // the API needs the jobs named: by default every job of the run
+				jobs, err := actions_model.GetRunJobsByRunID(t.Context(), run.ID)
+				require.NoError(t, err)
+				opts.JobIDs = []int64{}
+				for _, j := range jobs {
+					opts.JobIDs = append(opts.JobIDs, j.ID)
+				}
+			}
 			resp := MakeRequest(t, NewRequestWithJSON(t, "POST", fmt.Sprintf("%s/%d/deployments/review", basePath, run.ID), opts).AddTokenAuth(token), status)
 			if status != http.StatusOK {
 				return nil
@@ -227,6 +235,7 @@ func TestActionsEnvironmentReviews(t *testing.T) {
 			for name, opts := range map[string]api.ReviewDeploymentsOption{
 				"no state":          {},
 				"another state":     {State: "maybe"},
+				"no jobs named":     {State: "approved", JobIDs: []int64{}},
 				"unknown job":       {State: "approved", JobIDs: []int64{job.ID + 100000}},
 				"too many jobs":     {State: "approved", JobIDs: make([]int64, 101)},
 				"comment too long":  {State: "approved", Comment: strings.Repeat("a", 2001)},
@@ -291,11 +300,41 @@ func TestActionsEnvironmentReviews(t *testing.T) {
 			since := auditNow()
 			review(adminToken, run, api.ReviewDeploymentsOption{State: "approved"}, http.StatusForbidden)
 			MakeRequest(t, NewRequestWithJSON(t, "POST", fmt.Sprintf("%s/%d/deployments/review?sudo=%s", basePath, run.ID, user4.Name),
-				api.ReviewDeploymentsOption{State: "approved"}).AddTokenAuth(adminToken), http.StatusForbidden)
+				api.ReviewDeploymentsOption{State: "approved", JobIDs: []int64{job.ID}}).AddTokenAuth(adminToken), http.StatusForbidden)
 			MakeRequest(t, NewRequestWithJSON(t, "POST", fmt.Sprintf("%s/%d/deployments/review", basePath, run.ID),
-				api.ReviewDeploymentsOption{State: "approved"}).AddTokenAuth(adminToken).SetHeader("Sudo", user4.Name), http.StatusForbidden)
+				api.ReviewDeploymentsOption{State: "approved", JobIDs: []int64{job.ID}}).AddTokenAuth(adminToken).SetHeader("Sudo", user4.Name), http.StatusForbidden)
 			assert.Equal(t, actions_model.DeploymentWaitingReview, deployment(job, 1).Status)
 			assert.Zero(t, auditCount(since, "repo.actions_deployment.approved"))
+			review(reviewerToken, run, api.ReviewDeploymentsOption{State: "approved"}, http.StatusOK)
+			runner.execTask(t, runner.fetchTask(t), &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
+		})
+
+		t.Run("a review with an OAuth2 grant is refused, the reviewer's own token and session are not", func(t *testing.T) {
+			newEnv("oauth-rv", []int64{user4.ID}, nil)
+			run, job := pushJob("", "rv-g", "    environment: oauth-rv\n", "echo")
+			grant := createOAuth2Token(t, loginUser(t, user4.Name), []auth_model.AccessTokenScope{auth_model.AccessTokenScopeWriteRepository})
+			since := auditNow()
+			review(grant, run, api.ReviewDeploymentsOption{State: "approved"}, http.StatusForbidden)
+			review(grant, run, api.ReviewDeploymentsOption{State: "rejected", Comment: "no"}, http.StatusForbidden)
+			assert.False(t, list(grant, run, http.StatusOK)[0].Reviewers.CanReview)
+			assert.True(t, list(reviewerToken, run, http.StatusOK)[0].Reviewers.CanReview)
+			assert.Equal(t, actions_model.DeploymentWaitingReview, deployment(job, 1).Status)
+			assert.Zero(t, auditCount(since, "repo.actions_deployment.approved")+auditCount(since, "repo.actions_deployment.rejected"))
+			review(reviewerToken, run, api.ReviewDeploymentsOption{State: "approved"}, http.StatusOK)
+			runner.execTask(t, runner.fetchTask(t), &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
+		})
+
+		t.Run("a review in an archived repository is refused", func(t *testing.T) {
+			newEnv("archived-rv", []int64{user4.ID}, nil)
+			run, job := pushJob("", "rv-g", "    environment: archived-rv\n", "echo")
+			setArchived := func(archived bool) {
+				_, err := db.GetEngine(t.Context()).Exec("UPDATE repository SET is_archived = ? WHERE id = ?", archived, repo.ID)
+				require.NoError(t, err)
+			}
+			setArchived(true)
+			review(reviewerToken, run, api.ReviewDeploymentsOption{State: "approved"}, http.StatusLocked)
+			setArchived(false)
+			assert.Equal(t, actions_model.DeploymentWaitingReview, deployment(job, 1).Status)
 			review(reviewerToken, run, api.ReviewDeploymentsOption{State: "approved"}, http.StatusOK)
 			runner.execTask(t, runner.fetchTask(t), &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
 		})

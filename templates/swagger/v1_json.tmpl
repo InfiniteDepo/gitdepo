@@ -11538,7 +11538,7 @@
     },
     "/repos/{owner}/{repo}/actions/runs/{run_id}/deployments/review": {
       "post": {
-        "description": "Only a reviewer listed by the environment, or a member of a listed team, who can read the repository's Actions may review; site administrators have no exception. One approval releases a job once its wait timer is due, one rejection fails it. Nothing changes unless every named deployment can be reviewed.\n",
+        "description": "Only a reviewer listed by the environment, or a member of a listed team, who can read the repository's Actions may review; site administrators have no exception, and neither does a request made under sudo or with an OAuth2 grant or an authorized integration (use the reviewer's own access token or session). The jobs to review must be named. One approval releases a job once its wait timer is due, one rejection fails it. Nothing changes unless every named deployment can be reviewed.\n",
         "consumes": [
           "application/json"
         ],
@@ -11593,6 +11593,9 @@
           },
           "422": {
             "$ref": "#/responses/validationError"
+          },
+          "423": {
+            "$ref": "#/responses/repoArchivedError"
           }
         }
       }
@@ -42209,6 +42212,9 @@
     "ReviewDeploymentsOption": {
       "description": "ReviewDeploymentsOption approves or rejects deployments of a workflow run that wait for a review",
       "type": "object",
+      "required": [
+        "job_ids"
+      ],
       "properties": {
         "comment": {
           "description": "plain text of at most 2000 bytes; a rejection needs one",
@@ -42216,7 +42222,7 @@
           "x-go-name": "Comment"
         },
         "job_ids": {
-          "description": "the jobs to review, at most 100; empty means every waiting job the user may review",
+          "description": "the jobs to review: at least 1 and at most 100",
           "type": "array",
           "items": {
             "type": "integer",
