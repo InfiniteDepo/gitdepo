@@ -187,3 +187,39 @@ func TestApprovalRulesWorkLargePullRequest(t *testing.T) {
 		timed(t, "merge", func() { e.merge(pull, http.StatusOK) })
 	})
 }
+
+// The regexp reads an invalid UTF-8 byte as U+FFFD, so a CODEOWNERS line starting with U+FFFD is charged in full
+// for paths starting with an invalid byte: the requests stay bounded and code owners can't be checked.
+func TestApprovalRulesWorkReplacementCharacter(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		name := "ar-work-fffd"
+		var co strings.Builder
+		var paths []string
+		for i := range 100 {
+			// the CODEOWNERS tokenizer drops backslashes: the line holds the character itself
+			fmt.Fprintf(&co, "�(?:.*?){200}x%d @user1\n", i)
+		}
+		for i := range 20 {
+			paths = append(paths, "\x80"+strings.Repeat("ab/", 1360)+fmt.Sprintf("f%d", i))
+		}
+		bwRepo(t, name)
+		repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{OwnerName: "org3", Name: name})
+		e := newDREnv(t, repo.ID)
+		e.branch(name)
+		e.change(name, "", create("CODEOWNERS", co.String()))
+		e.do("POST", "/branch_protections", &api.CreateBranchProtectionOption{RuleName: name, ApprovalRules: []*api.ApprovalRule{
+			{Name: "Owners", RequiredCount: 1, RequireCodeOwners: true},
+		}}, http.StatusCreated)
+		commitFiles(t, repo, name, name+"-head", paths)
+
+		var pull int64
+		timed(t, "open (review requests)", func() { pull = e.open(name, name+"-head", "invalid bytes") })
+		var rules []*api.PullApprovalRule
+		timed(t, "approvals", func() { rules = e.approvals(pull) })
+		require.Len(t, rules, 1)
+		assert.False(t, rules[0].Satisfied)
+		timed(t, "pull request page (anonymous)", func() {
+			MakeRequest(t, NewRequest(t, "GET", fmt.Sprintf("%s/pulls/%d", repo.Link(), pull)), http.StatusOK)
+		})
+	})
+}

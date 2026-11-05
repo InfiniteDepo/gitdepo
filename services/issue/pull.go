@@ -124,7 +124,7 @@ func PullRequestCodeOwnersReview(ctx context.Context, issue *issues_model.Issue,
 	uniqTeams := make(map[string]*org_model.Team)
 	for _, rule := range rules {
 		for _, f := range changedFiles {
-			if (rule.Rule.MatchString(f) && !rule.Negative) || (!rule.Rule.MatchString(f) && rule.Negative) {
+			if rule.Rule.MatchString(f) != rule.Negative {
 				for _, u := range rule.Users {
 					uniqUsers[u.ID] = u
 				}

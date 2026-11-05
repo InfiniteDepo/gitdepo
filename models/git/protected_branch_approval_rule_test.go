@@ -6,6 +6,7 @@ package git_test
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -299,8 +300,8 @@ func TestPathMatchBudgetTake(t *testing.T) {
 	}
 	budget = git_model.NewPathMatchBudget()
 	require.True(t, budget.Take(paths, lines))
-	for range 20 {
-		require.True(t, budget.Take(paths, lines), "each about 10 MiB of the 512 MiB")
+	for range 10 {
+		require.True(t, budget.Take(paths, lines), "each about 40 MiB of the 512 MiB")
 	}
 
 	// a prefix that ignores case is no literal prefix: the whole path is charged
@@ -312,4 +313,25 @@ func TestPathMatchBudgetTake(t *testing.T) {
 		n++
 	}
 	assert.Less(t, n, 1000)
+
+	// the regexp reads an invalid byte as U+FFFD: a prefix holding it is no literal prefix, the whole path is charged
+	replacement := git_model.NewPathPattern(regexp.MustCompile("^\uFFFD(?:.*?){200}x$"))
+	invalid := "\x80" + strings.Repeat("ab/", 1360)
+	assert.True(t, replacement.MatchString("\x80"+strings.Repeat("ab/", 10)+"x"), "the pattern matches the invalid byte")
+	budget = git_model.NewPathMatchBudget()
+	n = 0
+	for budget.Take([]string{invalid}, []git_model.PathPattern{replacement}) {
+		n++
+	}
+	assert.Less(t, n, 1000)
+
+	// every match costs a minimum, however soon it fails
+	cheap := git_model.NewPathPattern(regexp.MustCompile(`^a`))
+	many := slices.Repeat([]string{"b"}, 1<<20)
+	budget = git_model.NewPathMatchBudget()
+	n = 0
+	for budget.Take(many, []git_model.PathPattern{cheap}) {
+		n++
+	}
+	assert.Less(t, n, 20)
 }

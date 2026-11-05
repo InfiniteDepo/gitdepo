@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"forgejo.org/models/db"
 	"forgejo.org/models/organization"
@@ -158,6 +159,9 @@ const (
 	// and instruction). A pattern with a literal prefix (`docs/…`) is charged only that prefix for a path that doesn't
 	// start with it, so 1000 changed files against a CODEOWNERS file of 1000 such lines fit many times over.
 	MaxPathMatchWork = 512 << 20
+	// matchCallWork is charged for every match of a path against a pattern on top of the bytes it reads: a call costs
+	// about 100 ns however soon it fails.
+	matchCallWork = 32
 )
 
 // PathMatchBudget is the work left for matching paths in one evaluation of the approval rules of a pull request:
@@ -182,7 +186,9 @@ type PathPattern struct {
 // NewPathPattern returns re with its cost. Go's regular expressions run in time linear in the input and the number of
 // instructions of the program, so path bytes times instructions bounds the time of a match. A pattern anchored at
 // the start with a literal (`^docs/.*$`) fails on the first bytes of a path without that literal: only those are
-// charged then. A pattern that can't be parsed again costs more than any budget.
+// charged then. The regexp reads an invalid UTF-8 byte of a path as U+FFFD, so a prefix holding U+FFFD can't be
+// compared with the path's bytes: such a pattern is charged in full. A pattern that can't be parsed again costs more
+// than any budget.
 func NewPathPattern(re *regexp.Regexp) PathPattern {
 	p := PathPattern{Regexp: re, insts: MaxPathMatchWork + 1}
 	parsed, err := syntax.Parse(re.String(), syntax.Perl)
@@ -196,7 +202,7 @@ func NewPathPattern(re *regexp.Regexp) PathPattern {
 	}
 	p.insts = len(prog.Inst)
 	if parsed.Op == syntax.OpConcat && len(parsed.Sub) > 1 && parsed.Sub[0].Op == syntax.OpBeginText {
-		if lit := parsed.Sub[1]; lit.Op == syntax.OpLiteral && lit.Flags&syntax.FoldCase == 0 {
+		if lit := parsed.Sub[1]; lit.Op == syntax.OpLiteral && lit.Flags&syntax.FoldCase == 0 && !slices.Contains(lit.Rune, utf8.RuneError) {
 			p.prefix = string(lit.Rune)
 		}
 	}
@@ -206,9 +212,9 @@ func NewPathPattern(re *regexp.Regexp) PathPattern {
 // cost is the work of matching the path against the pattern.
 func (p PathPattern) cost(path string) int {
 	if p.prefix != "" && !strings.HasPrefix(path, p.prefix) {
-		return len(p.prefix) + 1
+		return matchCallWork + len(p.prefix) + 1
 	}
-	return len(path) * p.insts
+	return matchCallWork + len(path)*p.insts
 }
 
 // Take takes the work of matching the paths against the patterns from the budget, false (and nothing taken) if less
