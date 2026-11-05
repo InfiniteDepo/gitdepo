@@ -552,6 +552,49 @@ jobs:
 			}
 		})
 
+		t.Run("recovering tasks skips and stops one whose environment is gone", func(t *testing.T) {
+			keep := newEnv("rec-keep", nil)
+			gone := newEnv("rec-gone", nil)
+			_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, repo.ID, keep.ID, "REC", "kept")
+			require.NoError(t, err)
+			_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, repo.ID, gone.ID, "REC", "lost")
+			require.NoError(t, err)
+			keepJob := push("env-a", "environment: rec-keep")[0]
+			goneJob := push("env-a", "environment: rec-gone")[0]
+			tasks := map[int64]*actions_model.ActionTask{}
+			var runnerTasks []*runnerv1.Task
+			for range 2 {
+				rt := runner.fetchTask(t)
+				runnerTasks = append(runnerTasks, rt)
+				task, err := actions_model.GetTaskByID(t.Context(), rt.GetId())
+				require.NoError(t, err)
+				tasks[task.JobID] = task
+			}
+			require.Contains(t, tasks, keepJob.ID)
+			require.Contains(t, tasks, goneJob.ID)
+
+			// the environment goes away while both tasks run (the model delete leaves running tasks alone)
+			require.NoError(t, actions_model.DeleteEnvironment(ctx, gone, func(context.Context) error { return nil }))
+
+			recovered, err := actions_service.RecoverTasks(ctx, []*actions_model.ActionTask{tasks[goneJob.ID], tasks[keepJob.ID]})
+			require.NoError(t, err)
+			require.Len(t, recovered, 1, "the task whose environment is gone is not handed back")
+			assert.Equal(t, tasks[keepJob.ID].ID, recovered[0].GetId())
+			assert.Equal(t, "kept", recovered[0].GetSecrets()["REC"])
+			assert.NotEmpty(t, recovered[0].GetSecrets()["GITHUB_TOKEN"])
+
+			stopped, err := actions_model.GetTaskByID(t.Context(), tasks[goneJob.ID].ID)
+			require.NoError(t, err)
+			assert.Equal(t, actions_model.StatusFailure, stopped.Status)
+			assert.Equal(t, actions_model.StatusFailure, reload(goneJob).Status)
+			assert.Equal(t, actions_model.StatusRunning, reload(keepJob).Status)
+			for _, rt := range runnerTasks {
+				if rt.GetId() == tasks[keepJob.ID].ID {
+					runner.execTask(t, rt, &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
+				}
+			}
+		})
+
 		t.Run("deleting an environment fails the jobs that no runner took", func(t *testing.T) {
 			waiting := newEnv("del-timer", func(e *actions_model.ActionEnvironment) { e.WaitTimerMinutes = 10 })
 			released := newEnv("del-released", nil)
