@@ -433,6 +433,9 @@ func RenameBranchPost(ctx *context.Context) {
 		} else if git_model.IsErrBranchAlreadyExists(err) {
 			ctx.Flash.Error(ctx.Tr("repo.branch.branch_already_exists", form.To))
 			ctx.Redirect(fmt.Sprintf("%s/branches", ctx.Repo.RepoLink))
+		} else if git_model.IsErrBranchNameReserved(err) {
+			ctx.Flash.Error(ctx.Tr("repo.branch.name_reserved", form.To))
+			ctx.Redirect(fmt.Sprintf("%s/branches", ctx.Repo.RepoLink))
 		} else {
 			ctx.ServerError("RenameBranch", err)
 		}

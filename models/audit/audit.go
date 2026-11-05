@@ -232,8 +232,8 @@ var Fields = map[string][]string{
 	"actions_secret":   {"name", "value_changed", "environment_id"},
 	"actions_variable": {"name", "value_changed", "environment_id"},
 	// actions_environment: the rules of an environment (no secret); actions_deployment: why a job was refused
-	"actions_environment": {"name", "ref_policy", "ref_patterns", "wait_timer_minutes", "prevent_self_review", "runner_labels", "auto", "counts"},
-	"actions_deployment":  {"environment_id", "ref", "run_id", "job_id"},
+	"actions_environment": {"name", "ref_policy", "ref_patterns", "wait_timer_minutes", "prevent_self_review", "runner_labels", "allowed_workflows", "reviewers", "reviews_required", "reviewers_removed", "auto", "counts"},
+	"actions_deployment":  {"environment_id", "ref", "run_id", "job_id", "attempt", "comment_length", "revoked_reviewer_id"},
 	"actions_run":         {"index", "workflow", "counts"},
 	"actions_runs":        {"older_than_days", "run_ids"},
 	"actions_artifact":    {"name", "run_id"},

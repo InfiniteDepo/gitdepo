@@ -207,7 +207,7 @@ func (repo *Repository) IsBranchExist(name string) bool {
 		return false
 	}
 
-	return repo.IsReferenceExist(BranchPrefix + name)
+	return repo.IsExactRefExist(BranchPrefix + name)
 }
 
 // GetBranchNames returns branches from the repository, skipping "skip" initial branches and

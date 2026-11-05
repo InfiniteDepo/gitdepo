@@ -55,19 +55,22 @@ type ActionRunJob struct {
 	IsForkPullRequest bool
 	Name              string `xorm:"VARCHAR(255)"`
 	Attempt           int64
-	Handle            string `xorm:"unique"`
-	WorkflowPayload   []byte
-	JobID             JobIdentifier        `xorm:"VARCHAR(255)"`      // job id in workflow, not job's id
-	JobNamespace      JobNamespace         `xorm:"VARCHAR(255) NULL"` // NULL is treated as an empty namespace ("")
-	Needs             []LocalJobIdentifier `xorm:"JSON TEXT"`
-	RunsOn            []string             `xorm:"JSON TEXT"`
-	EnvironmentName   string               `xorm:"VARCHAR(255) NOT NULL DEFAULT ''"` // `environment:` of the job as written (maybe an expression), cut to the column; not empty: the job passes the environment gate
-	TaskID            int64                // the latest task of the job
-	Status            Status               `xorm:"index"`
-	Started           timeutil.TimeStamp
-	Stopped           timeutil.TimeStamp
-	Created           timeutil.TimeStamp `xorm:"created"`
-	Updated           timeutil.TimeStamp `xorm:"updated index"`
+	// AttemptTriggerUserID is the user who started this attempt by a rerun, 0 for the first attempt (the run's trigger
+	// user). A rerunner counts as the one who triggered the attempt, for the rule that nobody reviews their own deployment.
+	AttemptTriggerUserID int64  `xorm:"NOT NULL DEFAULT 0"`
+	Handle               string `xorm:"unique"`
+	WorkflowPayload      []byte
+	JobID                JobIdentifier        `xorm:"VARCHAR(255)"`      // job id in workflow, not job's id
+	JobNamespace         JobNamespace         `xorm:"VARCHAR(255) NULL"` // NULL is treated as an empty namespace ("")
+	Needs                []LocalJobIdentifier `xorm:"JSON TEXT"`
+	RunsOn               []string             `xorm:"JSON TEXT"`
+	EnvironmentName      string               `xorm:"VARCHAR(255) NOT NULL DEFAULT ''"` // `environment:` of the job as written (maybe an expression), cut to the column; not empty: the job passes the environment gate
+	TaskID               int64                // the latest task of the job
+	Status               Status               `xorm:"index"`
+	Started              timeutil.TimeStamp
+	Stopped              timeutil.TimeStamp
+	Created              timeutil.TimeStamp `xorm:"created"`
+	Updated              timeutil.TimeStamp `xorm:"updated index"`
 
 	workflowPayloadDecoded *jobparser.SingleWorkflow `xorm:"-"`
 }

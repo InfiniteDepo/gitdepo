@@ -255,6 +255,8 @@ func CreateBranch(ctx *context.APIContext) {
 			ctx.Error(http.StatusConflict, "", "The branch already exists.")
 		} else if git_model.IsErrBranchNameConflict(err) {
 			ctx.Error(http.StatusConflict, "", "The branch with the same name already exists.")
+		} else if git_model.IsErrBranchNameReserved(err) {
+			ctx.Error(http.StatusUnprocessableEntity, "", "The branch name is reserved.")
 		} else {
 			ctx.Error(http.StatusInternalServerError, "CreateNewBranchFromCommit", err)
 		}
@@ -447,6 +449,9 @@ func UpdateBranch(ctx *context.APIContext) {
 	msg, err := repo_service.RenameBranch(ctx, repo, ctx.Doer(), ctx.Repo().GitRepo, oldName, opt.Name)
 	if errors.Is(err, git_model.ErrBranchIsProtected) {
 		ctx.Error(http.StatusForbidden, "", "The branch or the new branch name is protected.")
+		return
+	} else if git_model.IsErrBranchNameReserved(err) {
+		ctx.Error(http.StatusUnprocessableEntity, "", "The branch name is reserved.")
 		return
 	} else if err != nil {
 		ctx.Error(http.StatusInternalServerError, "RenameBranch", err)

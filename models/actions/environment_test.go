@@ -39,24 +39,35 @@ func TestEnvironmentNormalize(t *testing.T) {
 	assert.NotNil(t, empty.RunnerLabels)
 
 	for name, change := range map[string]func(*ActionEnvironment){
-		"empty name":              func(e *ActionEnvironment) { e.Name = "  " },
-		"name too long":           func(e *ActionEnvironment) { e.Name = strings.Repeat("a", 256) },
-		"lowercase longer":        func(e *ActionEnvironment) { e.Name = strings.Repeat("Ⱥ", 127) },
-		"name with newline":       func(e *ActionEnvironment) { e.Name = "a\nb" },
-		"name with NUL":           func(e *ActionEnvironment) { e.Name = "a\x00b" },
-		"name not UTF-8":          func(e *ActionEnvironment) { e.Name = "a\xffb" },
-		"name with zero width":    func(e *ActionEnvironment) { e.Name = "prod\u200buction" },
-		"name with bidi override": func(e *ActionEnvironment) { e.Name = "prod\u202euction" },
-		"name with nbsp":          func(e *ActionEnvironment) { e.Name = "prod\u00a0uction" },
-		"name with private use":   func(e *ActionEnvironment) { e.Name = "prod\ue000uction" },
-		"name with Cyrillic o":    func(e *ActionEnvironment) { e.Name = "pr\u043ed" },
-		"name fullwidth":          func(e *ActionEnvironment) { e.Name = "\uff30\uff52\uff4f\uff44" },
-		"name with combining":     func(e *ActionEnvironment) { e.Name = "pro\u0301d" },
-		"name with dotted I":      func(e *ActionEnvironment) { e.Name = "PR\u0130D" },
-		"name with Kelvin sign":   func(e *ActionEnvironment) { e.Name = "\u212aprod" },
-		"name with tab":           func(e *ActionEnvironment) { e.Name = "pro\td" },
-		"name with unicode space": func(e *ActionEnvironment) { e.Name = "prod\u2003" },
-		"name with DEL":           func(e *ActionEnvironment) { e.Name = "pro\x7fd" },
+		"empty name":               func(e *ActionEnvironment) { e.Name = "  " },
+		"name too long":            func(e *ActionEnvironment) { e.Name = strings.Repeat("a", 256) },
+		"lowercase longer":         func(e *ActionEnvironment) { e.Name = strings.Repeat("Ⱥ", 127) },
+		"name with newline":        func(e *ActionEnvironment) { e.Name = "a\nb" },
+		"name with NUL":            func(e *ActionEnvironment) { e.Name = "a\x00b" },
+		"name not UTF-8":           func(e *ActionEnvironment) { e.Name = "a\xffb" },
+		"name with zero width":     func(e *ActionEnvironment) { e.Name = "prod\u200buction" },
+		"name with bidi override":  func(e *ActionEnvironment) { e.Name = "prod\u202euction" },
+		"name with nbsp":           func(e *ActionEnvironment) { e.Name = "prod\u00a0uction" },
+		"name with private use":    func(e *ActionEnvironment) { e.Name = "prod\ue000uction" },
+		"name with Cyrillic o":     func(e *ActionEnvironment) { e.Name = "pr\u043ed" },
+		"name fullwidth":           func(e *ActionEnvironment) { e.Name = "\uff30\uff52\uff4f\uff44" },
+		"name with combining":      func(e *ActionEnvironment) { e.Name = "pro\u0301d" },
+		"name with dotted I":       func(e *ActionEnvironment) { e.Name = "PR\u0130D" },
+		"name with Kelvin sign":    func(e *ActionEnvironment) { e.Name = "\u212aprod" },
+		"name with tab":            func(e *ActionEnvironment) { e.Name = "pro\td" },
+		"name with unicode space":  func(e *ActionEnvironment) { e.Name = "prod\u2003" },
+		"name with DEL":            func(e *ActionEnvironment) { e.Name = "pro\x7fd" },
+		"allowed workflow empty":   func(e *ActionEnvironment) { e.AllowedWorkflows = []string{""} },
+		"allowed workflow unicode": func(e *ActionEnvironment) { e.AllowedWorkflows = []string{"d\u0435ploy.yml"} },
+		"allowed workflow control": func(e *ActionEnvironment) { e.AllowedWorkflows = []string{"deploy\n.yml"} },
+		"allowed workflow broken":  func(e *ActionEnvironment) { e.AllowedWorkflows = []string{"deploy[.yml"} },
+		"allowed workflow long":    func(e *ActionEnvironment) { e.AllowedWorkflows = []string{strings.Repeat("a", 256)} },
+		"too many allowed workflows": func(e *ActionEnvironment) {
+			e.AllowedWorkflows = make([]string, MaxAllowedWorkflows+1)
+			for i := range e.AllowedWorkflows {
+				e.AllowedWorkflows[i] = fmt.Sprintf("w%d.yml", i)
+			}
+		},
 		"unknown policy":          func(e *ActionEnvironment) { e.RefPolicy = 3 },
 		"negative policy":         func(e *ActionEnvironment) { e.RefPolicy = -1 },
 		"patterns without policy": func(e *ActionEnvironment) { e.RefPolicy = EnvironmentRefAny },
@@ -432,4 +443,16 @@ func TestEnvironmentNamesAreASCII(t *testing.T) {
 	n, err := db.GetEngine(ctx).Where("repo_id = 1").Count(new(ActionEnvironment))
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, n)
+}
+
+func TestEnvironmentAllowsWorkflow(t *testing.T) {
+	e := &ActionEnvironment{}
+	assert.True(t, e.AllowsWorkflow("anything.yml"), "empty: any workflow")
+	e.AllowedWorkflows = []string{"deploy.yml", "deploy-*.yml", "ci/**"}
+	for workflow, want := range map[string]bool{
+		"deploy.yml": true, "deploy-prod.yml": true, "deploy-.yml": true, "deploy-a/b.yml": false,
+		"deploy.yaml": false, "xdeploy.yml": false, "Deploy.yml": false, "": false, "ci/a/b.yml": true,
+	} {
+		assert.Equal(t, want, e.AllowsWorkflow(workflow), workflow)
+	}
 }

@@ -20,7 +20,9 @@ import (
 	"xorm.io/builder"
 )
 
-func InitiateNextJobAttempt(ctx context.Context, job *actions_model.ActionRunJob, initialStatus actions_model.Status) error {
+// InitiateNextJobAttempt starts the next attempt of the job in initialStatus; triggerUserID is the user who started it
+// (0 for none: the run's trigger user is then the one who did).
+func InitiateNextJobAttempt(ctx context.Context, job *actions_model.ActionRunJob, initialStatus actions_model.Status, triggerUserID int64) error {
 	oldStatus := job.Status
 
 	if err := job.PrepareNextAttempt(initialStatus); err != nil {
@@ -29,7 +31,8 @@ func InitiateNextJobAttempt(ctx context.Context, job *actions_model.ActionRunJob
 
 	// The columns have to be specified here to work around a xorm quirk: It won't update columns that are set to their
 	// zero value without AllCols().
-	columns := []string{"handle", "attempt", "task_id", "status", "started", "stopped"}
+	job.AttemptTriggerUserID = triggerUserID
+	columns := []string{"handle", "attempt", "task_id", "status", "started", "stopped", "attempt_trigger_user_id"}
 	if hasEnvironment, err := jobHasEnvironment(job); err != nil {
 		return err
 	} else if hasEnvironment {

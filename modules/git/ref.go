@@ -37,6 +37,13 @@ func IsValidRefPattern(name string) bool {
 	return !refNamePatternInvalid.MatchString(name)
 }
 
+// IsReservedRefName tells if a short branch or tag name could be read as another ref: `HEAD`, or a name starting with
+// `refs/` (git resolves `refs/heads/x` to the branch `refs/heads/refs/heads/x` when `refs/heads/x` is missing). Such
+// names are never created, so that a name always means the one ref it says.
+func IsReservedRefName(name string) bool {
+	return name == "HEAD" || strings.HasPrefix(name, "refs/")
+}
+
 func SanitizeRefPattern(name string) string {
 	return refNamePatternInvalid.ReplaceAllString(name, "_")
 }

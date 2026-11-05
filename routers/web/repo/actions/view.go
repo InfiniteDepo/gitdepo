@@ -618,13 +618,13 @@ func Rerun(ctx *app_context.Context) {
 
 	var rerunJobs []*actions_model.ActionRunJob
 	if jobIndexStr == "" { // Rerun the entire workflow.
-		rerunJobs, err = actions_service.RerunAllJobs(ctx, run)
+		rerunJobs, err = actions_service.RerunAllJobs(ctx, ctx.Doer, run)
 	} else { // Rerun a single job
 		job, _ := getRunJobs(ctx, runIndex, jobIndex)
 		if ctx.Written() {
 			return
 		}
-		rerunJobs, err = actions_service.RerunJob(ctx, job)
+		rerunJobs, err = actions_service.RerunJob(ctx, ctx.Doer, job)
 	}
 
 	if err != nil {

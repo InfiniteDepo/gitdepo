@@ -89,12 +89,16 @@ func CancelAbandonedJobs(ctx context.Context) error {
 	return db.WithTx(ctx, func(ctx context.Context) error {
 		runsToUpdate := container.Set[int64]{}
 		now := timeutil.TimeStampNow()
+		abandonedBefore := timeutil.TimeStamp(time.Now().Add(-setting.Actions.AbandonedJobTimeout).Unix())
 		for _, job := range jobs {
 			if job.Status.IsBlocked() {
-				// a job that the gate of its environment holds (wait timer) isn't abandoned: the gate releases or fails it
+				// a job that the gate of its environment holds isn't abandoned
 				if d, err := actions_model.GetDeployment(ctx, job.ID, job.Attempt); err != nil {
 					return err
-				} else if d != nil && d.Status.IsWaiting() {
+				} else if d != nil && (d.Status == actions_model.DeploymentWaitingReview ||
+					(d.Status == actions_model.DeploymentWaitingTimer && heldSince(d) > abandonedBefore)) {
+					// a review has its own expiry; an approval or a timer is the gate's, and the job is abandoned only
+					// when the gate has not acted a whole timeout after the last decision or the end of the timer.
 					continue
 				}
 			}
@@ -125,4 +129,10 @@ func CancelAbandonedJobs(ctx context.Context) error {
 
 		return nil
 	})
+}
+
+// heldSince is when the gate last decided about a deployment that waits for its timer: the later of its last change
+// (an approval) and the end of its timer.
+func heldSince(d *actions_model.ActionDeployment) timeutil.TimeStamp {
+	return max(d.Updated, d.ReleaseAfterUnix)
 }

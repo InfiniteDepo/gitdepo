@@ -65,6 +65,34 @@ func parseTags(refs []string) []string {
 	return results
 }
 
+// IsExactRefExist returns true if the full reference (`refs/heads/x`) exists. Unlike a lookup by name (`cat-file`), it
+// never falls back to another ref that git would resolve the name to. The lookup by name tries the name as written
+// first, so its "missing" is already exact and costs a line on the shared batch process; only a hit can be a fallback,
+// and only that one is confirmed with `show-ref` (so a chain of lookups, such as the segments of a URL, starts at most one).
+func (repo *Repository) IsExactRefExist(ref string) bool {
+	if repo == nil || !strings.HasPrefix(ref, "refs/") || !repo.IsReferenceExist(ref) {
+		return false
+	}
+	_, ok, _ := repo.GetExactRefCommitID(ref)
+	return ok
+}
+
+// GetExactRefCommitID returns the object the full reference names, and false if that exact ref does not exist, in one
+// `show-ref --verify` call: there is no second lookup by name that could resolve to another ref.
+func (repo *Repository) GetExactRefCommitID(ref string) (string, bool, error) {
+	if repo == nil || !strings.HasPrefix(ref, "refs/") || !IsValidRefPattern(ref) {
+		return "", false, nil
+	}
+	stdout, _, err := NewCommand(repo.Ctx, "show-ref", "--verify", "--hash").AddDashesAndList(ref).RunStdString(&RunOpts{Dir: repo.Path})
+	if err != nil {
+		if IsErrorExitCode(err, 128) { // the ref is missing
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return strings.TrimSpace(stdout), true, nil
+}
+
 // ExpandRef expands any partial reference to its full form
 func (repo *Repository) ExpandRef(ref string) (string, error) {
 	if strings.HasPrefix(ref, "refs/") {

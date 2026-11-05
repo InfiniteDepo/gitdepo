@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	actions_model "forgejo.org/models/actions"
 	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
@@ -507,6 +508,11 @@ func DeleteTeam(ctx context.Context, t *organization.Team) error {
 		return err
 	}
 	if err := removeAllRepositories(ctx, t); err != nil {
+		return err
+	}
+
+	// an environment that loses its last reviewer this way keeps requiring reviews (its change of rules is recorded)
+	if err := actions_model.RemoveReviewers(ctx, actions_model.TeamReviewerCond(t.ID)); err != nil {
 		return err
 	}
 
