@@ -589,3 +589,34 @@ func TestDefaultReviewersForkAndAGit(t *testing.T) {
 		})
 	})
 }
+
+// Approval-rule patterns use linear-time matching: a path pattern within the limits against a long changed path and a
+// source branch pattern against a long head branch name, both ending in the pattern's last character, stay fast.
+func TestDefaultReviewersPatternLinearTime(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		e := newDREnv(t, 1)
+		e.collaborator("user4", "write")
+		long := strings.Repeat("a/", 200) + "x"
+
+		e.branch("dr-lin-path")
+		rule := &api.ApprovalRule{Name: "Path", RequiredCount: 1, Usernames: []string{"user4"}, PathPatterns: "*/*/*/*/*/*x"}
+		e.protect("dr-lin-path", rule)
+		index := e.pr("dr-lin-path", "head-lin-path", "lp", create(long, "y"))
+		start := time.Now()
+		assert.Empty(t, e.approvals(index), "the path has more than six segments")
+		assert.Less(t, time.Since(start), 5*time.Second)
+
+		e.collaborator("user10", "write")
+		e.branch("dr-lin-source")
+		e.protect("dr-lin-source", requestRule("Source", 0, "*/*/*/*/*/*x", "user4"), requestRule("Deep", 0, "**/*/*/*/*x", "user10"))
+		// the API caps branch names at 100 bytes, git doesn't
+		e.change("dr-lin-source", "head-lin-source", create("ls.txt", "ls"))
+		repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+		_, _, err := git.NewCommand(t.Context(), "update-ref").AddDynamicArguments(git.BranchPrefix+long, "head-lin-source").RunStdString(&git.RunOpts{Dir: repo.RepoPath()})
+		require.NoError(t, err)
+		start = time.Now()
+		index = e.open("dr-lin-source", long, "ls")
+		assert.Less(t, time.Since(start), 5*time.Second)
+		assert.Equal(t, []string{"user10"}, e.requested(index), "only the pattern with ** matches the branch")
+	})
+}

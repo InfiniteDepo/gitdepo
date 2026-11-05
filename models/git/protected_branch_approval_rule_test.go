@@ -15,7 +15,6 @@ import (
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/util"
 
-	"github.com/gobwas/glob"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -144,26 +143,22 @@ func TestValidateGlobPattern(t *testing.T) {
 	}
 }
 
-// Matching a glob with many wildcards takes polynomial time of a high degree in the length of the name; the limits
-// refuse such patterns, and what they allow stays fast.
-func TestGlobPatternComplexityBound(t *testing.T) {
-	name := strings.Repeat("a", 250) + "x"
+// Approval-rule patterns use linear-time matching: patterns within the limits stay fast against long path and
+// source branch names that end in the pattern's last character, and a stored pattern beyond the limits fails closed.
+func TestGlobPatternLinearTime(t *testing.T) {
+	for _, p := range []string{"*/*/*/*/*/*x", "**/*/*/*/*x", "*/*/*/*x"} {
+		require.NoError(t, git_model.ValidateGlobPattern(p, '.', '/'))
+		assert.True(t, (&git_model.ApprovalRule{PathPatterns: p}).AppliesTo([]string{strings.ReplaceAll(p, "*", "a")}))
+		assert.True(t, (&git_model.ApprovalRule{SourceBranchPattern: p}).MatchesSourceBranch(strings.ReplaceAll(p, "*", "a")))
+		name := strings.Repeat("a/", 600) + "x"
+		start := time.Now()
+		(&git_model.ApprovalRule{PathPatterns: p}).AppliesTo([]string{name})
+		(&git_model.ApprovalRule{SourceBranchPattern: p}).MatchesSourceBranch(name)
+		assert.Less(t, time.Since(start), 5*slowdown*time.Millisecond, "%q against %d bytes", p, len(name))
+	}
+
 	slow := strings.Repeat("*aa", 14) + "*c"
 	require.Error(t, git_model.ValidateGlobPattern(slow, '/'), "refused when saved")
-
-	g := glob.MustCompile(slow, '/')
-	start := time.Now()
-	g.Match(name)
-	t.Logf("without the limit, %d wildcards against %d characters take %v", 15, len(name), time.Since(start))
-
-	worst := strings.Repeat("*aa", 6)
-	require.NoError(t, git_model.ValidateGlobPattern(worst, '/'))
-	start = time.Now()
-	glob.MustCompile(worst, '/').Match(name)
-	assert.Less(t, time.Since(start), 100*time.Millisecond)
-
-	// a stored pattern beyond the limits fails closed
-	r := &git_model.ApprovalRule{PathPatterns: slow}
-	assert.True(t, r.AppliesTo([]string{"unrelated.txt"}))
-	assert.False(t, (&git_model.ApprovalRule{SourceBranchPattern: slow}).MatchesSourceBranch(name))
+	assert.True(t, (&git_model.ApprovalRule{PathPatterns: slow}).AppliesTo([]string{"unrelated.txt"}))
+	assert.False(t, (&git_model.ApprovalRule{SourceBranchPattern: slow}).MatchesSourceBranch(strings.Repeat("a", 250)+"c"))
 }

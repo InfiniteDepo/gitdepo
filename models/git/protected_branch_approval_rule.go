@@ -5,6 +5,7 @@ package git
 
 import (
 	"context"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode"
@@ -12,10 +13,9 @@ import (
 	"forgejo.org/models/db"
 	"forgejo.org/models/organization"
 	repo_model "forgejo.org/models/repo"
+	"forgejo.org/modules/glob"
 	"forgejo.org/modules/timeutil"
 	"forgejo.org/modules/util"
-
-	"github.com/gobwas/glob"
 )
 
 // MaxApprovalRules is the number of approval rules a protected branch rule can have.
@@ -134,7 +134,7 @@ func (r *ApprovalRule) IsApprover(ctx context.Context, userID int64) (bool, erro
 
 // AppliesTo returns true if the rule has no path patterns or one of the changed files matches.
 func (r *ApprovalRule) AppliesTo(changedFiles []string) bool {
-	var patterns []glob.Glob
+	var patterns []*regexp.Regexp
 	for expr := range strings.SplitSeq(strings.ToLower(r.PathPatterns), ";") {
 		if expr = strings.TrimSpace(expr); expr == "" {
 			continue
@@ -149,13 +149,10 @@ func (r *ApprovalRule) AppliesTo(changedFiles []string) bool {
 	if len(patterns) == 0 {
 		return true
 	}
-	return slices.ContainsFunc(changedFiles, func(f string) bool { return MatchesAnyGlob(patterns, f) })
-}
-
-// MatchesAnyGlob returns true if the lowercased path matches one of the patterns.
-func MatchesAnyGlob(patterns []glob.Glob, path string) bool {
-	lpath := strings.ToLower(strings.TrimSpace(path))
-	return slices.ContainsFunc(patterns, func(g glob.Glob) bool { return g.Match(lpath) })
+	return slices.ContainsFunc(changedFiles, func(f string) bool {
+		f = strings.ToLower(strings.TrimSpace(f))
+		return slices.ContainsFunc(patterns, func(g *regexp.Regexp) bool { return g.MatchString(f) })
+	})
 }
 
 // MatchesSourceBranch returns true if the rule has no source branch pattern or the branch matches it. It only decides
@@ -165,31 +162,27 @@ func (r *ApprovalRule) MatchesSourceBranch(branch string) bool {
 	if r.SourceBranchPattern == "" {
 		return true
 	}
-	if ValidateGlobPattern(r.SourceBranchPattern, '/') != nil {
-		return false
-	}
-	g, err := glob.Compile(r.SourceBranchPattern, '/')
-	return err == nil && g.Match(branch)
+	g, err := compileGlobPattern(r.SourceBranchPattern, '/')
+	return err == nil && g.MatchString(branch)
 }
 
-// Limits of a glob pattern of an approval rule. Matching a glob with many wildcards takes polynomial time of a high
-// degree in the length of the name, and the name of the source branch is chosen by the author of a pull request.
+// Limits of a glob pattern of an approval rule, an input check. Approval-rule patterns use linear-time matching
+// (modules/glob): the time grows linearly with the name.
 const (
 	maxGlobLength    = 255
 	maxGlobWildcards = 6 // `*` and `?` characters, `**` counts 2
 	maxGlobBraces    = 3 // `{a,b}` groups, which can't be nested
 )
 
-// ValidateGlobPattern checks that expr compiles with the separators and stays within the limits that bound pattern
-// complexity: its length, its wildcards and its `{...}` alternations. It refuses control and bidirectional
-// control characters.
+// ValidateGlobPattern checks that expr compiles with the separators and stays within the limits: its length, its
+// wildcards and its `{...}` alternations. It refuses control and bidirectional control characters.
 func ValidateGlobPattern(expr string, separators ...rune) error {
 	_, err := compileGlobPattern(expr, separators...)
 	return err
 }
 
 // compileGlobPattern checks the limits of ValidateGlobPattern once and compiles the pattern.
-func compileGlobPattern(expr string, separators ...rune) (glob.Glob, error) {
+func compileGlobPattern(expr string, separators ...rune) (*regexp.Regexp, error) {
 	if len(expr) > maxGlobLength {
 		return nil, util.NewInvalidArgumentErrorf("pattern is longer than %d bytes", maxGlobLength)
 	}
