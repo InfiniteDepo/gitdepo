@@ -414,8 +414,8 @@ func TestRevokeApprovalLostRace(t *testing.T) {
 	grantActionsRead(t, 4)
 	_, err := f.review(t, 4, true, "")
 	require.NoError(t, err)
-	require.NoError(t, SetEnvironmentReviewers(f.ctx, f.env, []int64{2}, nil)) // the approver is no reviewer any more
-	stale := f.deployment(t)                                                   // read before the race
+	require.NoError(t, setReviewers(f.ctx, f.env, []int64{2}, nil)) // the approver is no reviewer any more
+	stale := f.deployment(t)                                        // read before the race
 	_, err = db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET reviewed_by = 2 WHERE id = ?", stale.ID)
 	require.NoError(t, err) // somebody else approved meanwhile
 	env, err := actions_model.GetRepoEnvironmentByID(f.ctx, 63, f.env.ID)
