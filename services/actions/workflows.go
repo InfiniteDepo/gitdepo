@@ -8,6 +8,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 
 	actions_model "forgejo.org/models/actions"
 	"forgejo.org/models/perm"
@@ -231,15 +233,16 @@ func (entry *Workflow) Dispatch(ctx context.Context, inputGetter InputValueGette
 		}
 	}
 
-	jobs, err := actions.JobParser(content,
+	reusableWorkflows := actions.ReusableWorkflows{}
+	jobs, err := reusableWorkflows.JobParser(content,
 		jobparser.WithVars(vars),
 		jobparser.WithInputs(inputsAny),
 		// We don't have any job outputs yet, but `WithJobOutputs(...)` triggers JobParser to supporting its
 		// `IncompleteMatrix` tagging for any jobs that require the inputs of other jobs.
 		jobparser.WithJobOutputs(map[string]map[string]string{}),
 		jobparser.SupportIncompleteRunsOn(),
-		jobparser.ExpandLocalReusableWorkflows(expandLocalReusableWorkflows(entry.Commit)),
-		jobparser.ExpandInstanceReusableWorkflows(expandInstanceReusableWorkflows(ctx)),
+		reusableWorkflows.ExpandLocal(expandLocalReusableWorkflows(entry.Commit)),
+		reusableWorkflows.ExpandInstance(expandInstanceReusableWorkflows(ctx)),
 		jobparser.WithGitContext(generateGiteaContextForRun(run)),
 		jobparser.EnableNamespaces(),
 	)
@@ -258,13 +261,62 @@ func (entry *Workflow) Dispatch(ctx context.Context, inputGetter InputValueGette
 	return run, jobNames, consistencyCheckRun(ctx, run)
 }
 
+// commitIDPattern is a commit ID, full or abbreviated: letters and digits only, so no revision syntax.
+var commitIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{4,64}$`)
+
+// exactRefCommitID returns the object a full ref names, or "" when that exact ref does not exist. Unlike a lookup by
+// name (`cat-file`), `show-ref --verify` never falls back to another ref, such as the branch `refs/tags/v1` for `refs/tags/v1`.
+func exactRefCommitID(gitRepo *git.Repository, ref string) (string, error) {
+	if !strings.HasPrefix(ref, "refs/") || !git.IsValidRefPattern(ref) {
+		return "", nil
+	}
+	stdout, _, err := git.NewCommand(gitRepo.Ctx, "show-ref", "--verify", "--hash").AddDynamicArguments(ref).RunStdString(&git.RunOpts{Dir: gitRepo.Path})
+	if err != nil {
+		// show-ref --verify exits with 128 when the ref is missing; that is not an error here
+		if git.IsErrorExitCode(err, 128) {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(stdout), nil
+}
+
+// resolveDispatchRef resolves the name to one existing ref exactly and returns the full ref with the commit it points to.
+// A short name tries a tag, then a branch; a name that is neither must be a commit ID (letters and digits only, so no
+// revision syntax such as `main~1` or `x@{1}`). The ref is kept in the run, where rules of an environment read it as a
+// name: it must be what it says, and the commit is loaded by the ID found here, never by the name again.
+func resolveDispatchRef(gitRepo *git.Repository, name string) (ref, commitID string, err error) {
+	candidates := []string{name}
+	if strings.HasPrefix(name, "tags/") || strings.HasPrefix(name, "heads/") {
+		candidates = []string{"refs/" + name}
+	} else if !strings.HasPrefix(name, "refs/") {
+		candidates = []string{git.TagPrefix + name, git.BranchPrefix + name}
+	}
+	for _, candidate := range candidates {
+		id, err := exactRefCommitID(gitRepo, candidate)
+		if err != nil {
+			return "", "", err
+		}
+		if id != "" {
+			return candidate, id, nil
+		}
+	}
+	if strings.HasPrefix(name, "refs/") || strings.HasPrefix(name, "tags/") || strings.HasPrefix(name, "heads/") {
+		return "", "", util.NewInvalidArgumentErrorf("reference '%s' does not exist", name)
+	}
+	if !commitIDPattern.MatchString(name) || !gitRepo.IsCommitExist(name) {
+		return "", "", util.NewInvalidArgumentErrorf("could not expand reference '%s'", name)
+	}
+	return name, name, nil
+}
+
 func GetWorkflowFromCommit(gitRepo *git.Repository, ref, workflowID string) (*Workflow, error) {
-	ref, err := gitRepo.ExpandRef(ref)
+	ref, commitID, err := resolveDispatchRef(gitRepo, ref)
 	if err != nil {
 		return nil, err
 	}
 
-	commit, err := gitRepo.GetCommit(ref)
+	commit, err := gitRepo.GetCommit(commitID)
 	if err != nil {
 		if errors.Is(err, util.ErrNotExist) {
 			return nil, util.NewInvalidArgumentErrorf("reference '%s' does not exist", ref)

@@ -10,6 +10,7 @@ import (
 
 	actions_model "forgejo.org/models/actions"
 	"forgejo.org/models/db"
+	actions_module "forgejo.org/modules/actions"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/util"
 	notify_service "forgejo.org/services/notify"
@@ -28,7 +29,20 @@ func InitiateNextJobAttempt(ctx context.Context, job *actions_model.ActionRunJob
 
 	// The columns have to be specified here to work around a xorm quirk: It won't update columns that are set to their
 	// zero value without AllCols().
-	if _, err := actions_model.UpdateRunJobWithoutNotification(ctx, job, builder.Eq{"status": oldStatus}, "handle", "attempt", "task_id", "status", "started", "stopped"); err != nil {
+	columns := []string{"handle", "attempt", "task_id", "status", "started", "stopped"}
+	if hasEnvironment, err := jobHasEnvironment(job); err != nil {
+		return err
+	} else if hasEnvironment {
+		// the runner labels of the environment that the last attempt added go: the gate adds those it has now
+		sw, err := job.DecodeWorkflowPayload()
+		if err != nil {
+			return err
+		}
+		_, payloadJob := sw.Job()
+		job.RunsOn = payloadJob.RunsOn()
+		columns = append(columns, "runs_on")
+	}
+	if _, err := actions_model.UpdateRunJobWithoutNotification(ctx, job, builder.Eq{"status": oldStatus}, columns...); err != nil {
 		return err
 	}
 
@@ -157,15 +171,28 @@ func convertSingleWorkflowToJobs(run *actions_model.ActionRun, jobs []*jobparser
 		needs := []string{}
 		name := run.Title
 		runsOn := []string{}
+		environmentName := ""
 
 		if job != nil {
 			needs = job.Needs()
+			// SetJob rewrites the job and drops its environment: put it back
+			environment, err := actions_module.GetJobEnvironment(v)
+			if err != nil {
+				return nil, err
+			}
 			if err := v.SetJob(id, job.EraseNeeds()); err != nil {
 				return nil, err
 			}
+			if environment != nil {
+				if err := actions_module.SetJobEnvironment(v, environment); err != nil {
+					return nil, err
+				}
+				environmentName, _ = util.SplitStringAtByteN(environment.Name, 255)
+			}
 			payload, _ = v.Marshal()
 
-			if len(needs) > 0 || run.NeedApproval || v.IncompleteMatrix || v.IncompleteRunsOn || v.IncompleteWith {
+			// a job with an environment is blocked until the environment gate (gateEnvironment) releases it
+			if len(needs) > 0 || run.NeedApproval || v.IncompleteMatrix || v.IncompleteRunsOn || v.IncompleteWith || environment != nil {
 				status = actions_model.StatusBlocked
 			} else if ifPassed, err := job.EvaluateIf(); err == nil && !ifPassed {
 				log.Trace("job %q skipped by server-side 'if' evaluation", id)
@@ -194,6 +221,7 @@ func convertSingleWorkflowToJobs(run *actions_model.ActionRun, jobs []*jobparser
 			JobNamespace:      actions_model.JobNamespace(v.Metadata.Namespace),
 			Needs:             util.ConvertSlice[string, actions_model.LocalJobIdentifier](needs),
 			RunsOn:            runsOn,
+			EnvironmentName:   environmentName,
 			Status:            status,
 			Attempt:           1,
 			Handle:            gouuid.New().String(),

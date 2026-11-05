@@ -7,7 +7,9 @@ import (
 	"testing"
 
 	actions_model "forgejo.org/models/actions"
+	"forgejo.org/models/db"
 	"forgejo.org/models/unittest"
+	"forgejo.org/modules/timeutil"
 	notify_service "forgejo.org/services/notify"
 
 	"github.com/stretchr/testify/assert"
@@ -72,4 +74,34 @@ func TestCancelAbandonedJobs(t *testing.T) {
 		}),
 		actions_model.StatusUnknown,
 	)
+}
+
+// A job that the wait timer of its environment holds is not abandoned, however long ago it was created.
+func TestCancelAbandonedJobsKeepsHeldJob(t *testing.T) {
+	defer unittest.OverrideFixtures("services/actions/TestCancelAbandonedJobs")()
+	require.NoError(t, unittest.PrepareTestDatabase())
+
+	notifier := notify_service.NewMockNotifier(t)
+	notifier.On("Run").Return().Maybe()
+	notifier.On("WorkflowJobCompleted", mock.Anything, mock.Anything, mock.Anything).Return()
+	notifier.On("WorkflowRunStatusChanged", mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+	notify_service.RegisterNotifier(notifier)
+	defer notify_service.UnregisterNotifier(notifier)
+
+	// job 601 is blocked and long past ABANDONED_JOB_TIMEOUT; its deployment waits for the timer
+	held := unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRunJob{ID: 601})
+	require.NoError(t, db.Insert(t.Context(), &actions_model.ActionDeployment{
+		RepoID: held.RepoID, RunID: held.RunID, JobID: held.ID, Attempt: held.Attempt,
+		Status: actions_model.DeploymentWaitingTimer, ReleaseAfterUnix: timeutil.TimeStampNow() + 3600,
+	}))
+
+	require.NoError(t, CancelAbandonedJobs(t.Context()))
+	assert.Equal(t, actions_model.StatusBlocked, unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRunJob{ID: 601}).Status)
+	assert.Equal(t, actions_model.StatusCancelled, unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRunJob{ID: 600}).Status, "others still are")
+
+	// once the deployment no longer waits (here: a refusal), the job is abandoned as before
+	_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET status = ? WHERE job_id = 601", actions_model.DeploymentRefused)
+	require.NoError(t, err)
+	require.NoError(t, CancelAbandonedJobs(t.Context()))
+	assert.Equal(t, actions_model.StatusCancelled, unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRunJob{ID: 601}).Status)
 }

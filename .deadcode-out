@@ -12,6 +12,15 @@ forgejo.org/cmd/forgejo
 forgejo.org/models
 	IsErrMergeDivergingFastForwardOnly
 
+forgejo.org/models/actions
+	FindUnpickedEnvironmentJobs
+	CreateEnvironment
+	FindRepoEnvironments
+	UpdateEnvironment
+	DeleteEnvironment
+	InsertEnvironmentVariable
+	DeleteEnvironmentVariable
+
 forgejo.org/models/auth
 	WebAuthnCredentials
 
@@ -49,6 +58,10 @@ forgejo.org/models/perm/access
 
 forgejo.org/models/repo
 	ReplaceRepoDependencies
+
+forgejo.org/models/secret
+	InsertEncryptedEnvironmentSecret
+	GetEnvironmentSecretByID
 
 forgejo.org/models/secretscan
 	DeleteScans
@@ -281,6 +294,9 @@ forgejo.org/routers/api/v1/permissions/testhelpers
 
 forgejo.org/routers/web/org
 	MustEnableProjects
+
+forgejo.org/services/actions
+	DeleteEnvironment
 
 forgejo.org/services/auth
 	RegisterInternalIssuerForTesting
