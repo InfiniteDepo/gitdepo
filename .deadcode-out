@@ -50,9 +50,6 @@ forgejo.org/models/perm/access
 forgejo.org/models/repo
 	ReplaceRepoDependencies
 
-forgejo.org/models/secret
-	GetEnvironmentSecretByID
-
 forgejo.org/models/secretscan
 	DeleteScans
 	FindCustomPatterns
