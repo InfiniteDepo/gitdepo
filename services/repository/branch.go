@@ -370,6 +370,10 @@ func RenameBranch(ctx context.Context, repo *repo_model.Repository, doer *user_m
 		return "target_exist", nil
 	}
 
+	if git.IsReservedRefName(to) {
+		return "", git_model.ErrBranchNameReserved{BranchName: to}
+	}
+
 	// the merge queue's builds are its own
 	if gitRepo.IsBranchExist(to) || pull_model.IsMergeQueueBranch(to) {
 		return "target_exist", nil

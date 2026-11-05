@@ -4,8 +4,10 @@
 package git
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,4 +69,34 @@ func TestIsReservedRefName(t *testing.T) {
 	for name, want := range map[string]bool{"HEAD": true, "refs/heads/x": true, "refs/x": true, "main": false, "heads/x": false, "HEAD2": false, "x/refs/y": false} {
 		assert.Equal(t, want, IsReservedRefName(name), name)
 	}
+}
+
+// A lookup chain (the segments of a URL path) starts no git process for a name that is missing, and one for the hit.
+func TestExactRefLookupProcesses(t *testing.T) {
+	repo, err := OpenRepository(t.Context(), filepath.Join(testReposDir, "repo1_bare"))
+	require.NoError(t, err)
+	defer repo.Close()
+	assert.True(t, repo.IsBranchExist("master")) // starts the shared batch process
+
+	trace := filepath.Join(t.TempDir(), "trace")
+	t.Setenv("GIT_TRACE", trace)
+	for range 50 {
+		assert.False(t, repo.IsBranchExist("a/a/a/a"))
+		assert.False(t, repo.IsTagExist("a/a/a/a"))
+	}
+	data, _ := os.ReadFile(trace)
+	assert.NotContains(t, string(data), "show-ref", "missing names are answered by the batch process")
+
+	assert.True(t, repo.IsBranchExist("master"))
+	data, err = os.ReadFile(trace)
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(string(data), "git show-ref"), "the hit is confirmed once")
+
+	id, ok, err := repo.GetExactRefCommitID("refs/heads/master")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Len(t, id, 40)
+	_, ok, err = repo.GetExactRefCommitID("refs/heads/nope")
+	require.NoError(t, err)
+	assert.False(t, ok)
 }

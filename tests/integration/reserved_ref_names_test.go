@@ -53,3 +53,19 @@ func TestReservedRefNames(t *testing.T) {
 		require.NoError(t, hook(git.RefNameFromTag("fine"), empty))
 	})
 }
+
+// A branch can't be renamed to a reserved name either.
+func TestReservedRefNameRename(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+		repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+		token := getUserToken(t, user2.Name, auth_model.AccessTokenScopeWriteRepository)
+		base := fmt.Sprintf("/api/v1/repos/%s/%s", user2.Name, repo.Name)
+		MakeRequest(t, NewRequestWithJSON(t, "POST", base+"/branches", &api.CreateBranchRepoOption{BranchName: "to-rename", OldBranchName: "master"}).AddTokenAuth(token), http.StatusCreated)
+		for _, name := range []string{"HEAD", "refs/tags/v99"} {
+			MakeRequest(t, NewRequestWithJSON(t, "PATCH", base+"/branches/to-rename", &api.UpdateBranchRepoOption{Name: name}).AddTokenAuth(token), http.StatusUnprocessableEntity)
+		}
+		MakeRequest(t, NewRequest(t, "GET", base+"/branches/to-rename").AddTokenAuth(token), http.StatusOK)
+		MakeRequest(t, NewRequestWithJSON(t, "PATCH", base+"/branches/to-rename", &api.UpdateBranchRepoOption{Name: "renamed-ok"}).AddTokenAuth(token), http.StatusNoContent)
+	})
+}

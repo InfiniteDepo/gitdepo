@@ -276,14 +276,13 @@ func resolveDispatchRef(gitRepo *git.Repository, name string) (ref, commitID str
 		candidates = []string{git.TagPrefix + name, git.BranchPrefix + name}
 	}
 	for _, candidate := range candidates {
-		if !gitRepo.IsExactRefExist(candidate) {
-			continue
-		}
-		id, err := gitRepo.GetRefCommitID(candidate)
+		// one exact call: the commit is the one of this ref, never of another that git would resolve the name to
+		id, ok, err := gitRepo.GetExactRefCommitID(candidate)
 		if err != nil {
 			return "", "", err
+		} else if ok {
+			return candidate, id, nil
 		}
-		return candidate, id, nil
 	}
 	if strings.HasPrefix(name, "refs/") || strings.HasPrefix(name, "tags/") || strings.HasPrefix(name, "heads/") {
 		return "", "", util.NewInvalidArgumentErrorf("reference '%s' does not exist", name)

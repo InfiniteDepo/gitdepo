@@ -23,6 +23,7 @@
 	"settings.authorized_oauth2_applications_description": "You have granted access to your personal gitdepo account to these third party applications. Please revoke access for applications that are no longer in use.",
 	"settings.manage_account_links_desc": "These external accounts are linked to your gitdepo account.",
 	"settings.remove_account_link_desc": "Removing a linked account will revoke its access to your gitdepo account. Continue?",
+	"repo.branch.name_reserved": "The branch name %s is reserved: it could be read as another reference.",
 	"repo.mirror_use_ssh.helper": "gitdepo will mirror the repository via Git over SSH and create a keypair for you when you select this option. You must ensure that the generated public key is authorized to push to the destination repository. You cannot use password-based authorization when selecting this.",
 	"repo.pulls.cmd_instruction_merge_desc": "Merge the changes and update on gitdepo.",
 	"repo.settings.org_deploy_keys": "Organization keys",

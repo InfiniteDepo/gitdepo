@@ -223,7 +223,12 @@ func CreateBranch(ctx *context.Context) {
 			ctx.Redirect(ctx.Repo.RepoLink + "/src/" + ctx.Repo.BranchNameSubURL())
 			return
 		}
-		if git_model.IsErrBranchNameReserved(err) || models.IsErrInvalidTagName(err) {
+		if git_model.IsErrBranchNameReserved(err) {
+			ctx.Flash.Error(ctx.Tr("repo.branch.name_reserved", form.NewBranchName))
+			ctx.Redirect(ctx.Repo.RepoLink + "/src/" + ctx.Repo.BranchNameSubURL())
+			return
+		}
+		if models.IsErrInvalidTagName(err) {
 			ctx.Flash.Error(ctx.Tr("repo.release.tag_name_invalid"))
 			ctx.Redirect(ctx.Repo.RepoLink + "/src/" + ctx.Repo.BranchNameSubURL())
 			return

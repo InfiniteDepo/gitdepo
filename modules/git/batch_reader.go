@@ -47,6 +47,7 @@ func batchStdin() (io.Reader, io.WriteCloser, func(error)) {
 	if r, w, err := os.Pipe(); err == nil {
 		return r, w, func(error) { _ = r.Close() }
 	}
+	log.Error("os.Pipe for a cat-file process failed, using a pipe that can hang when git dies") // out of descriptors
 	r, w := io.Pipe()
 	return r, w, func(err error) { _ = r.CloseWithError(err) }
 }

@@ -450,6 +450,9 @@ func UpdateBranch(ctx *context.APIContext) {
 	if errors.Is(err, git_model.ErrBranchIsProtected) {
 		ctx.Error(http.StatusForbidden, "", "The branch or the new branch name is protected.")
 		return
+	} else if git_model.IsErrBranchNameReserved(err) {
+		ctx.Error(http.StatusUnprocessableEntity, "", "The branch name is reserved.")
+		return
 	} else if err != nil {
 		ctx.Error(http.StatusInternalServerError, "RenameBranch", err)
 		return
