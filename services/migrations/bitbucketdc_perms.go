@@ -634,10 +634,10 @@ func applyBitbucketPermissions(ctx context.Context, doer *user_model.User, org *
 		case "key":
 			readOnly := item.mode == perm.AccessModeRead
 			if owner.Kind == "project" {
-				_, err = asymkey_model.AddOrgDeployKey(ctx, org.ID, owner.group.ID, item.Name, item.content, readOnly, false, nil, item.expires)
+				_, err = asymkey_model.AddOrgDeployKey(asymkey_model.WithKeyCreator(ctx, doer.ID), org.ID, owner.group.ID, item.Name, item.content, readOnly, false, nil, item.expires)
 			} else {
 				var key *asymkey_model.DeployKey
-				if key, err = asymkey_model.AddDeployKey(ctx, owner.repo.ID, item.Name, item.content, readOnly, item.expires); err == nil {
+				if key, err = asymkey_model.AddDeployKey(asymkey_model.WithKeyCreator(ctx, doer.ID), owner.repo.ID, item.Name, item.content, readOnly, item.expires); err == nil {
 					item.keyID = key.KeyID
 				}
 			}

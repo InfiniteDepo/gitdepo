@@ -11,6 +11,7 @@ import (
 	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
+	git_model "forgejo.org/models/git"
 	repo_model "forgejo.org/models/repo"
 	secret_model "forgejo.org/models/secret"
 	secretscan_model "forgejo.org/models/secretscan"
@@ -92,6 +93,19 @@ func TestDeleteRepository(t *testing.T) {
 		unittest.AssertExistsIf(t, false, &repo_model.DependencyScan{RepoID: repo.ID})
 		unittest.AssertExistsIf(t, true, &repo_model.Dependency{RepoID: other.ID})
 		unittest.AssertExistsIf(t, true, &repo_model.DependencyScan{RepoID: other.ID})
+	})
+
+	t.Run("Branch pushers", func(t *testing.T) {
+		repo := forgery.CreateRepository(t, user2, nil)
+		other := forgery.CreateRepository(t, user2, nil)
+		for _, r := range []*repo_model.Repository{repo, other} {
+			require.NoError(t, git_model.AddBranchPusher(t.Context(), r.ID, "main", 4))
+		}
+
+		require.NoError(t, repo_service.DeleteRepository(t.Context(), user2, repo, false))
+
+		unittest.AssertExistsIf(t, false, &git_model.BranchPusher{RepoID: repo.ID})
+		unittest.AssertExistsIf(t, true, &git_model.BranchPusher{RepoID: other.ID})
 	})
 
 	t.Run("Secret scanning", func(t *testing.T) {

@@ -146,11 +146,13 @@
 				</div>
 			{{else if or .Issue.PullRequest.CanAutoMerge .Issue.PullRequest.IsEmpty}}
 				{{template "repo/issue/view_content/approval_rules" .}}
+				{{if not .IsBlockedByApprovals}}{{template "repo/issue/view_content/pusher_notes" .}}{{end}}
 				{{if .IsBlockedByApprovals}}
 					<div class="item">
 						{{svg "octicon-x"}}
 						{{ctx.Locale.Tr "repo.pulls.blocked_by_approvals" .GrantedApprovals .ProtectedBranch.RequiredApprovals}}
 					</div>
+					{{template "repo/issue/view_content/pusher_notes" .}}
 				{{else if .IsBlockedByRejection}}
 					<div class="item">
 						{{svg "octicon-x"}}

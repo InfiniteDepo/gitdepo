@@ -3,6 +3,9 @@
 
 // showModal will show the given modal and run `onApprove` if the approve/ok/yes
 // button is pressed.
+// The approve handler of each modal, so that showing it again (after Esc or a click outside) replaces it.
+const approveHandlers = new WeakMap<HTMLDialogElement, () => void>();
+
 export function showModal(modalID: string | HTMLDialogElement, onApprove: () => void) {
   let modal: HTMLDialogElement;
   if (typeof modalID === 'string') {
@@ -20,7 +23,11 @@ export function showModal(modalID: string | HTMLDialogElement, onApprove: () => 
     modal.close();
     modal.querySelector('.ok')?.removeEventListener('click', onApprove);
   }, {once: true, passive: true});
-  modal.querySelector('.ok')?.addEventListener('click', onApprove, {passive: true});
+  const ok = modal.querySelector('.ok');
+  const previous = approveHandlers.get(modal);
+  if (previous) ok?.removeEventListener('click', previous);
+  approveHandlers.set(modal, onApprove);
+  ok?.addEventListener('click', onApprove, {passive: true});
 
   // The modal is ready to be shown.
   modal.showModal();

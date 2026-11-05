@@ -204,7 +204,7 @@ var Fields = map[string][]string{
 		"whitelist_deploy_keys", "whitelist_deploy_key_ids", "merge_whitelist_user_ids", "merge_whitelist_team_ids",
 		"enable_status_check", "status_check_contexts", "enable_approvals_whitelist", "approvals_whitelist_user_ids",
 		"approvals_whitelist_team_ids", "required_approvals", "block_on_rejected_reviews", "block_on_official_review_requests",
-		"block_on_outdated_branch", "dismiss_stale_approvals", "ignore_stale_approvals", "require_signed_commits",
+		"block_on_outdated_branch", "dismiss_stale_approvals", "ignore_stale_approvals", "ignore_pusher_approvals", "require_signed_commits",
 		"protected_file_patterns", "unprotected_file_patterns", "apply_to_admins", "block_on_unresolved_conversations",
 		"ignore_outdated_conversations", "block_on_incomplete_tasks", "require_merge_queue", "merge_queue_merge_style",
 		"merge_queue_build_concurrency", "merge_queue_min_group_size", "merge_queue_max_group_size", "merge_queue_wait_minutes",

@@ -446,6 +446,17 @@ func RenameBranch(ctx context.Context, repo *repo_model.Repository, from, to str
 		return err
 	}
 
+	// 4.2 The pushers follow the branch: the pull requests that use it keep ignoring their approvals
+	pushers, err := FindBranchPusherIDs(ctx, repo.ID, from)
+	if err != nil {
+		return err
+	}
+	for _, id := range pushers {
+		if err := AddBranchPusher(ctx, repo.ID, to, id); err != nil {
+			return err
+		}
+	}
+
 	// 5. insert renamed branch record
 	renamedBranch := &RenamedBranch{
 		RepoID: repo.ID,

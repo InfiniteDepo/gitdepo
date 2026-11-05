@@ -260,6 +260,20 @@ func Merge(ctx context.Context, pr *issues_model.PullRequest, doer *user_model.U
 		return models.ErrInvalidMergeStyle{ID: pr.BaseRepo.ID, Style: mergeStyle}
 	}
 
+	if TestHookBeforeHeadPin != nil {
+		TestHookBeforeHeadPin(ctx, pr)
+	}
+	// every path (web, API, auto merge, stack) merges the head the checks read, never one the client names: a given
+	// head only has to agree with it, and the merge refuses when the head branch is not at it
+	head, err := issues_model.PullHeadCommitID(ctx, pr)
+	if err != nil {
+		return fmt.Errorf("unable to read the head of %v: %w", pr, err)
+	}
+	if expectedHeadCommitID != "" && expectedHeadCommitID != head {
+		return models.ErrSHADoesNotMatch{GivenSHA: expectedHeadCommitID, CurrentSHA: head}
+	}
+	expectedHeadCommitID = head
+
 	defer func() {
 		AddTestPullRequestTask(ctx, doer, pr.BaseRepo.ID, pr.BaseBranch, false, "", "", 0)
 	}()
@@ -270,6 +284,9 @@ func Merge(ctx context.Context, pr *issues_model.PullRequest, doer *user_model.U
 	}
 	return afterMerge(ctx, pr, doer, wasAutoMerged)
 }
+
+// TestHookBeforeHeadPin runs between the checks and the pin, so a test can move the head there.
+var TestHookBeforeHeadPin func(ctx context.Context, pr *issues_model.PullRequest)
 
 // afterMerge notifies about the merge of pr, which the post-receive hook recorded, and closes the issues it references
 func afterMerge(ctx context.Context, pr *issues_model.PullRequest, doer *user_model.User, wasAutoMerged bool) error {
@@ -562,6 +579,33 @@ func CheckPullBranchProtections(ctx context.Context, pr *issues_model.PullReques
 	return nil, nil
 }
 
+// withPusherNote says why approvals do not count because of who pushed to the pull request.
+func withPusherNote(ctx context.Context, pb *git_model.ProtectedBranch, pr *issues_model.PullRequest, reason string) string {
+	block, err := PusherBlock(ctx, pb, pr)
+	if err != nil {
+		log.Error("PusherBlock for %-v: %v", pr, err)
+		return reason
+	}
+	switch block {
+	case PusherBlockDeployKey:
+		return reason + " (a push to this pull request has no recorded person, so approvals can't be checked)"
+	case PusherBlockUnchecked:
+		return reason + " (who pushed to this pull request can't be checked, so approvals can't be counted)"
+	}
+	pushed, err := PusherApprovers(ctx, pb, pr)
+	if err != nil {
+		log.Error("PusherApprovers for %-v: %v", pr, err)
+		return reason
+	}
+	switch len(pushed) {
+	case 0:
+		return reason
+	case 1:
+		return reason + " (1 approval of a user who pushed to this pull request does not count)"
+	}
+	return fmt.Sprintf("%s (%d approvals of users who pushed to this pull request do not count)", reason, len(pushed))
+}
+
 func checkPullBranchProtection(ctx context.Context, pr *issues_model.PullRequest, pb *git_model.ProtectedBranch, skipProtectedFilesCheck, queued bool) (*git_model.ProtectedBranch, error) {
 	isPass, err := isPullCommitStatusPass(ctx, pr, pb)
 	if err != nil {
@@ -575,7 +619,7 @@ func checkPullBranchProtection(ctx context.Context, pr *issues_model.PullRequest
 
 	if !issues_model.HasEnoughApprovals(ctx, pb, pr) {
 		return pb, models.ErrDisallowedToMerge{
-			Reason: "Does not have enough approvals",
+			Reason: withPusherNote(ctx, pb, pr, "Does not have enough approvals"),
 		}
 	}
 	statuses, err := EvaluateApprovalRules(ctx, pb, pr)
@@ -584,7 +628,7 @@ func checkPullBranchProtection(ctx context.Context, pr *issues_model.PullRequest
 	}
 	for _, s := range statuses {
 		if !s.Satisfied {
-			return pb, models.ErrDisallowedToMerge{Reason: s.Reason()}
+			return pb, models.ErrDisallowedToMerge{Reason: withPusherNote(ctx, pb, pr, s.Reason())}
 		}
 	}
 	if issues_model.MergeBlockedByRejectedReview(ctx, pb, pr) {
