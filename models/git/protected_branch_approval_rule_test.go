@@ -5,6 +5,7 @@ package git_test
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	git_model "forgejo.org/models/git"
@@ -39,6 +40,24 @@ func TestApprovalRuleAppliesTo(t *testing.T) {
 	}
 }
 
+func TestApprovalRuleMatchesSourceBranch(t *testing.T) {
+	for _, c := range []struct {
+		pattern, branch string
+		matches         bool
+	}{
+		{"", "anything", true},
+		{"feature/*", "feature/a", true},
+		{"feature/*", "feature/a/b", false}, // `*` doesn't cross '/'
+		{"feature/**", "feature/a/b", true},
+		{"feature/*", "bugfix/a", false},
+		{"feature/*", "Feature/a", false}, // branch names are case-sensitive
+		{"[a", "a", false},                // a pattern that can't compile matches nothing: it only limits requests
+	} {
+		r := &git_model.ApprovalRule{SourceBranchPattern: c.pattern}
+		assert.Equal(t, c.matches, r.MatchesSourceBranch(c.branch), "%q %q", c.pattern, c.branch)
+	}
+}
+
 // AC1/AC14: rules are stored per protected branch and validated.
 func TestSetApprovalRules(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
@@ -56,14 +75,25 @@ func TestSetApprovalRules(t *testing.T) {
 	assert.Equal(t, []int64{user2.ID}, rules[0].UserIDs)
 
 	for name, bad := range map[string]*git_model.ApprovalRule{
-		"count":  {Name: "A", RequiredCount: 0, UserIDs: []int64{user2.ID}},
-		"name":   {Name: " ", RequiredCount: 1, UserIDs: []int64{user2.ID}},
-		"nobody": {Name: "A", RequiredCount: 1},
-		"glob":   {Name: "A", RequiredCount: 1, UserIDs: []int64{user2.ID}, PathPatterns: "[a"},
+		"count":            {Name: "A", RequiredCount: 0, UserIDs: []int64{user2.ID}},
+		"name":             {Name: " ", RequiredCount: 1, UserIDs: []int64{user2.ID}},
+		"nobody":           {Name: "A", RequiredCount: 1},
+		"glob":             {Name: "A", RequiredCount: 1, UserIDs: []int64{user2.ID}, PathPatterns: "[a"},
+		"negative":         {Name: "A", RequiredCount: -1, RequestReviews: true, UserIDs: []int64{user2.ID}},
+		"source glob":      {Name: "A", RequiredCount: 0, RequestReviews: true, UserIDs: []int64{user2.ID}, SourceBranchPattern: "[a"},
+		"source too long":  {Name: "A", RequiredCount: 1, RequestReviews: true, UserIDs: []int64{user2.ID}, SourceBranchPattern: strings.Repeat("a", 256)},
+		"request no users": {Name: "A", RequiredCount: 0, RequestReviews: true},
 	} {
 		err := git_model.SetApprovalRules(t.Context(), repo, pb.ID, []*git_model.ApprovalRule{bad})
 		require.ErrorIs(t, err, util.ErrInvalidArgument, name)
 	}
+	// 0 approvals is a request-only rule
+	require.NoError(t, git_model.SetApprovalRules(t.Context(), repo, pb.ID, []*git_model.ApprovalRule{{Name: "Ask", RequiredCount: 0, RequestReviews: true, SourceBranchPattern: "feature/*", UserIDs: []int64{user2.ID}}}))
+	rules, err = git_model.GetApprovalRules(t.Context(), pb.ID)
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	assert.True(t, rules[0].RequestReviews)
+	assert.Equal(t, "feature/*", rules[0].SourceBranchPattern)
 	// code owners can stand in for the approver list
 	require.NoError(t, git_model.SetApprovalRules(t.Context(), repo, pb.ID, []*git_model.ApprovalRule{{Name: "Owners", RequiredCount: 1, RequireCodeOwners: true}}))
 

@@ -11,7 +11,7 @@ import (
 type ApprovalRule struct {
 	// Name of the rule, unique within the branch protection
 	Name string `json:"name"`
-	// RequiredCount is the number of approvals needed, at least 1
+	// RequiredCount is the number of approvals needed, at least 1; 0 is allowed only with RequestReviews
 	RequiredCount int64 `json:"required_count"`
 	// Usernames of the users who can approve. Teams are the teams (of the owning organization) whose members can approve.
 	// Both may be empty only with RequireCodeOwners, then any user with write access can approve.
@@ -22,6 +22,10 @@ type ApprovalRule struct {
 	PathPatterns string `json:"path_patterns"`
 	// RequireCodeOwners also requires that for every changed file with owners in CODEOWNERS of the target branch, one of its owners approved
 	RequireCodeOwners bool `json:"require_code_owners"`
+	// RequestReviews asks the users and teams of the rule for a review when a pull request opens, is retargeted or starts to change a file matching PathPatterns
+	RequestReviews bool `json:"request_reviews"`
+	// SourceBranchPattern is one glob (`*` does not match `/`) for the head branch of the pull request, empty for any. It only limits who is asked for a review, never the required count.
+	SourceBranchPattern string `json:"source_branch_pattern"`
 }
 
 // Branch represents a repository branch

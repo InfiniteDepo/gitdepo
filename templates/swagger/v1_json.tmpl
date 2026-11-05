@@ -32031,16 +32031,26 @@
           "type": "string",
           "x-go-name": "PathPatterns"
         },
+        "request_reviews": {
+          "description": "RequestReviews asks the users and teams of the rule for a review when a pull request opens, is retargeted or starts to change a file matching PathPatterns",
+          "type": "boolean",
+          "x-go-name": "RequestReviews"
+        },
         "require_code_owners": {
           "description": "RequireCodeOwners also requires that for every changed file with owners in CODEOWNERS of the target branch, one of its owners approved",
           "type": "boolean",
           "x-go-name": "RequireCodeOwners"
         },
         "required_count": {
-          "description": "RequiredCount is the number of approvals needed, at least 1",
+          "description": "RequiredCount is the number of approvals needed, at least 1; 0 is allowed only with RequestReviews",
           "type": "integer",
           "format": "int64",
           "x-go-name": "RequiredCount"
+        },
+        "source_branch_pattern": {
+          "description": "SourceBranchPattern is one glob (`*` does not match `/`) for the head branch of the pull request, empty for any. It only limits who is asked for a review, never the required count.",
+          "type": "string",
+          "x-go-name": "SourceBranchPattern"
         },
         "teams": {
           "type": "array",

@@ -59,6 +59,8 @@ func ApprovalRuleStatuses(ctx context.Context, pb *git_model.ProtectedBranch, pr
 // The RequiredApprovals of the protected branch rule are not part of it, HasEnoughApprovals checks them.
 func EvaluateApprovalRules(ctx context.Context, pb *git_model.ProtectedBranch, pr *issues_model.PullRequest) ([]*ApprovalRuleStatus, error) {
 	rules, err := git_model.GetApprovalRules(ctx, pb.ID)
+	// a rule that only requests reviews (count 0) requires nothing and is never applicable
+	rules = slices.DeleteFunc(rules, func(r *git_model.ApprovalRule) bool { return r.RequiredCount == 0 })
 	if err != nil || len(rules) == 0 {
 		return nil, err
 	}
@@ -213,6 +215,7 @@ func ApprovalRulesFromAPI(ctx context.Context, owner *user_model.User, apiRules 
 		rules = append(rules, &git_model.ApprovalRule{
 			Name: r.Name, RequiredCount: r.RequiredCount, UserIDs: userIDs, TeamIDs: teamIDs,
 			PathPatterns: r.PathPatterns, RequireCodeOwners: r.RequireCodeOwners,
+			RequestReviews: r.RequestReviews, SourceBranchPattern: r.SourceBranchPattern,
 		})
 	}
 	return rules, nil

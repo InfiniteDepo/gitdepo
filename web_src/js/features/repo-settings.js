@@ -149,6 +149,12 @@ function initApprovalRules() {
   list.addEventListener('input', (e) => {
     if (e.target.name === 'approval_rule_name') setTitle(e.target.closest('.approval-rule-card'));
   });
+  // the source branch only matters when reviews are requested; the field stays in the form (hidden, not disabled) so the rows keep their order
+  list.addEventListener('change', (e) => {
+    if (e.target.name === 'approval_rule_request_reviews') {
+      toggleElem(e.target.closest('.approval-rule-card').querySelector('.approval-rule-source'), e.target.value === 'true');
+    }
+  });
 
   // drop empty cards; refuse invalid ones with the checks of the model, the server still reports the rest (path globs, unknown names)
   rules.closest('form').addEventListener('submit', (e) => {
@@ -166,7 +172,7 @@ function initApprovalRules() {
       let invalid = [];
       if (!name || new TextEncoder().encode(name).length > 255) [error, invalid] = ['name', ['approval_rule_name']];
       else if (seen.has(name)) [error, invalid] = ['duplicate', ['approval_rule_name']];
-      else if (!(Number.isInteger(Number(value('approval_rule_count'))) && Number(value('approval_rule_count')) >= 1)) [error, invalid] = ['count', ['approval_rule_count']];
+      else if (!(Number.isInteger(Number(value('approval_rule_count'))) && Number(value('approval_rule_count')) >= (value('approval_rule_request_reviews') === 'true' ? 0 : 1))) [error, invalid] = ['count', ['approval_rule_count']];
       else if (!hasApprovers) [error, invalid] = ['approvers', ['approval_rule_users', 'approval_rule_teams']];
       seen.add(name);
       for (const el of card.querySelectorAll('.field')) el.classList.remove('error');

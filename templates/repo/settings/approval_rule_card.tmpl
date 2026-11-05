@@ -73,4 +73,18 @@
 		</select>
 		<span class="help">{{ctx.Locale.Tr "repo.settings.approval_rule_code_owners_help"}}</span>
 	</div>
+	<div class="field">
+		<label>{{ctx.Locale.Tr "repo.settings.approval_rule_request_reviews"}}</label>
+		{{/* a select, not a checkbox: an unchecked checkbox sends nothing and would shift the values of the other cards */}}
+		<select name="approval_rule_request_reviews" class="approval-rule-request-reviews">
+			<option value="false">{{ctx.Locale.Tr "repo.settings.approval_rule_request_reviews_no"}}</option>
+			<option value="true" {{if $rule.RequestReviews}}selected{{end}}>{{ctx.Locale.Tr "repo.settings.approval_rule_request_reviews_yes"}}</option>
+		</select>
+		<span class="help">{{ctx.Locale.Tr "repo.settings.approval_rule_request_reviews_help"}}</span>
+	</div>
+	<div class="field approval-rule-source {{if not $rule.RequestReviews}}tw-hidden{{end}}">
+		<label>{{ctx.Locale.Tr "repo.settings.approval_rule_source_branch"}}</label>
+		<input name="approval_rule_source_branch" value="{{$rule.SourceBranchPattern}}" maxlength="255" placeholder="feature/*">
+		<span class="help">{{ctx.Locale.Tr "repo.settings.approval_rule_source_branch_help"}}</span>
+	</div>
 </div>

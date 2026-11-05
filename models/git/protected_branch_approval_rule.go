@@ -31,10 +31,16 @@ type ApprovalRule struct {
 	TeamIDs           []int64 `xorm:"JSON TEXT"`
 	// PathPatterns is a semicolon separated list of globs like ProtectedBranch.ProtectedFilePatterns.
 	// The rule only applies when the pull request changes a matching file.
-	PathPatterns      string             `xorm:"TEXT"`
-	RequireCodeOwners bool               `xorm:"NOT NULL DEFAULT false"`
-	CreatedUnix       timeutil.TimeStamp `xorm:"created"`
-	UpdatedUnix       timeutil.TimeStamp `xorm:"updated"`
+	PathPatterns      string `xorm:"TEXT"`
+	RequireCodeOwners bool   `xorm:"NOT NULL DEFAULT false"`
+	// RequestReviews asks the users and teams of the rule for a review when a pull request opens, is retargeted
+	// or starts to change a file of PathPatterns. RequiredCount may then be 0 (a rule that only requests).
+	RequestReviews bool `xorm:"NOT NULL DEFAULT false"`
+	// SourceBranchPattern is one glob for the head branch of a pull request, empty for any. It only limits who is
+	// asked for a review, never RequiredCount: the author chooses the head branch name.
+	SourceBranchPattern string             `xorm:"VARCHAR(255) NOT NULL DEFAULT ''"`
+	CreatedUnix         timeutil.TimeStamp `xorm:"created"`
+	UpdatedUnix         timeutil.TimeStamp `xorm:"updated"`
 }
 
 func init() {
@@ -72,8 +78,13 @@ func setApprovalRules(ctx context.Context, protectedBranchID int64, rules []*App
 			return util.NewInvalidArgumentErrorf("an approval rule needs a name of at most 255 characters")
 		case names[r.Name]:
 			return util.NewInvalidArgumentErrorf("approval rule %q exists twice", r.Name)
-		case r.RequiredCount < 1:
-			return util.NewInvalidArgumentErrorf("approval rule %q needs at least 1 approval", r.Name)
+		case r.RequiredCount < 0 || (r.RequiredCount == 0 && !r.RequestReviews):
+			return util.NewInvalidArgumentErrorf("approval rule %q needs at least 1 approval, or 0 with review requests", r.Name)
+		case len(r.SourceBranchPattern) > 255:
+			return util.NewInvalidArgumentErrorf("approval rule %q: the source branch pattern is too long", r.Name)
+		}
+		if _, err := glob.Compile(r.SourceBranchPattern, '/'); err != nil {
+			return util.NewInvalidArgumentErrorf("approval rule %q: invalid source branch pattern %q", r.Name, r.SourceBranchPattern)
 		}
 		names[r.Name] = true
 		for expr := range strings.SplitSeq(r.PathPatterns, ";") {
@@ -129,4 +140,14 @@ func (r *ApprovalRule) AppliesTo(changedFiles []string) bool {
 func MatchesAnyGlob(patterns []glob.Glob, path string) bool {
 	lpath := strings.ToLower(strings.TrimSpace(path))
 	return slices.ContainsFunc(patterns, func(g glob.Glob) bool { return g.Match(lpath) })
+}
+
+// MatchesSourceBranch returns true if the rule has no source branch pattern or the branch matches it. It only decides
+// who is asked for a review.
+func (r *ApprovalRule) MatchesSourceBranch(branch string) bool {
+	if r.SourceBranchPattern == "" {
+		return true
+	}
+	g, err := glob.Compile(r.SourceBranchPattern, '/')
+	return err == nil && g.Match(branch)
 }
