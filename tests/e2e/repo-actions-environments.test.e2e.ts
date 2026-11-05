@@ -88,7 +88,10 @@ test('warning when nobody listed can approve', async ({page, request}) => {
   // user9 is deactivated: listed, but can't approve
   const response = await request.put(`/api/v1/repos/user2/repo1/actions/environments/${name}`, {
     headers: basicAuth('user2', 'password'),
-    data: {reviewers: [{type: 'user', id: 9}]},
+    data: {
+      reviewers: [{type: 'user', id: 9}], prevent_self_review: false, wait_timer: 0,
+      ref_policy: 'any', ref_patterns: [], runner_labels: [], allowed_workflows: [],
+    },
   });
   expect(response.status()).toBe(201);
   const warning = 'Nobody listed can approve a deployment right now';

@@ -150,7 +150,10 @@ func TestActionsEnvironmentsWeb(t *testing.T) {
 				"wait timer":               {envLink(production), form(map[string][]string{"wait_timer": {"50000"}}), "The wait timer must be 0 to 43200 minutes."},
 				"wait timer not a number":  {envLink(production), form(map[string][]string{"wait_timer": {"soon"}}), "The wait timer must be 0 to 43200 minutes."},
 				"runner label twice":       {envLink(production), form(map[string][]string{"runner_labels": {"a\na"}}), "is not valid or listed twice."},
-				"seven reviewers":          {envLink(production), form(map[string][]string{"reviewers": {"user:1,user:4,user:5,user:8,user:10,user:11,user:12"}}), "Choose up to 6 reviewers from the list."},
+				"seven reviewers":          {envLink(production), form(map[string][]string{"reviewers": {"user:1,user:4,user:5,user:8,user:10,user:11,user:12"}}), "At most 6 reviewers."},
+				"reviewer twice":           {envLink(production), form(map[string][]string{"reviewers": {"user:4,user:4"}}), "A reviewer is listed twice."},
+				"name of dots":             {base + "/new", form(map[string][]string{"name": {".."}}), "and not only dots"},
+				"name with a slash":        {base + "/new", form(map[string][]string{"name": {"a/b"}}), "without spaces or any of : / ? # % \\"},
 				"reviewer of no type":      {envLink(production), form(map[string][]string{"reviewers": {"admin:1"}}), "Choose up to 6 reviewers from the list."},
 				// user31 is private and shares no organization with user2: unknown like a missing one
 				"hidden reviewer": {envLink(production), form(map[string][]string{"reviewers": {"user:31"}}), "Choose up to 6 reviewers from the list."},
@@ -310,6 +313,36 @@ func TestActionsEnvironmentsWeb(t *testing.T) {
 				"repo.actions_env_secret.deleted", "repo.actions_env_variable.deleted",
 			}, auditActions(since, "repo.actions_env_"))
 			assert.Empty(t, auditActions(since, "repo.actions_secret"), "the repository's secret is untouched")
+		})
+
+		t.Run("a value is measured after its line breaks are normalized", func(t *testing.T) {
+			// "a\r\n" is stored as "a\n": 32768 of them are exactly 64 KiB stored, 96 KiB as posted
+			fits := strings.Repeat("a\r\n", secret_model.MaxValueSize/2)
+			tooLarge := fits + "b"
+			for _, level := range []string{envLink(production), fmt.Sprintf("/%s/%s/settings/actions", user2.Name, repo.Name)} {
+				post(owner, level+"/secrets", url.Values{"name": {"BIG"}, "data": {fits}}, http.StatusOK)
+				var stored []*secret_model.Secret
+				require.NoError(t, db.GetEngine(t.Context()).Where("repo_id = ? AND name = ?", repo.ID, "BIG").Find(&stored))
+				var s *secret_model.Secret
+				for _, x := range stored {
+					if (x.EnvironmentID != 0) == strings.Contains(level, "/environments/") {
+						s = x
+					}
+				}
+				require.NotNil(t, s, level)
+				sid := strconv.FormatInt(s.ID, 10)
+				post(owner, level+"/secrets/"+sid+"/edit", url.Values{"name": {"BIG"}, "data": {fits}}, http.StatusOK)
+				for _, req := range []struct{ link, name string }{{level + "/secrets", "BIG2"}, {level + "/secrets/" + sid + "/edit", "BIG"}} {
+					body := post(owner, req.link, url.Values{"name": {req.name}, "data": {tooLarge}}, http.StatusBadRequest).Body.String()
+					assert.Contains(t, body, "The value is too large: a secret holds at most 64 KiB.", req.link)
+				}
+				post(owner, level+"/variables/new", url.Values{"name": {"BIG"}, "data": {fits}}, http.StatusOK)
+				body := post(owner, level+"/variables/new", url.Values{"name": {"BIG2"}, "data": {tooLarge}}, http.StatusBadRequest).Body.String()
+				assert.Contains(t, body, "The value is too large: a variable holds at most 64 KiB.")
+				post(owner, level+"/secrets/"+sid+"/delete", nil, http.StatusOK)
+			}
+			_, err := db.GetEngine(t.Context()).Where("repo_id = ? AND name = ?", repo.ID, "BIG").Delete(new(actions_model.ActionVariable))
+			require.NoError(t, err)
 		})
 
 		t.Run("who may manage environments", func(t *testing.T) {

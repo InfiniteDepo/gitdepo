@@ -9,6 +9,7 @@ import (
 
 	actions_model "forgejo.org/models/actions"
 	"forgejo.org/models/db"
+	secret_model "forgejo.org/models/secret"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
@@ -78,6 +79,10 @@ func failed(ctx *context.Context, what string, err error, found bool, msg any) {
 		ctx.Error(http.StatusForbidden)
 	case errors.Is(err, util.ErrNotExist), err == nil && !found:
 		ctx.NotFound(what, err)
+	case errors.Is(err, secret_model.ErrValueTooLarge):
+		ctx.JSONError(ctx.Tr("actions.variables.value_too_large", secret_model.MaxValueSize>>10))
+	case errors.Is(err, secret_model.ErrEnvironmentFull):
+		ctx.JSONError(ctx.Tr("actions.environments.full", secret_model.MaxPerEnvironment, secret_model.MaxPerEnvironment))
 	default:
 		log.Error("%s failed: %v", what, err)
 		ctx.JSONError(msg)

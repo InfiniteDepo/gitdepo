@@ -77,6 +77,10 @@ func failed(ctx *context.Context, what string, err error, msg any) {
 	case errors.Is(err, util.ErrPermissionDenied):
 		log.Info("%s refused: %v", what, err)
 		ctx.Error(http.StatusForbidden)
+	case errors.Is(err, secret_model.ErrValueTooLarge):
+		ctx.JSONError(ctx.Tr("actions.secrets.value_too_large", secret_model.MaxValueSize>>10))
+	case errors.Is(err, secret_model.ErrEnvironmentFull):
+		ctx.JSONError(ctx.Tr("actions.environments.full", secret_model.MaxPerEnvironment, secret_model.MaxPerEnvironment))
 	default:
 		log.Error("%s failed: %v", what, err)
 		ctx.JSONError(msg)

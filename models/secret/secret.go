@@ -396,10 +396,17 @@ const (
 	MaxPerEnvironment = 100
 )
 
-// ValidateValue refuses a value of a secret or variable larger than MaxValueSize.
+// ErrEnvironmentFull is the refusal of one more secret or variable in an environment that holds MaxPerEnvironment.
+var ErrEnvironmentFull = util.NewInvalidArgumentErrorf("an environment holds at most %d secrets and %d variables", MaxPerEnvironment, MaxPerEnvironment)
+
+// ErrValueTooLarge is the refusal of a value larger than MaxValueSize.
+var ErrValueTooLarge = util.NewInvalidArgumentErrorf("the value is larger than 64 KiB")
+
+// ValidateValue refuses a value of a secret or variable larger than MaxValueSize. It is checked on the value as
+// stored, after its line breaks are normalized, so a value can be edited whenever it can be created.
 func ValidateValue(data string) error {
 	if len(data) > MaxValueSize {
-		return util.NewInvalidArgumentErrorf("the value is larger than 64 KiB")
+		return ErrValueTooLarge
 	}
 	return nil
 }
@@ -413,7 +420,7 @@ func CheckEnvironmentCount(ctx context.Context, table string, repoID, environmen
 	if n, err := db.GetEngine(ctx).Table(table).Where("repo_id = ? AND environment_id = ?", repoID, environmentID).Count(); err != nil {
 		return err
 	} else if n >= MaxPerEnvironment {
-		return util.NewInvalidArgumentErrorf("an environment holds at most %d secrets and %d variables", MaxPerEnvironment, MaxPerEnvironment)
+		return ErrEnvironmentFull
 	}
 	return nil
 }

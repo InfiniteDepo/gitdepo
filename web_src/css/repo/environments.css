@@ -16,3 +16,8 @@
   color: var(--color-text-light-3);
   font-style: italic;
 }
+
+#environment-reviewers .ui.label .help {
+  display: inline;
+  margin-inline-start: 0.25em;
+}

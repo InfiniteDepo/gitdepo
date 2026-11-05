@@ -12,7 +12,7 @@
 		</h4>
 		<div class="ui attached segment">
 			<form class="ui form" id="environment-form" method="post" action="{{if .Environment}}{{.EnvironmentLink}}{{else}}{{.EnvironmentsLink}}/new{{end}}">
-				<fieldset class="tw-contents" {{if $archived}}disabled{{end}}>
+				{{if $archived}}<fieldset class="tw-contents" disabled>{{end}}
 				<div class="field">
 					<label for="environment-name">{{ctx.Locale.Tr "name"}}</label>
 					<input id="environment-name" name="name" value="{{.Form.Name}}" maxlength="255" {{if .Environment}}readonly{{else}}required autofocus{{end}}>
@@ -107,8 +107,7 @@
 					<textarea id="environment-allowed-workflows" name="allowed_workflows" rows="2">{{.Form.AllowedWorkflows}}</textarea>
 				</div>
 
-				</fieldset>
-				{{if not $archived}}
+				{{if $archived}}</fieldset>{{else}}
 				<div class="divider"></div>
 				<div class="field">
 					<button class="ui primary button" id="environment-save">{{if .Environment}}{{ctx.Locale.Tr "actions.environments.save"}}{{else}}{{ctx.Locale.Tr "actions.environments.create"}}{{end}}</button>

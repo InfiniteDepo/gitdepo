@@ -121,7 +121,7 @@ func lastDeployments(ctx *context.Context, repo *repo_model.Repository, ids []in
 			name = d.Ref
 		}
 		row := &environmentDeployment{ActionDeployment: d, RefName: name, RunLink: links[d.RunID], Task: tasks[d.ID], When: d.Updated}
-		if row.Task != nil {
+		if row.Task != nil && row.Task.Updated > row.When {
 			row.When = row.Task.Updated
 		}
 		out[id] = row
@@ -501,8 +501,15 @@ func environmentError(ctx *context.Context, err error) template.HTML {
 		return ctx.Tr("actions.environments.error.name_taken")
 	case errors.Is(err, actions_model.ErrEnvironmentLimit):
 		return ctx.Tr("actions.environments.error.limit", actions_model.MaxEnvironmentsPerRepo)
+	case errors.Is(err, actions_service.ErrTooManyReviewers):
+		return ctx.Tr("actions.environments.error.too_many_reviewers", actions_model.MaxEnvironmentReviewers)
+	case errors.Is(err, actions_service.ErrReviewerTwice):
+		return ctx.Tr("actions.environments.error.reviewer_twice")
+	case errors.Is(err, actions_service.ErrUnknownReviewer), errors.Is(err, errBadReviewer):
+		return ctx.Tr("actions.environments.error.reviewers", actions_model.MaxEnvironmentReviewers)
 	}
-	return ctx.Tr("actions.environments.error.reviewers", actions_model.MaxEnvironmentReviewers)
+	// a refusal without a message of its own (e.g. a reviewer deleted while saving): its text, escaped by Tr
+	return ctx.Tr("actions.environments.error.other", err.Error())
 }
 
 // saveEnvironment saves the posted form: a new environment when env is nil, otherwise its rules.
