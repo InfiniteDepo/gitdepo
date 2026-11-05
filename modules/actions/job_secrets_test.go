@@ -49,3 +49,39 @@ func TestReferencedSecrets(t *testing.T) {
 	_, _, err := ReferencedSecrets([]byte("a: [unclosed"))
 	require.Error(t, err)
 }
+
+// Safety property: unless the job is dynamic, the names found are exactly the literal names the job writes. Forms that
+// hide a read (an alias of inherit, an `if:` without braces, a name that folds onto another) fail safe.
+func TestReferencedSecretsSafety(t *testing.T) {
+	for name, tc := range map[string]struct {
+		payload     string
+		names       []string
+		mustDynamic bool
+	}{
+		"if without braces, toJSON": {payload: "jobs:\n  a:\n    steps:\n      - if: contains(toJSON(secrets), 'x')\n        run: echo ${{ secrets.A }}\n", mustDynamic: true},
+		"if without braces, deref":  {payload: "jobs:\n  a:\n    steps:\n      - if: secrets.B != ''\n        run: echo ${{ secrets.A }}\n", names: []string{"A", "B"}},
+		"parenthesised":             {payload: "jobs:\n  a:\n    steps:\n      - run: ${{ (secrets).A }}\n", names: []string{"A"}},
+		"nested literal index":      {payload: "jobs:\n  a:\n    steps:\n      - run: ${{ format('{0}', secrets['A']) }}\n", names: []string{"A"}},
+		"expr text in a string":     {payload: "jobs:\n  a:\n    steps:\n      - run: ${{ '${{' }} ${{ toJSON(secrets) }}\n", mustDynamic: true},
+		"closing braces in string":  {payload: "jobs:\n  a:\n    steps:\n      - run: ${{ format('}}{0}', toJSON(secrets)) }}\n", mustDynamic: true},
+		"yaml escape":               {payload: "jobs:\n  a:\n    steps:\n      - run: \"\\u0024{{ toJSON(secrets) }}\"\n", mustDynamic: true},
+		"long s folds to S":         {payload: "jobs:\n  a:\n    steps:\n      - run: ${{ secrets.\u017fECRET }}\n", mustDynamic: true},
+		"index of index":            {payload: "jobs:\n  a:\n    steps:\n      - run: ${{ secrets['A']['B'] }}\n", names: []string{"A"}},
+		"secrets index as operand":  {payload: "jobs:\n  a:\n    steps:\n      - run: ${{ fromJSON('{}')[secrets.A] }}\n", names: []string{"A"}},
+		"inherit in a flow map":     {payload: "jobs: {a: {uses: ./x.yml, secrets: inherit}}\n", mustDynamic: true},
+		"inherit via alias":         {payload: "x: &i inherit\njobs:\n  a:\n    uses: ./x.yml\n    secrets: *i\n", mustDynamic: true},
+		"inherit with a tag":        {payload: "jobs:\n  a:\n    uses: ./x.yml\n    secrets: !!str inherit\n", mustDynamic: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			names, dynamic, err := ReferencedSecrets([]byte(tc.payload))
+			require.NoError(t, err)
+			slices.Sort(names)
+			if tc.mustDynamic {
+				assert.True(t, dynamic)
+			} else {
+				assert.False(t, dynamic)
+				assert.Equal(t, tc.names, names)
+			}
+		})
+	}
+}

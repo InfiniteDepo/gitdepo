@@ -39,14 +39,22 @@ func runOfRepo(ctx *context.APIContext) *actions_model.ActionRun {
 	return run
 }
 
-// toActionDeployments converts the deployments of the run for doer.
+// toActionDeployments converts the deployments of the run for doer. What the doer may review is decided by the same
+// checker as the review itself, over the deployments that can be reviewed now; the environments and their reviewers
+// are loaded once.
 func toActionDeployments(ctx *context.APIContext, run *actions_model.ActionRun, ds []*actions_model.ActionDeployment) ([]*api.ActionDeployment, error) {
 	jobs, err := actions_model.GetRunJobsByRunID(ctx, run.ID)
 	if err != nil {
 		return nil, err
 	}
-	envs := map[int64]*actions_model.ActionEnvironment{}
-	counts := map[int64]*api.ActionDeploymentReviewers{}
+	checker, err := actions_service.NewReviewChecker(ctx, ctx.Doer(), run)
+	if err != nil {
+		return nil, err
+	}
+	reviewable, err := actions_model.FindReviewableDeployments(ctx, run.ID, actions_service.ReviewCutoff())
+	if err != nil {
+		return nil, err
+	}
 	users := map[int64]*user_model.User{}
 	out := make([]*api.ActionDeployment, 0, len(ds))
 	for _, d := range ds {
@@ -75,37 +83,24 @@ func toActionDeployments(ctx *context.APIContext, run *actions_model.ActionRun, 
 			t := d.ReviewedUnix.AsTime()
 			item.ReviewedAt = &t
 		}
-		env, ok := envs[d.EnvironmentID]
-		if !ok {
-			if env, err = actions_model.GetRepoEnvironmentByID(ctx, run.RepoID, d.EnvironmentID); err != nil && !errors.Is(err, actions_model.ErrEnvironmentNotFound) {
-				return nil, err
-			}
-			envs[d.EnvironmentID] = env // nil for a deleted environment
-			if env != nil {
-				rs, err := actions_model.FindEnvironmentReviewers(ctx, env.ID)
-				if err != nil {
-					return nil, err
-				}
-				counts[env.ID] = &api.ActionDeploymentReviewers{}
-				for _, r := range rs {
-					if r.TeamID > 0 {
-						counts[env.ID].Teams++
-					} else {
-						counts[env.ID].Users++
-					}
-				}
-			}
+		env, reviewers, err := checker.Environment(ctx, d.EnvironmentID)
+		if err != nil {
+			return nil, err
 		}
-		if env != nil {
+		if env != nil { // nil for a deleted environment
 			item.Environment = env.Name
-			item.Reviewers.Users, item.Reviewers.Teams = counts[env.ID].Users, counts[env.ID].Teams
+			for _, r := range reviewers {
+				if r.TeamID > 0 {
+					item.Reviewers.Teams++
+				} else {
+					item.Reviewers.Users++
+				}
+			}
 		}
-		if can, err := actions_service.CanReviewDeployment(ctx, ctx.Doer(), run, d); err != nil {
-			if !errors.Is(err, actions_model.ErrEnvironmentNotFound) {
+		if slices.ContainsFunc(reviewable, func(r *actions_model.ActionDeployment) bool { return r.ID == d.ID }) {
+			if item.Reviewers.CanReview, err = checker.May(ctx, d); err != nil {
 				return nil, err
 			}
-		} else {
-			item.Reviewers.CanReview = can
 		}
 		out = append(out, item)
 	}

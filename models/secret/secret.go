@@ -107,14 +107,8 @@ func insertEncryptedSecret(ctx context.Context, ownerID, groupID, repoID, enviro
 			return err
 		}
 		if environmentID != 0 {
-			// the row lock of the environment, as models/actions LockEnvironment takes it (it can't be imported here)
-			if _, err := db.Exec(ctx, "UPDATE `action_environment` SET repo_id = repo_id WHERE repo_id = ? AND id = ?", repoID, environmentID); err != nil {
+			if err := LockEnvironment(ctx, repoID, environmentID); err != nil {
 				return err
-			}
-			if ok, err := db.GetEngine(ctx).Table("action_environment").Where("repo_id = ? AND id = ?", repoID, environmentID).Exist(); err != nil {
-				return err
-			} else if !ok {
-				return fmt.Errorf("%w: environment %d", util.ErrNotExist, environmentID)
 			}
 		}
 		if err := db.Insert(ctx, secret); err != nil {
@@ -130,6 +124,22 @@ func insertEncryptedSecret(ctx context.Context, ownerID, groupID, repoID, enviro
 		}
 		return recordSecret(ctx, audit_model.LevelActions{Repo: "repo.actions_secret.created", Org: "org.actions_secret.created", Account: "account.actions_secret.created"}, secret, nil)
 	})
+}
+
+// LockEnvironment takes the row lock of the environment (a no-op UPDATE: a write lock on SQLite, a row lock elsewhere)
+// and returns an error wrapping util.ErrNotExist if it is gone. It is the one lock of an environment: every write of
+// its secrets, variables, reviewers and rules and its delete take it first, so none can leave rows behind or merge
+// with another. Call it inside a transaction.
+func LockEnvironment(ctx context.Context, repoID, id int64) error {
+	if _, err := db.Exec(ctx, "UPDATE `action_environment` SET repo_id = repo_id WHERE repo_id = ? AND id = ?", repoID, id); err != nil {
+		return err
+	}
+	if ok, err := db.GetEngine(ctx).Table("action_environment").Where("repo_id = ? AND id = ?", repoID, id).Exist(); err != nil {
+		return err
+	} else if !ok {
+		return fmt.Errorf("%w: environment %d", util.ErrNotExist, id)
+	}
+	return nil
 }
 
 // recordSecret records the action of actions for the secret's level, with its name only, never its value.

@@ -48,14 +48,14 @@ func jobHasEnvironment(job *actions_model.ActionRunJob) (bool, error) {
 	return env != nil, err
 }
 
-// evaluateEnvironmentText evaluates an expression in the name or url of an environment of job with the contexts GitHub
-// allows there (github, needs, strategy, matrix, vars, inputs). jobparser interpolates the name of a job with them, so
-// the text is parsed as the name of the job's own payload, which holds its matrix and, for a job of a reusable workflow,
-// the inputs of the call.
 // errInvalidEnvironmentText marks a text of the workflow that can't be evaluated. Any other error of
 // evaluateEnvironmentText (the database, the stored payload) is transient: the pass of the emitter is repeated.
 var errInvalidEnvironmentText = errors.New("the environment text could not be evaluated")
 
+// evaluateEnvironmentText evaluates an expression in the name or url of an environment of job with the contexts GitHub
+// allows there (github, needs, strategy, matrix, vars, inputs). jobparser interpolates the name of a job with them, so
+// the text is parsed as the name of the job's own payload, which holds its matrix and, for a job of a reusable workflow,
+// the inputs of the call.
 func evaluateEnvironmentText(ctx context.Context, job *actions_model.ActionRunJob, vars map[string]string, raw string) (string, error) {
 	if !strings.Contains(raw, "${{") {
 		return raw, nil
@@ -167,6 +167,14 @@ func resolveNewEnvironment(ctx context.Context, job *actions_model.ActionRunJob,
 	return env, "", nil
 }
 
+// triggerUser is the user who started this attempt of the job: whoever reran it, else the run's trigger user.
+func triggerUser(job *actions_model.ActionRunJob, run *actions_model.ActionRun) int64 {
+	if job.AttemptTriggerUserID != 0 {
+		return job.AttemptTriggerUserID
+	}
+	return run.TriggerUserID
+}
+
 // refusalReason returns why the environment's rules refuse the run, "" if they don't.
 func refusalReason(ctx context.Context, run *actions_model.ActionRun, env *actions_model.ActionEnvironment) (string, error) {
 	if ok, err := refAllowed(ctx, run.RepoID, env, run.Ref); err != nil {
@@ -182,24 +190,34 @@ func refusalReason(ctx context.Context, run *actions_model.ActionRun, env *actio
 	return "", nil
 }
 
-// nextDeploymentStatus sets the status of d after this pass, from the one it has (0 for a new deployment).
-func nextDeploymentStatus(d *actions_model.ActionDeployment, env *actions_model.ActionEnvironment, reason string, hasReviewers bool, now timeutil.TimeStamp) {
+// nextDeploymentStatus sets the status of d after this pass, from the one it has (0 for a new deployment). The rules of
+// the environment are those it has now, so reviewers added while a job waits for its timer hold it for an approval, and
+// reviewers removed by an edit release a job that waits for one (editing the rules is the break-glass). A review that
+// waited longer than the timeout expires here, whether or not the expiry task ran.
+func nextDeploymentStatus(d *actions_model.ActionDeployment, env *actions_model.ActionEnvironment, reason string, now timeutil.TimeStamp) {
 	if reason != "" { // env may be nil
 		d.Status, d.Reason = actions_model.DeploymentRefused, reason
 		return
 	}
 	timer := now + timeutil.TimeStamp(env.WaitTimerMinutes)*60
+	timerRuns := d.ReleaseAfterUnix > now
 	switch prior := d.Status; {
-	case prior == 0 && hasReviewers:
+	case prior == 0 && env.ReviewsRequired:
 		// the review and the wait timer run in parallel: the job needs an approval and the timer due
 		d.Status = actions_model.DeploymentWaitingReview
 		if env.WaitTimerMinutes > 0 {
 			d.ReleaseAfterUnix = timer
 		}
-	case prior == actions_model.DeploymentWaitingReview: // only ReviewDeployments or the expiry moves it
+	case prior == actions_model.DeploymentWaitingReview && d.Created != 0 && d.Created <= ReviewCutoff():
+		d.Status = actions_model.DeploymentExpired
+	case prior == actions_model.DeploymentWaitingTimer && d.ReviewedBy == 0 && env.ReviewsRequired:
+		d.Status = actions_model.DeploymentWaitingReview // the timer keeps running next to the review
+	case prior == actions_model.DeploymentWaitingReview && env.ReviewsRequired: // only ReviewDeployments or the expiry moves it
+	case prior == actions_model.DeploymentWaitingReview && timerRuns:
+		d.Status = actions_model.DeploymentWaitingTimer // no reviewer is required any more
 	case prior == 0 && env.WaitTimerMinutes > 0:
 		d.Status, d.ReleaseAfterUnix = actions_model.DeploymentWaitingTimer, timer
-	case prior == actions_model.DeploymentWaitingTimer && now < d.ReleaseAfterUnix:
+	case prior == actions_model.DeploymentWaitingTimer && timerRuns:
 	default:
 		d.Status = actions_model.DeploymentReleased
 	}
@@ -240,7 +258,7 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 		ref, _ := util.SplitStringAtByteN(run.Ref, 255)
 		d = &actions_model.ActionDeployment{
 			RepoID: job.RepoID, RunID: job.RunID, JobID: job.ID, Attempt: job.Attempt,
-			Ref: ref, CommitSHA: run.CommitSHA, TriggerUserID: run.TriggerUserID,
+			Ref: ref, CommitSHA: run.CommitSHA, TriggerUserID: triggerUser(job, run),
 		}
 		if env, reason, err = resolveNewEnvironment(ctx, job, jobEnv, d); err != nil {
 			return behaviourError, err
@@ -262,21 +280,15 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 		}
 	}
 
-	hasReviewers := false
 	if reason == "" {
 		// the rules of the environment apply to a waiting job as they are now
 		if reason, err = refusalReason(ctx, run, env); err != nil {
 			return behaviourError, err
 		}
 	}
-	if reason == "" && d.Status == 0 {
-		if hasReviewers, err = actions_model.HasEnvironmentReviewers(ctx, env.ID); err != nil {
-			return behaviourError, err
-		}
-	}
 
 	prior := d.Status
-	nextDeploymentStatus(d, env, reason, hasReviewers, timeutil.TimeStampNow())
+	nextDeploymentStatus(d, env, reason, timeutil.TimeStampNow())
 	if err := saveDeployment(ctx, d, isNew, prior); err != nil {
 		return behaviourError, err
 	}
@@ -284,6 +296,11 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 	switch d.Status {
 	case actions_model.DeploymentRefused:
 		if err := recordDeploymentRefused(ctx, run, d, env); err != nil {
+			return behaviourError, err
+		}
+		return behaviourFailJob, nil
+	case actions_model.DeploymentExpired:
+		if err := recordDeploymentReview(ctx, run.Repo, env, d, audit_model.Event{Action: "repo.actions_deployment.expired", Result: audit_model.ResultFailure}, 0); err != nil {
 			return behaviourError, err
 		}
 		return behaviourFailJob, nil

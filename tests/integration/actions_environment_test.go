@@ -250,7 +250,7 @@ jobs:
 
 			run, err := actions_model.GetRunByID(t.Context(), jobs[0].RunID)
 			require.NoError(t, err)
-			_, err = actions_service.RerunAllJobs(t.Context(), run)
+			_, err = actions_service.RerunAllJobs(t.Context(), nil, run)
 			require.NoError(t, err)
 			job := reload(jobs[0])
 			require.Equal(t, int64(2), job.Attempt)
@@ -666,7 +666,7 @@ jobs:
 			require.NoError(t, actions_model.UpdateEnvironment(ctx, e))
 			run, err := actions_model.GetRunByID(t.Context(), jobs[0].RunID)
 			require.NoError(t, err)
-			_, err = actions_service.RerunAllJobs(t.Context(), run)
+			_, err = actions_service.RerunAllJobs(t.Context(), nil, run)
 			require.NoError(t, err)
 			require.Eventually(t, func() bool {
 				j := new(actions_model.ActionRunJob)

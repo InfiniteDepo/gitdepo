@@ -1517,7 +1517,7 @@ func RerunActionRun(ctx *context.APIContext) {
 		return
 	}
 
-	if _, err = actions_service.RerunAllJobs(ctx, run); err != nil {
+	if _, err = actions_service.RerunAllJobs(ctx, ctx.Doer(), run); err != nil {
 		switch {
 		case errors.Is(err, actions_service.ErrRerunWorkflowStillRunning),
 			errors.Is(err, actions_service.ErrRerunWorkflowInvalid),
@@ -2057,7 +2057,7 @@ func RerunActionJob(ctx *context.APIContext) {
 		return
 	}
 
-	if _, err = actions_service.RerunJob(ctx, job); err != nil {
+	if _, err = actions_service.RerunJob(ctx, ctx.Doer(), job); err != nil {
 		switch {
 		case errors.Is(err, actions_service.ErrRerunJobStillRunning),
 			errors.Is(err, actions_service.ErrRerunWorkflowInvalid),

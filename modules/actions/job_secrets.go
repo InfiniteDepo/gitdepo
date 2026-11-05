@@ -30,7 +30,15 @@ func ReferencedSecrets(payload []byte) (names []string, dynamic bool, err error)
 			}
 		case yaml.MappingNode:
 			for i := 0; i+1 < len(n.Content); i += 2 {
-				if k, v := n.Content[i], n.Content[i+1]; k.Value == "secrets" && v.Kind == yaml.ScalarNode && v.Value == "inherit" {
+				k, v := n.Content[i], n.Content[i+1]
+				if v.Kind == yaml.AliasNode && v.Alias != nil { // `secrets: *alias`
+					v = v.Alias
+				}
+				if k.Value == "secrets" && v.Kind == yaml.ScalarNode && v.Value == "inherit" {
+					dynamic = true
+				}
+				// a condition is an expression without `${{ }}`
+				if k.Value == "if" && v.Kind == yaml.ScalarNode && !strings.Contains(v.Value, "${{") && secretsOfExpressions("${{ "+v.Value+" }}", found) {
 					dynamic = true
 				}
 				walk(n.Content[i])
@@ -64,6 +72,14 @@ func secretsOfExpressions(s string, found map[string]bool) (dynamic bool) {
 			// not an expression the runner can evaluate either; stay safe if it mentions secrets at all
 			return dynamic || strings.Contains(strings.ToLower(rest), "secrets")
 		}
+		// a secret name is ASCII; upper-casing another one could fold it onto a name it isn't (the long s onto S)
+		addName := func(name string) {
+			if strings.ContainsFunc(name, func(r rune) bool { return r > 0x7f }) {
+				dynamic = true
+				return
+			}
+			found[strings.ToUpper(name)] = true
+		}
 		actionlint.VisitExprNode(root, func(n, parent actionlint.ExprNode, entering bool) {
 			v, isVar := n.(*actionlint.VariableNode)
 			if !entering || !isVar || !strings.EqualFold(v.Name, "secrets") {
@@ -71,10 +87,10 @@ func secretsOfExpressions(s string, found map[string]bool) (dynamic bool) {
 			}
 			switch p := parent.(type) {
 			case *actionlint.ObjectDerefNode:
-				found[strings.ToUpper(p.Property)] = true
+				addName(p.Property)
 			case *actionlint.IndexAccessNode:
 				if lit, ok := p.Index.(*actionlint.StringNode); ok && p.Operand == n {
-					found[strings.ToUpper(lit.Value)] = true
+					addName(lit.Value)
 					return
 				}
 				dynamic = true

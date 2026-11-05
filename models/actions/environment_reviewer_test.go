@@ -22,9 +22,12 @@ func TestReplaceEnvironmentReviewers(t *testing.T) {
 	e := &ActionEnvironment{RepoID: 1, Name: "prod"}
 	require.NoError(t, CreateEnvironment(ctx, e))
 
-	has, err := HasEnvironmentReviewers(ctx, e.ID)
-	require.NoError(t, err)
-	assert.False(t, has)
+	required := func() bool {
+		stored, err := GetRepoEnvironmentByID(ctx, e.RepoID, e.ID)
+		require.NoError(t, err)
+		return stored.ReviewsRequired
+	}
+	assert.False(t, required())
 
 	users := func(ids ...int64) []ActionEnvironmentReviewer {
 		var rs []ActionEnvironmentReviewer
@@ -37,9 +40,7 @@ func TestReplaceEnvironmentReviewers(t *testing.T) {
 	rs, err := FindEnvironmentReviewers(ctx, e.ID)
 	require.NoError(t, err)
 	assert.Len(t, rs, 3)
-	has, err = HasEnvironmentReviewers(ctx, e.ID)
-	require.NoError(t, err)
-	assert.True(t, has)
+	assert.True(t, required())
 
 	for name, list := range map[string][]ActionEnvironmentReviewer{
 		"seven":         users(1, 2, 3, 4, 5, 6, 7),
@@ -57,9 +58,7 @@ func TestReplaceEnvironmentReviewers(t *testing.T) {
 	assert.Len(t, rs, 3, "a refused list changes nothing")
 
 	require.NoError(t, ReplaceEnvironmentReviewers(ctx, e, nil), "no reviewers")
-	has, err = HasEnvironmentReviewers(ctx, e.ID)
-	require.NoError(t, err)
-	assert.False(t, has)
+	assert.False(t, required())
 
 	gone := &ActionEnvironment{ID: 9999, RepoID: 1}
 	require.ErrorIs(t, ReplaceEnvironmentReviewers(ctx, gone, users(1)), ErrEnvironmentNotFound)

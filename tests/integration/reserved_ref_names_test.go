@@ -32,6 +32,9 @@ func TestReservedRefNames(t *testing.T) {
 			MakeRequest(t, NewRequestWithJSON(t, "POST", base+"/branches", &api.CreateBranchRepoOption{BranchName: name, OldBranchName: "master"}).AddTokenAuth(token), http.StatusUnprocessableEntity)
 			MakeRequest(t, NewRequestWithJSON(t, "POST", base+"/tags", &api.CreateTagOption{TagName: name, Target: "master"}).AddTokenAuth(token), http.StatusUnprocessableEntity)
 		}
+		for _, name := range []string{"HEAD", "refs/tags/x"} {
+			MakeRequest(t, NewRequestWithJSON(t, "POST", base+"/releases", &api.CreateReleaseOption{TagName: name, Target: "master", Title: "t"}).AddTokenAuth(token), http.StatusUnprocessableEntity)
+		}
 		MakeRequest(t, NewRequestWithJSON(t, "POST", base+"/branches", &api.CreateBranchRepoOption{BranchName: "heads-ok", OldBranchName: "master"}).AddTokenAuth(token), http.StatusCreated)
 		MakeRequest(t, NewRequestWithJSON(t, "POST", base+"/tags", &api.CreateTagOption{TagName: "tag-ok", Target: "master"}).AddTokenAuth(token), http.StatusCreated)
 

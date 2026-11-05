@@ -63,12 +63,13 @@ func readRawJobs(content []byte) (map[string]rawJob, error) {
 	return raw.Jobs, nil
 }
 
-// NamesEnvironment tells if any job of the workflow file names an environment. A file that can't be read names none:
-// whoever runs it fails on it anyway.
+// NamesEnvironment tells if any job of the workflow file names an environment, or calls another workflow (which this
+// doesn't follow: that one could name one). A file that can't be read names none: whoever runs it fails on it anyway.
 func NamesEnvironment(content []byte) bool {
 	var raw struct {
 		Jobs map[string]struct {
 			Environment yaml.Node `yaml:"environment"`
+			Uses        string    `yaml:"uses"`
 		} `yaml:"jobs"`
 	}
 	if yaml.Unmarshal(content, &raw) != nil {
@@ -76,6 +77,9 @@ func NamesEnvironment(content []byte) bool {
 	}
 	for _, job := range raw.Jobs {
 		if !job.Environment.IsZero() && job.Environment.ShortTag() != "!!null" { // a null value names none, as for readRawJobs
+			return true
+		}
+		if job.Uses != "" {
 			return true
 		}
 	}

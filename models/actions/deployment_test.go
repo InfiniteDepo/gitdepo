@@ -122,7 +122,7 @@ func TestDeploymentReviewStates(t *testing.T) {
 	other := insert(792, 193, DeploymentWaitingReview)
 	insert(791, 194, DeploymentWaitingReview) // its job isn't blocked: not reviewable
 
-	ds, err := FindReviewableDeployments(ctx, 791)
+	ds, err := FindReviewableDeployments(ctx, 791, now-1000)
 	require.NoError(t, err)
 	require.Len(t, ds, 1)
 	assert.Equal(t, waiting.ID, ds[0].ID)
@@ -132,11 +132,11 @@ func TestDeploymentReviewStates(t *testing.T) {
 
 	// only a waiting deployment takes a review, and only once
 	waiting.Status, waiting.ReviewedBy, waiting.ReviewedUnix, waiting.ReviewComment = DeploymentWaitingTimer, 2, now, "ok"
-	moved, err := ReviewDeployment(ctx, waiting)
+	moved, err := ReviewDeployment(ctx, waiting, now-1000)
 	require.NoError(t, err)
 	assert.True(t, moved)
 	waiting.Status, waiting.ReviewedBy = DeploymentRejected, 3
-	moved, err = ReviewDeployment(ctx, waiting)
+	moved, err = ReviewDeployment(ctx, waiting, now-1000)
 	require.NoError(t, err)
 	assert.False(t, moved, "no longer waiting for a review")
 	got, err := GetDeployment(ctx, 192, 3)
@@ -144,6 +144,13 @@ func TestDeploymentReviewStates(t *testing.T) {
 	assert.Equal(t, DeploymentWaitingTimer, got.Status)
 	assert.EqualValues(t, 2, got.ReviewedBy)
 	assert.Equal(t, "ok", got.ReviewComment)
+
+	// a review after the cutoff is refused
+	late := insert(791, 195, DeploymentWaitingReview)
+	late.Status = DeploymentWaitingTimer
+	moved, err = ReviewDeployment(ctx, late, now+1000)
+	require.NoError(t, err)
+	assert.False(t, moved, "too late")
 
 	// expiry: the oldest first, bounded, only deployments waiting for a review
 	_, err = db.GetEngine(ctx).Exec("UPDATE action_deployment SET created = ? WHERE id = ?", now-100, other.ID)

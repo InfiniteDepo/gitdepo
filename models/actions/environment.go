@@ -12,6 +12,7 @@ import (
 	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
+	secret_model "forgejo.org/models/secret"
 	"forgejo.org/modules/json"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/timeutil"
@@ -70,8 +71,12 @@ type ActionEnvironment struct {
 	PreventSelfReview bool                    `xorm:"NOT NULL DEFAULT false"` // the run's triggering user can't review its deployment
 	RunnerLabels      []string                `xorm:"JSON TEXT"`              // appended to the runs-on of the jobs that deploy here
 	AllowedWorkflows  []string                `xorm:"JSON TEXT"`              // patterns over the workflow file name, empty = any workflow
-	Created           timeutil.TimeStamp      `xorm:"created"`
-	Updated           timeutil.TimeStamp      `xorm:"updated"`
+	// ReviewsRequired is the rule that a deployment needs a reviewer's approval. Only an edit of the reviewers sets or
+	// clears it, never the deletion of a listed user or team: an environment whose reviewers all vanished that way
+	// keeps holding its deployments (nobody can approve) until someone edits its rules, which is audited.
+	ReviewsRequired bool               `xorm:"NOT NULL DEFAULT false"`
+	Created         timeutil.TimeStamp `xorm:"created"`
+	Updated         timeutil.TimeStamp `xorm:"updated"`
 }
 
 func init() {
@@ -115,7 +120,8 @@ func (e *ActionEnvironment) Normalize() error {
 	e.Name = strings.Trim(e.Name, " ")
 	lower, ok := lowerName(e.Name)
 	e.LowerName = lower
-	if !ok || len(e.Name) > MaxEnvironmentName {
+	// ":" delimits the environment in the subject of an ID token (`...:environment:<name>`), so neither it nor a space is allowed
+	if !ok || len(e.Name) > MaxEnvironmentName || strings.ContainsAny(e.Name, ": ") {
 		return util.NewInvalidArgumentErrorf("invalid environment name")
 	}
 	if e.RefPolicy < EnvironmentRefAny || e.RefPolicy > EnvironmentRefPatterns {
@@ -366,6 +372,9 @@ func UpdateEnvironment(ctx context.Context, e *ActionEnvironment) error {
 		return err
 	}
 	return db.WithTx(ctx, func(ctx context.Context) error {
+		if err := LockEnvironment(ctx, e.RepoID, e.ID); err != nil {
+			return err
+		}
 		stored, err := GetRepoEnvironmentByID(ctx, e.RepoID, e.ID)
 		if err != nil {
 			return err
@@ -388,11 +397,13 @@ func UpdateEnvironment(ctx context.Context, e *ActionEnvironment) error {
 // and returns ErrEnvironmentNotFound if it is gone. Every insert of a secret or variable of an environment and its delete
 // take it first, so a concurrent delete can't leave rows of a deleted environment behind. Call it inside a transaction.
 func LockEnvironment(ctx context.Context, repoID, id int64) error {
-	if _, err := db.Exec(ctx, "UPDATE `action_environment` SET repo_id = repo_id WHERE repo_id = ? AND id = ?", repoID, id); err != nil {
+	if err := secret_model.LockEnvironment(ctx, repoID, id); err != nil {
+		if errors.Is(err, util.ErrNotExist) {
+			return ErrEnvironmentNotFound
+		}
 		return err
 	}
-	_, err := GetRepoEnvironmentByID(ctx, repoID, id)
-	return err
+	return nil
 }
 
 // DeleteEnvironment deletes the environment with its secrets and variables and records it. Its deployments stay as
@@ -413,6 +424,10 @@ func DeleteEnvironment(ctx context.Context, e *ActionEnvironment, failUnpickedJo
 		if err != nil {
 			return err
 		}
+		reviewers, err := FindEnvironmentReviewers(ctx, stored.ID)
+		if err != nil {
+			return err
+		}
 		eng := db.GetEngine(ctx)
 		if _, err := eng.Where("environment_id = ?", stored.ID).Delete(new(ActionEnvironmentReviewer)); err != nil {
 			return err
@@ -427,6 +442,7 @@ func DeleteEnvironment(ctx context.Context, e *ActionEnvironment, failUnpickedJo
 		}
 		// the entry keeps the rules that were removed, and how many secrets and variables (never their values)
 		data := stored.auditData()
+		data["reviewers"] = reviewerKeys(reviewers)
 		data["counts"] = map[string]int64{"secrets": secrets, "variables": variables}
 		if err := recordEnvironment(ctx, audit_model.LevelActions{Repo: "repo.actions_env.deleted"}, stored, data); err != nil {
 			return err

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	actions_model "forgejo.org/models/actions"
@@ -34,12 +35,16 @@ var (
 const maxExpiredPerTick = 100
 
 // reviewComment returns comment as stored: line breaks as "\n". It must be valid UTF-8 of at most
-// actions_model.MaxReviewComment bytes without control characters except newline and tab, and a rejection needs one.
-// The comment is plain text; no page of this feature renders it as HTML.
+// actions_model.MaxReviewComment bytes, and hold no control character except newline and tab (C0, DEL and C1), no
+// format character (bidi overrides and isolates, zero-width characters) and no line or paragraph separator: a reason
+// can't be made to read differently from what was written. A rejection needs one. The comment is plain text; no page of
+// this feature renders it as HTML.
 func reviewComment(comment string, approve bool) (string, error) {
 	comment = strings.TrimSpace(strings.ReplaceAll(comment, "\r\n", "\n"))
 	if len(comment) > actions_model.MaxReviewComment || !utf8.ValidString(comment) ||
-		strings.ContainsFunc(comment, func(r rune) bool { return (r < 0x20 && r != '\n' && r != '\t') || r == 0x7f }) {
+		strings.ContainsFunc(comment, func(r rune) bool {
+			return (unicode.IsControl(r) && r != '\n' && r != '\t') || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
+		}) {
 		return "", util.NewInvalidArgumentErrorf("invalid review comment")
 	}
 	if !approve && comment == "" {
@@ -48,54 +53,156 @@ func reviewComment(comment string, approve bool) (string, error) {
 	return comment, nil
 }
 
-// mayReview decides if doer may review the deployment d of environment env at this moment. Nobody is exempt, site
-// administrators included: whoever is not a listed reviewer edits the rules of the environment, which is audited.
-func mayReview(ctx context.Context, doer *user_model.User, run *actions_model.ActionRun, d *actions_model.ActionDeployment, env *actions_model.ActionEnvironment, reviewers []*actions_model.ActionEnvironmentReviewer) (bool, error) {
-	repo := run.Repo
-	if doer == nil || doer.ID <= 0 || doer.IsActions() || doer.IsAccessTokenBot() || doer.IsOrganization() || !doer.IsActive || doer.ProhibitLogin {
-		return false, nil
-	}
-	// the one who triggered the run, and the one who triggered this attempt (a rerun may differ)
-	if env.PreventSelfReview && (doer.ID == run.TriggerUserID || doer.ID == d.TriggerUserID) {
-		return false, nil
-	}
-	if blocked, err := doer.TwoFactorBlocked(ctx, repo.Owner); err != nil || blocked {
-		return false, err
-	}
-	perm, err := access_model.GetUserRepoPermission(ctx, repo, doer)
-	if err != nil || !perm.CanRead(unit.TypeActions) {
-		return false, err
-	}
-	for _, r := range reviewers {
-		if r.UserID == doer.ID {
-			return true, nil
-		}
-		if r.TeamID > 0 { // read now, and only a team of the organization that owns the repository counts
-			if member, err := org_model.IsTeamMember(ctx, repo.OwnerID, r.TeamID, doer.ID); err != nil || member {
-				return member, err
-			}
-		}
-	}
-	return false, nil
+// ReviewCutoff is the creation time before which a deployment waiting for a review has waited too long: it is expired,
+// by the gate or the expiry task, and can no longer be approved.
+func ReviewCutoff() timeutil.TimeStamp {
+	return timeutil.TimeStampNow().Add(-int64(setting.Actions.DeploymentApprovalTimeout.Seconds()))
 }
 
-// ReviewDeployments approves or rejects the deployments of run that wait for a review: those of jobIDs, or every one
-// the doer may review when jobIDs is empty. One approval releases a job (when its wait timer is due too), one
-// rejection fails it. Nothing changes unless every deployment can be reviewed: a job that doesn't wait any more
-// (another reviewer, the expiry or a cancel came first) is ErrReviewNotWaiting, a deployment the doer may not review
-// is ErrReviewForbidden.
-func ReviewDeployments(ctx context.Context, doer *user_model.User, run *actions_model.ActionRun, jobIDs []int64, approve bool, comment string) ([]*actions_model.ActionDeployment, error) {
-	comment, err := reviewComment(comment, approve)
-	if err != nil {
-		return nil, err
-	}
+// reviewEnvironment is an environment of the run with its reviewers and whether the doer is one of them.
+type reviewEnvironment struct {
+	env       *actions_model.ActionEnvironment // nil if the environment is deleted
+	reviewers []*actions_model.ActionEnvironmentReviewer
+	listed    *bool
+}
+
+// ReviewChecker is the one decision of who may review the deployments of one run: ReviewDeployments and the list of
+// deployments (can_review) use it, and it loads what it needs once per run, doer and environment.
+// Nobody is exempt, site administrators included: whoever is not a listed reviewer edits the rules of the
+// environment, which is audited.
+type ReviewChecker struct {
+	run    *actions_model.ActionRun
+	doer   *user_model.User
+	doerOK *bool
+	envs   map[int64]*reviewEnvironment
+}
+
+// NewReviewChecker returns the checker of doer for the run; it loads the repository and its owner.
+func NewReviewChecker(ctx context.Context, doer *user_model.User, run *actions_model.ActionRun) (*ReviewChecker, error) {
 	if err := run.LoadRepo(ctx); err != nil {
 		return nil, err
 	}
 	if err := run.Repo.LoadOwner(ctx); err != nil {
 		return nil, err
 	}
-	waiting, err := actions_model.FindReviewableDeployments(ctx, run.ID)
+	return &ReviewChecker{run: run, doer: doer, envs: map[int64]*reviewEnvironment{}}, nil
+}
+
+// Environment returns the environment with its reviewers; the environment is nil if it is deleted.
+func (c *ReviewChecker) Environment(ctx context.Context, id int64) (*actions_model.ActionEnvironment, []*actions_model.ActionEnvironmentReviewer, error) {
+	e, err := c.environment(ctx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	return e.env, e.reviewers, nil
+}
+
+func (c *ReviewChecker) environment(ctx context.Context, id int64) (*reviewEnvironment, error) {
+	if e, ok := c.envs[id]; ok {
+		return e, nil
+	}
+	e := &reviewEnvironment{}
+	env, err := actions_model.GetRepoEnvironmentByID(ctx, c.run.RepoID, id)
+	if err != nil && !errors.Is(err, actions_model.ErrEnvironmentNotFound) {
+		return nil, err
+	}
+	if e.env = env; env != nil {
+		if e.reviewers, err = actions_model.FindEnvironmentReviewers(ctx, env.ID); err != nil {
+			return nil, err
+		}
+	}
+	c.envs[id] = e
+	return e, nil
+}
+
+// doerMayAct checks what holds for every deployment of the run: the doer is a usable person with read access to the
+// repository's Actions.
+func (c *ReviewChecker) doerMayAct(ctx context.Context) (bool, error) {
+	if c.doerOK != nil {
+		return *c.doerOK, nil
+	}
+	ok := false
+	doer, repo := c.doer, c.run.Repo
+	if doer != nil && doer.ID > 0 && !doer.IsActions() && !doer.IsAccessTokenBot() && !doer.IsOrganization() && doer.IsActive && !doer.ProhibitLogin {
+		blocked, err := doer.TwoFactorBlocked(ctx, repo.Owner)
+		if err != nil {
+			return false, err
+		}
+		if !blocked {
+			perm, err := access_model.GetUserRepoPermission(ctx, repo, doer)
+			if err != nil {
+				return false, err
+			}
+			ok = perm.CanRead(unit.TypeActions)
+		}
+	}
+	c.doerOK = &ok
+	return ok, nil
+}
+
+// May decides if the doer may review the deployment d at this moment (its status is not looked at): a listed user, or a
+// member of a listed team (read now; only a team of the organization that owns the repository counts), who can read
+// the repository's Actions. With the environment's PreventSelfReview, the run's trigger user and the user who started
+// this attempt (a rerun) can't review.
+func (c *ReviewChecker) May(ctx context.Context, d *actions_model.ActionDeployment) (bool, error) {
+	if ok, err := c.doerMayAct(ctx); err != nil || !ok {
+		return false, err
+	}
+	e, err := c.environment(ctx, d.EnvironmentID)
+	if err != nil || e.env == nil {
+		return false, err
+	}
+	if e.env.PreventSelfReview && (c.doer.ID == c.run.TriggerUserID || c.doer.ID == d.TriggerUserID) {
+		return false, nil
+	}
+	if e.listed == nil {
+		listed := false
+		for _, r := range e.reviewers {
+			if r.UserID == c.doer.ID {
+				listed = true
+			} else if r.TeamID > 0 {
+				if listed, err = org_model.IsTeamMember(ctx, c.run.Repo.OwnerID, r.TeamID, c.doer.ID); err != nil {
+					return false, err
+				}
+			}
+			if listed {
+				break
+			}
+		}
+		e.listed = &listed
+	}
+	return *e.listed, nil
+}
+
+// notWaiting lets the gate look at the run (it expires a review that waited too long) and answers that the
+// deployment doesn't wait for a review any more.
+func notWaiting(runID int64) error {
+	if err := EmitJobsIfReady(runID); err != nil {
+		log.Error("EmitJobsIfReady for run %d after a review that found nothing waiting: %v", runID, err)
+	}
+	return ErrReviewNotWaiting
+}
+
+// ReviewDeployments approves or rejects the deployments of run that wait for a review: those of jobIDs, or every one
+// the doer may review when jobIDs is empty. One approval releases a job (when its wait timer is due too), one
+// rejection fails it. Nothing changes unless every deployment can be reviewed: a job that doesn't wait any more
+// (another reviewer, the expiry or a cancel came first, or it waited longer than the timeout) is ErrReviewNotWaiting,
+// a deployment the doer may not review is ErrReviewForbidden. A review made under sudo is refused: a decision about
+// a deployment is its reviewer's own, so there is no way for an administrator to give it in somebody's name.
+func ReviewDeployments(ctx context.Context, doer *user_model.User, run *actions_model.ActionRun, jobIDs []int64, approve bool, comment string) ([]*actions_model.ActionDeployment, error) {
+	if actor := audit_model.ActorFromContext(ctx); actor != nil && actor.SudoByID != 0 {
+		return nil, ErrReviewForbidden
+	}
+	comment, err := reviewComment(comment, approve)
+	if err != nil {
+		return nil, err
+	}
+	checker, err := NewReviewChecker(ctx, doer, run)
+	if err != nil {
+		return nil, err
+	}
+	cutoff := ReviewCutoff()
+	waiting, err := actions_model.FindReviewableDeployments(ctx, run.ID, cutoff)
 	if err != nil {
 		return nil, err
 	}
@@ -109,29 +216,17 @@ func ReviewDeployments(ctx context.Context, doer *user_model.User, run *actions_
 				return nil, util.NewInvalidArgumentErrorf("job %d is not a job of the run", id)
 			}
 			if !slices.ContainsFunc(waiting, func(d *actions_model.ActionDeployment) bool { return d.JobID == id }) {
-				return nil, ErrReviewNotWaiting
+				return nil, notWaiting(run.ID)
 			}
 		}
 		waiting = slices.DeleteFunc(waiting, func(d *actions_model.ActionDeployment) bool { return !slices.Contains(jobIDs, d.JobID) })
 	} else if len(waiting) == 0 {
-		return nil, ErrReviewNotWaiting
+		return nil, notWaiting(run.ID)
 	}
 
 	var selected []*actions_model.ActionDeployment
-	envs := map[int64]*actions_model.ActionEnvironment{}
 	for _, d := range waiting {
-		env, ok := envs[d.EnvironmentID]
-		if !ok {
-			if env, err = actions_model.GetRepoEnvironmentByID(ctx, run.RepoID, d.EnvironmentID); err != nil {
-				return nil, err
-			}
-			envs[d.EnvironmentID] = env
-		}
-		reviewers, err := actions_model.FindEnvironmentReviewers(ctx, env.ID)
-		if err != nil {
-			return nil, err
-		}
-		if ok, err := mayReview(ctx, doer, run, d, env, reviewers); err != nil {
+		if ok, err := checker.May(ctx, d); err != nil {
 			return nil, err
 		} else if ok {
 			selected = append(selected, d)
@@ -152,7 +247,7 @@ func ReviewDeployments(ctx context.Context, doer *user_model.User, run *actions_
 	if err := db.WithTx(ctx, func(ctx context.Context) error {
 		for _, d := range selected {
 			d.Status, d.ReviewedBy, d.ReviewedUnix, d.ReviewComment = to, doer.ID, now, comment
-			if moved, err := actions_model.ReviewDeployment(ctx, d); err != nil {
+			if moved, err := actions_model.ReviewDeployment(ctx, d, cutoff); err != nil {
 				return err
 			} else if !moved {
 				return ErrReviewNotWaiting
@@ -160,7 +255,11 @@ func ReviewDeployments(ctx context.Context, doer *user_model.User, run *actions_
 			// every change is recorded in its transaction; the comment is not (its length only)
 			ev := audit_model.Event{Result: audit_model.ResultSuccess}
 			ev.Action = action
-			if err := recordDeploymentReview(ctx, run.Repo, envs[d.EnvironmentID], d, ev, len(comment)); err != nil {
+			env, _, err := checker.Environment(ctx, d.EnvironmentID)
+			if err != nil {
+				return err
+			}
+			if err := recordDeploymentReview(ctx, run.Repo, env, d, ev, len(comment)); err != nil {
 				return err
 			}
 		}
@@ -197,13 +296,14 @@ func recordDeploymentReview(ctx context.Context, repo *repo_model.Repository, en
 
 // ExpireDeploymentReviews fails the deployments that waited longer than [actions] DEPLOYMENT_APPROVAL_TIMEOUT for a
 // review, whatever their wait timer says; the gate fails their jobs. It holds nothing between runs: the deployment moves with
-// a conditional update, so two servers can run it.
+// a conditional update, so two servers can run it. The gate and the review itself enforce the same timeout, so this
+// task only makes sure that nothing stays waiting when nobody looks at the run. A deployment that can't be processed
+// goes to the back of the line, so it can't block the others.
 func ExpireDeploymentReviews(ctx context.Context) error {
 	if audit_model.ActorFromContext(ctx) == nil {
 		ctx = audit_model.WithSystem(ctx, "actions")
 	}
-	cutoff := timeutil.TimeStampNow().Add(-int64(setting.Actions.DeploymentApprovalTimeout.Seconds()))
-	expired, err := actions_model.FindExpiredReviews(ctx, cutoff, maxExpiredPerTick)
+	expired, err := actions_model.FindExpiredReviews(ctx, ReviewCutoff(), maxExpiredPerTick)
 	if err != nil {
 		return err
 	}
@@ -211,6 +311,9 @@ func ExpireDeploymentReviews(ctx context.Context) error {
 	for _, d := range expired {
 		if err := expireDeployment(ctx, d); err != nil {
 			log.Error("expire the review of deployment %d: %v", d.ID, err)
+			if err := actions_model.TouchDeployment(ctx, d.ID, timeutil.TimeStampNow()); err != nil {
+				log.Error("TouchDeployment %d: %v", d.ID, err)
+			}
 			continue
 		}
 		runs[d.RunID] = true
@@ -224,7 +327,7 @@ func ExpireDeploymentReviews(ctx context.Context) error {
 }
 
 func expireDeployment(ctx context.Context, d *actions_model.ActionDeployment) error {
-	repo, err := repo_model.GetRepositoryByID(ctx, d.RepoID)
+	repo, err := repo_model.GetRepositoryByIDIncludingTrashed(ctx, d.RepoID) // only the audit scope is needed
 	if err != nil {
 		return err
 	}
@@ -239,26 +342,4 @@ func expireDeployment(ctx context.Context, d *actions_model.ActionDeployment) er
 		}
 		return recordDeploymentReview(ctx, repo, env, d, audit_model.Event{Action: "repo.actions_deployment.expired", Result: audit_model.ResultFailure}, 0)
 	})
-}
-
-// CanReviewDeployment tells if doer may review the deployment d of run now (it must wait for a review).
-func CanReviewDeployment(ctx context.Context, doer *user_model.User, run *actions_model.ActionRun, d *actions_model.ActionDeployment) (bool, error) {
-	if d.Status != actions_model.DeploymentWaitingReview {
-		return false, nil
-	}
-	if err := run.LoadRepo(ctx); err != nil {
-		return false, err
-	}
-	if err := run.Repo.LoadOwner(ctx); err != nil {
-		return false, err
-	}
-	env, err := actions_model.GetRepoEnvironmentByID(ctx, run.RepoID, d.EnvironmentID)
-	if err != nil {
-		return false, err
-	}
-	reviewers, err := actions_model.FindEnvironmentReviewers(ctx, env.ID)
-	if err != nil {
-		return false, err
-	}
-	return mayReview(ctx, doer, run, d, env, reviewers)
 }

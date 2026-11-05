@@ -511,13 +511,17 @@ func DeleteTeam(ctx context.Context, t *organization.Team) error {
 		return err
 	}
 
+	// an environment that loses its last reviewer this way keeps requiring reviews (its change of rules is recorded)
+	if err := actions_model.RemoveReviewers(ctx, actions_model.TeamReviewerCond(t.ID)); err != nil {
+		return err
+	}
+
 	if err := db.DeleteBeans(ctx,
 		&organization.Team{ID: t.ID},
 		&organization.TeamUser{OrgID: t.OrgID, TeamID: t.ID},
 		&organization.TeamUnit{TeamID: t.ID},
 		&organization.TeamInvite{TeamID: t.ID},
 		&organization.UserGroupTeam{TeamID: t.ID},
-		&actions_model.ActionEnvironmentReviewer{TeamID: t.ID},
 		&issues_model.Review{Type: issues_model.ReviewTypeRequest, ReviewerTeamID: t.ID}, // batch delete the binding relationship between team and PR (request review from team)
 	); err != nil {
 		return err

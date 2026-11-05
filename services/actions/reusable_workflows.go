@@ -30,10 +30,11 @@ func expandForJob(job *jobparser.Job) bool {
 }
 
 // ErrUnexpandedEnvironment is the refusal of a call that the server doesn't expand, but whose called workflow names an
-// environment: the runner would run it as one job and nothing would stand behind the environment, so the run fails.
+// environment or calls another workflow (not followed: it could name one): the runner would run it as one job and
+// nothing would stand behind the environment, so the run fails.
 // This holds for the calls the server can read (local, and on this instance when public); a call to an external https
 // workflow can't be read, so an environment inside it is not gated, and it gets no environment secrets (known limitation).
-var ErrUnexpandedEnvironment = util.NewInvalidArgumentErrorf("the called workflow names an environment: remove runs-on from the job that calls it, so that it is expanded")
+var ErrUnexpandedEnvironment = util.NewInvalidArgumentErrorf("the called workflow names an environment or calls another workflow: remove runs-on from the job that calls it, so that it is expanded")
 
 // unexpandedCall is what a fetcher answers for a call that is not expanded: nothing to expand, except when the called
 // file names an environment. A file that can't be read is no reason to refuse (that call ran before as it does now).

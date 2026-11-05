@@ -28,6 +28,7 @@ func (v18zzqActionEnvironmentReviewer) TableName() string {
 type v18zzqActionEnvironment struct {
 	ID               int64  `xorm:"pk autoincr"`
 	AllowedWorkflows string `xorm:"JSON TEXT"`
+	ReviewsRequired  bool   `xorm:"NOT NULL DEFAULT false"`
 }
 
 func (v18zzqActionEnvironment) TableName() string {
@@ -45,8 +46,17 @@ func (v18zzqActionDeployment) TableName() string {
 	return "action_deployment"
 }
 
+type v18zzqActionRunJob struct {
+	ID                   int64 `xorm:"pk autoincr"`
+	AttemptTriggerUserID int64 `xorm:"NOT NULL DEFAULT 0"`
+}
+
+func (v18zzqActionRunJob) TableName() string {
+	return "action_run_job"
+}
+
 func addActionsEnvironmentReviewers(x *xorm.Engine) error {
 	_, err := x.SyncWithOptions(xorm.SyncOptions{IgnoreDropIndices: true},
-		new(v18zzqActionEnvironmentReviewer), new(v18zzqActionEnvironment), new(v18zzqActionDeployment))
+		new(v18zzqActionEnvironmentReviewer), new(v18zzqActionEnvironment), new(v18zzqActionDeployment), new(v18zzqActionRunJob))
 	return err
 }

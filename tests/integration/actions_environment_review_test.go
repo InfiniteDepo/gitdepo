@@ -169,9 +169,8 @@ func TestActionsEnvironmentReviews(t *testing.T) {
 
 			// nobody else may: not the owner, not a site administrator, not a reader who isn't listed, not a stranger
 			since := auditNow()
-			for name, token := range map[string]string{"owner": ownerToken, "site administrator": adminToken} {
+			for _, token := range []string{ownerToken, adminToken} {
 				review(token, run, api.ReviewDeploymentsOption{State: "approved"}, http.StatusForbidden)
-				_ = name
 			}
 			review(strangerToken, run, api.ReviewDeploymentsOption{State: "approved"}, http.StatusNotFound)
 			assert.Equal(t, actions_model.DeploymentWaitingReview, deployment(job, 1).Status)
@@ -286,6 +285,38 @@ func TestActionsEnvironmentReviews(t *testing.T) {
 			runner.execTask(t, runner.fetchTask(t), &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
 		})
 
+		t.Run("a review under sudo is refused", func(t *testing.T) {
+			newEnv("sudo-rv", []int64{user4.ID}, nil)
+			run, job := pushJob("", "rv-f", "    environment: sudo-rv\n", "echo")
+			since := auditNow()
+			review(adminToken, run, api.ReviewDeploymentsOption{State: "approved"}, http.StatusForbidden)
+			MakeRequest(t, NewRequestWithJSON(t, "POST", fmt.Sprintf("%s/%d/deployments/review?sudo=%s", basePath, run.ID, user4.Name),
+				api.ReviewDeploymentsOption{State: "approved"}).AddTokenAuth(adminToken), http.StatusForbidden)
+			MakeRequest(t, NewRequestWithJSON(t, "POST", fmt.Sprintf("%s/%d/deployments/review", basePath, run.ID),
+				api.ReviewDeploymentsOption{State: "approved"}).AddTokenAuth(adminToken).SetHeader("Sudo", user4.Name), http.StatusForbidden)
+			assert.Equal(t, actions_model.DeploymentWaitingReview, deployment(job, 1).Status)
+			assert.Zero(t, auditCount(since, "repo.actions_deployment.approved"))
+			review(reviewerToken, run, api.ReviewDeploymentsOption{State: "approved"}, http.StatusOK)
+			runner.execTask(t, runner.fetchTask(t), &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
+		})
+
+		t.Run("who reran an attempt can't approve it under the self-review rule", func(t *testing.T) {
+			newEnv("rerun-self", []int64{user2.ID, user4.ID}, func(e *actions_model.ActionEnvironment) { e.PreventSelfReview = true })
+			run, job := pushJob("", "rv-f", "    environment: rerun-self\n", "echo")
+			review(reviewerToken, run, api.ReviewDeploymentsOption{State: "approved"}, http.StatusOK)
+			runner.execTask(t, runner.fetchTask(t), &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
+			run = unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRun{ID: run.ID})
+			_, err := actions_service.RerunAllJobs(ctx, user4, run)
+			require.NoError(t, err)
+			job = reload(job)
+			assert.Equal(t, user4.ID, job.AttemptTriggerUserID)
+			assert.Equal(t, user4.ID, deployment(job, 2).TriggerUserID)
+			review(reviewerToken, run, api.ReviewDeploymentsOption{State: "approved"}, http.StatusForbidden)
+			review(ownerToken, run, api.ReviewDeploymentsOption{State: "approved"}, http.StatusForbidden) // the run's own trigger user
+			assert.Equal(t, actions_model.DeploymentWaitingReview, deployment(job, 2).Status)
+			assert.False(t, list(reviewerToken, run, http.StatusOK)[1].Reviewers.CanReview)
+		})
+
 		t.Run("a rerun needs a new approval", func(t *testing.T) {
 			newEnv("rerun-rv", []int64{user4.ID}, nil)
 			run, job := pushJob("", "rv-f", "    environment: rerun-rv\n", "echo")
@@ -293,7 +324,7 @@ func TestActionsEnvironmentReviews(t *testing.T) {
 			runner.execTask(t, runner.fetchTask(t), &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
 
 			run = unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRun{ID: run.ID})
-			_, err := actions_service.RerunAllJobs(ctx, run)
+			_, err := actions_service.RerunAllJobs(ctx, nil, run)
 			require.NoError(t, err)
 			job = reload(job)
 			require.Equal(t, int64(2), job.Attempt)
@@ -484,7 +515,7 @@ jobs:
 			assert.Nil(t, runner.maybeFetchTask(t))
 		})
 
-		t.Run("reviewers go with their user, team and environment", func(t *testing.T) {
+		t.Run("reviewers go with their user and their environment", func(t *testing.T) {
 			var cleanupEnvID int64
 			count := func() int64 {
 				n, err := db.GetEngine(t.Context()).Where("environment_id = ?", cleanupEnvID).Count(new(actions_model.ActionEnvironmentReviewer))

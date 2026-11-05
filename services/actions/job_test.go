@@ -237,7 +237,7 @@ func TestInitiateNextJobAttempt(t *testing.T) {
 
 	unittest.AssertSuccessfulInsert(t, run, job)
 
-	require.NoError(t, InitiateNextJobAttempt(t.Context(), job, actions_model.StatusBlocked))
+	require.NoError(t, InitiateNextJobAttempt(t.Context(), job, actions_model.StatusBlocked, 0))
 
 	job = unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRunJob{ID: job.ID})
 

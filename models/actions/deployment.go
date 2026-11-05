@@ -128,35 +128,47 @@ func SetDeploymentStatus(ctx context.Context, d *ActionDeployment, from ...Deplo
 }
 
 // ReviewDeployment moves d from DeploymentWaitingReview to its Status with the review it carries, and reports if it
-// was waiting (another reviewer, or the expiry, may have decided first).
-func ReviewDeployment(ctx context.Context, d *ActionDeployment) (bool, error) {
-	n, err := db.GetEngine(ctx).Where("id = ? AND status = ?", d.ID, DeploymentWaitingReview).
+// was waiting (another reviewer, or the expiry, may have decided first). A deployment created at or before cutoff has
+// waited too long: it can't be reviewed any more, whether or not the expiry ran yet.
+func ReviewDeployment(ctx context.Context, d *ActionDeployment, cutoff timeutil.TimeStamp) (bool, error) {
+	n, err := db.GetEngine(ctx).Where("id = ? AND status = ? AND created > ?", d.ID, DeploymentWaitingReview, cutoff).
 		Cols("status", "reviewed_by", "reviewed_unix", "review_comment").Update(d)
 	return n == 1, err
 }
 
-// FindExpiredReviews returns at most limit deployments that have waited for a review since before the cutoff, oldest first.
+// FindExpiredReviews returns at most limit deployments that have waited for a review since before the cutoff, the ones
+// looked at longest ago first (TouchDeployments moves one that failed to the back, so none can block the others).
 func FindExpiredReviews(ctx context.Context, cutoff timeutil.TimeStamp, limit int) ([]*ActionDeployment, error) {
 	var ds []*ActionDeployment
 	return ds, db.GetEngine(ctx).Where("status = ? AND created <= ?", DeploymentWaitingReview, cutoff).
-		OrderBy("created, id").Limit(limit).Find(&ds)
+		OrderBy("updated, id").Limit(limit).Find(&ds)
+}
+
+// TouchDeployment sets the update time of the deployment to now.
+func TouchDeployment(ctx context.Context, id int64, now timeutil.TimeStamp) error {
+	_, err := db.GetEngine(ctx).Table("action_deployment").Where("id = ?", id).Update(map[string]any{"updated": now})
+	return err
 }
 
 // FindDueDeploymentRunIDs returns the runs, at most limit, with a blocked job whose deployment waits for a wait timer
-// that ended, the ones looked at longest ago first (TouchDueDeployments moves a run whose pass failed to the back, so
+// that ended, or was rejected or expired and whose job the gate has not failed yet, the ones looked at longest ago first (TouchDueDeployments moves a run whose pass failed to the back, so
 // runs that always fail can't starve the others).
 func FindDueDeploymentRunIDs(ctx context.Context, now timeutil.TimeStamp, limit int) ([]int64, error) {
 	var ids []int64
 	return ids, db.GetEngine(ctx).Table("action_deployment").
 		Join("INNER", "action_run_job", "action_run_job.id = action_deployment.job_id AND action_run_job.attempt = action_deployment.attempt").
-		Where("action_deployment.status = ? AND action_deployment.release_after_unix <= ? AND action_run_job.status = ?", DeploymentWaitingTimer, now, StatusBlocked).
+		Where("action_run_job.status = ?", StatusBlocked).
+		And(builder.Or(
+			builder.And(builder.Eq{"action_deployment.status": DeploymentWaitingTimer}, builder.Lte{"action_deployment.release_after_unix": now}),
+			builder.In("action_deployment.status", DeploymentRejected, DeploymentExpired),
+		)).
 		Select("action_deployment.run_id").GroupBy("action_deployment.run_id").
 		OrderBy("MIN(action_deployment.updated), action_deployment.run_id").Limit(limit).Find(&ids)
 }
 
 // TouchDueDeployments sets the update time of the run's deployments that wait for a timer to now.
 func TouchDueDeployments(ctx context.Context, runID int64, now timeutil.TimeStamp) error {
-	_, err := db.GetEngine(ctx).Table("action_deployment").Where("run_id = ? AND status = ?", runID, DeploymentWaitingTimer).
+	_, err := db.GetEngine(ctx).Table("action_deployment").Where("run_id = ?", runID).And(builder.In("status", DeploymentWaitingTimer, DeploymentRejected, DeploymentExpired)).
 		Update(map[string]any{"updated": now})
 	return err
 }
@@ -183,12 +195,12 @@ func FindUnpickedEnvironmentJobs(ctx context.Context, repoID, environmentID int6
 }
 
 // FindReviewableDeployments returns the deployments of the run that wait for a review: the current attempt of a job that
-// is still blocked.
-func FindReviewableDeployments(ctx context.Context, runID int64) ([]*ActionDeployment, error) {
+// is still blocked, created after cutoff (older ones have expired).
+func FindReviewableDeployments(ctx context.Context, runID int64, cutoff timeutil.TimeStamp) ([]*ActionDeployment, error) {
 	var ds []*ActionDeployment
 	return ds, db.GetEngine(ctx).Table("action_deployment").Select("action_deployment.*").
 		Join("INNER", "action_run_job", "action_run_job.id = action_deployment.job_id AND action_run_job.attempt = action_deployment.attempt").
-		Where("action_deployment.run_id = ? AND action_deployment.status = ? AND action_run_job.status = ?", runID, DeploymentWaitingReview, StatusBlocked).
+		Where("action_deployment.run_id = ? AND action_deployment.status = ? AND action_run_job.status = ? AND action_deployment.created > ?", runID, DeploymentWaitingReview, StatusBlocked, cutoff).
 		OrderBy("action_deployment.job_id").Find(&ds)
 }
 

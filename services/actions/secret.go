@@ -75,15 +75,15 @@ func withEnvironmentSecrets(ctx context.Context, job *actions_model.ActionRunJob
 	if job.EnvironmentName == "" || isForkRun(job.Run) {
 		return secrets, nil
 	}
-	environmentSecrets, err := getEnvironmentSecrets(ctx, job)
-	if err != nil {
-		return nil, err
-	}
 	// Only the environment secrets the job's own payload reads by name: a job that can read secrets another way
 	// (toJSON(secrets), secrets[expr], secrets: inherit) gets none, so a step can't dump a secret it never names.
 	names, dynamic, err := actions_module.ReferencedSecrets(job.WorkflowPayload)
-	if err != nil || dynamic {
+	if err != nil || dynamic || len(names) == 0 {
 		return secrets, nil
+	}
+	environmentSecrets, err := getEnvironmentSecrets(ctx, job)
+	if err != nil {
+		return nil, err
 	}
 	if secrets == nil {
 		secrets = make(map[string]string, len(names))

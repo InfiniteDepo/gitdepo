@@ -234,6 +234,7 @@ func TestNamesEnvironment(t *testing.T) {
 		"map":         {"jobs:\n  a:\n    environment:\n      name: prod\n", true},
 		"in one job":  {"jobs:\n  a:\n    runs-on: x\n  b:\n    environment: prod\n", true},
 		"expression":  {"jobs:\n  a:\n    environment: ${{ inputs.target }}\n", true},
+		"nested call": {"jobs:\n  a:\n    uses: ./b.yml\n", true},
 		"none":        {"jobs:\n  a:\n    runs-on: x\n", false},
 		"in a step":   {"jobs:\n  a:\n    steps:\n      - env:\n          environment: prod\n", false},
 		"top level":   {"environment: prod\njobs:\n  a:\n    runs-on: x\n", false},

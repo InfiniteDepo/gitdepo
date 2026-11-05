@@ -403,8 +403,8 @@ func TestReviewDeployments(t *testing.T) {
 		require.NoError(t, SetEnvironmentReviewers(f.ctx, other, []int64{4}, nil))
 		grantActionsRead(t, 4)
 		// a second blocked job of the same run, gated by "other" (user 4 reviews it, not "prod")
-		_, err := db.GetEngine(t.Context()).Exec("INSERT INTO action_deployment (repo_id, environment_id, run_id, job_id, attempt, status, trigger_user_id) VALUES (63, ?, ?, 601, 1, ?, 2)",
-			other.ID, f.run.ID, actions_model.DeploymentWaitingReview)
+		_, err := db.GetEngine(t.Context()).Exec("INSERT INTO action_deployment (repo_id, environment_id, run_id, job_id, attempt, status, trigger_user_id, created) VALUES (63, ?, ?, 601, 1, ?, 2, ?)",
+			other.ID, f.run.ID, actions_model.DeploymentWaitingReview, timeutil.TimeStampNow())
 		require.NoError(t, err)
 		_, err = db.GetEngine(t.Context()).Exec("UPDATE action_run_job SET status = ?, attempt = 1, run_id = ? WHERE id = 601", actions_model.StatusBlocked, f.run.ID)
 		require.NoError(t, err)
@@ -492,12 +492,11 @@ func TestExpireDeploymentReviews(t *testing.T) {
 
 	t.Run("a deployment decided meanwhile stays decided", func(t *testing.T) {
 		f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{2}, nil)
+		stale := f.deployment(t)
+		_, err := f.review(t, 2, false, "no")
+		require.NoError(t, err)
 		backdate(t, f, timeout+time.Hour)
-		old, err := actions_model.FindExpiredReviews(t.Context(), timeutil.TimeStampNow(), 10)
-		require.NoError(t, err)
-		require.Len(t, old, 1)
-		_, err = f.review(t, 2, false, "no")
-		require.NoError(t, err)
+		old := []*actions_model.ActionDeployment{stale}
 		since := auditSince(t)
 		require.NoError(t, expireDeployment(f.ctx, old[0]), "a stale read of the deployment")
 		assert.Equal(t, actions_model.DeploymentRejected, f.status(t))
@@ -546,6 +545,7 @@ func TestEnvironmentReviewers(t *testing.T) {
 			require.NoError(t, err)
 			return n
 		}
+		teamReadsActions(t, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3}))
 		require.NoError(t, SetEnvironmentReviewers(ctx, env, []int64{4, 5}, []int64{2}))
 		assert.EqualValues(t, 3, count())
 		team, err := org_model.GetTeamByID(ctx, 2)
