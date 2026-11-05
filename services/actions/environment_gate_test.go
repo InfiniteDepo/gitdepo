@@ -19,6 +19,7 @@ import (
 	actions_module "forgejo.org/modules/actions"
 	"forgejo.org/modules/timeutil"
 
+	"code.forgejo.org/forgejo/runner/v13/act/jobparser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -34,6 +35,13 @@ func gateJob(t *testing.T, workflow, ref string) *actions_model.ActionRunJob {
 	t.Helper()
 	sws, err := actions_module.JobParser([]byte(workflow))
 	require.NoError(t, err)
+	return gateSingle(t, sws[0], ref)
+}
+
+// gateSingle is gateJob for one of the single workflows a parse returned.
+func gateSingle(t *testing.T, sw *jobparser.SingleWorkflow, ref string) *actions_model.ActionRunJob {
+	t.Helper()
+	sws := []*jobparser.SingleWorkflow{sw}
 	payload, err := sws[0].Marshal()
 	require.NoError(t, err)
 	name := ""
@@ -152,6 +160,65 @@ func TestGateEnvironment(t *testing.T) {
 			env, err := actions_model.GetRepoEnvironmentByID(t.Context(), 63, deploymentOf(t, job).EnvironmentID)
 			require.NoError(t, err)
 			assert.Equal(t, want, env.Name)
+			_, err = db.GetEngine(t.Context()).Exec("DELETE FROM action_deployment")
+			require.NoError(t, err)
+		}
+	})
+
+	t.Run("a name from the matrix of the job", func(t *testing.T) {
+		require.NoError(t, unittest.PrepareTestDatabase())
+		sws, err := actions_module.JobParser([]byte("on: push\njobs:\n  deploy:\n    runs-on: docker\n    strategy:\n      matrix:\n        target: [alpha, beta]\n    environment: 'env-${{ matrix.target }}'\n    steps: [{run: echo}]\n"))
+		require.NoError(t, err)
+		require.Len(t, sws, 2)
+		var names []string
+		for _, sw := range sws {
+			job := gateSingle(t, sw, "refs/heads/main")
+			b, err := gateEnvironment(t.Context(), job)
+			require.NoError(t, err)
+			assert.Equal(t, behaviourExecuteJob, b)
+			env, err := actions_model.GetRepoEnvironmentByID(t.Context(), 63, deploymentOf(t, job).EnvironmentID)
+			require.NoError(t, err)
+			names = append(names, env.Name)
+			_, err = db.GetEngine(t.Context()).Exec("DELETE FROM action_deployment")
+			require.NoError(t, err)
+		}
+		assert.ElementsMatch(t, []string{"env-alpha", "env-beta"}, names)
+	})
+
+	t.Run("a job of a reusable workflow: the inputs of the call, and an environment that can't be read", func(t *testing.T) {
+		require.NoError(t, unittest.PrepareTestDatabase())
+		caller := "on: push\njobs:\n  call:\n    uses: ./called.yml\n    with:\n      target: from-call\n"
+		called := "on:\n  workflow_call:\n    inputs:\n      target:\n        type: string\njobs:\n  deploy:\n    runs-on: docker\n    environment: '${{ inputs.target }}'\n    steps: [{run: echo}]\n"
+		fetch := func(job *jobparser.Job, path string) ([]byte, error) { return []byte(called), nil }
+		for _, known := range []bool{true, false} {
+			r := actions_module.ReusableWorkflows{}
+			expand := jobparser.ExpandLocalReusableWorkflows(fetch)
+			if known {
+				expand = r.ExpandLocal(fetch)
+			}
+			sws, err := r.JobParser([]byte(caller), expand, jobparser.EnableNamespaces())
+			require.NoError(t, err)
+			var job *actions_model.ActionRunJob
+			for _, sw := range sws {
+				if id, _ := sw.Job(); id == "deploy" {
+					job = gateSingle(t, sw, "refs/heads/main")
+				}
+			}
+			require.NotNil(t, job)
+			b, err := gateEnvironment(t.Context(), job)
+			require.NoError(t, err)
+			d := deploymentOf(t, job)
+			if known {
+				assert.Equal(t, behaviourExecuteJob, b)
+				env, err := actions_model.GetRepoEnvironmentByID(t.Context(), 63, d.EnvironmentID)
+				require.NoError(t, err)
+				assert.Equal(t, "from-call", env.Name)
+			} else {
+				assert.Equal(t, behaviourFailJob, b)
+				assert.Equal(t, actions_model.DeploymentRefused, d.Status)
+				assert.Equal(t, actions_model.DeploymentReasonUnsupported, d.Reason)
+				assert.Zero(t, d.EnvironmentID)
+			}
 			_, err = db.GetEngine(t.Context()).Exec("DELETE FROM action_deployment")
 			require.NoError(t, err)
 		}

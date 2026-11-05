@@ -432,14 +432,15 @@ func handleWorkflows(
 				Name: dwf.EntryName,
 			}}
 		} else {
-			jobs, err = actions_module.JobParser(dwf.Content,
+			reusableWorkflows := actions_module.ReusableWorkflows{}
+			jobs, err = reusableWorkflows.JobParser(dwf.Content,
 				jobparser.WithVars(vars),
 				// We don't have any job outputs yet, but `WithJobOutputs(...)` triggers JobParser to supporting its
 				// `IncompleteMatrix` tagging for any jobs that require the inputs of other jobs.
 				jobparser.WithJobOutputs(map[string]map[string]string{}),
 				jobparser.SupportIncompleteRunsOn(),
-				jobparser.ExpandLocalReusableWorkflows(expandLocalReusableWorkflows(workflowSourceCommit)),
-				jobparser.ExpandInstanceReusableWorkflows(expandInstanceReusableWorkflows(ctx)),
+				reusableWorkflows.ExpandLocal(expandLocalReusableWorkflows(workflowSourceCommit)),
+				reusableWorkflows.ExpandInstance(expandInstanceReusableWorkflows(ctx)),
 				jobparser.WithGitContext(generateGiteaContextForRun(run)),
 				jobparser.EnableNamespaces(),
 			)

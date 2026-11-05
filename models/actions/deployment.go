@@ -31,6 +31,7 @@ const (
 	DeploymentReasonEnvironmentLimit   = "environment_limit"
 	DeploymentReasonEnvironmentDeleted = "environment_deleted"
 	DeploymentReasonInvalidName        = "invalid_name"
+	DeploymentReasonUnsupported        = "environment_unsupported" // a job of a reusable workflow whose environment can't be read
 )
 
 const maxDeploymentURL = 1024

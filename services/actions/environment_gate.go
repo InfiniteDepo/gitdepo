@@ -21,7 +21,7 @@ import (
 	"forgejo.org/modules/util"
 
 	"code.forgejo.org/forgejo/runner/v13/act/jobparser"
-	"code.forgejo.org/forgejo/runner/v13/act/model"
+	"go.yaml.in/yaml/v3"
 )
 
 // maxDueDeploymentRuns is how many runs one tick of the wait timer task looks at.
@@ -44,14 +44,51 @@ func jobHasEnvironment(job *actions_model.ActionRunJob) (bool, error) {
 	return env != nil, err
 }
 
-// evaluateEnvironmentText evaluates an expression in the name or url of an environment. Like the concurrency group of
-// a workflow, it can read the github, inputs and vars contexts.
-func evaluateEnvironmentText(run *actions_model.ActionRun, vars map[string]string, raw string) (string, error) {
+// evaluateEnvironmentText evaluates an expression in the name or url of an environment of job with the contexts GitHub
+// allows there (github, needs, strategy, matrix, vars, inputs). jobparser interpolates the name of a job with them, so
+// the text is parsed as the name of the job's own payload, which holds its matrix and, for a job of a reusable workflow,
+// the inputs of the call.
+func evaluateEnvironmentText(ctx context.Context, job *actions_model.ActionRunJob, vars map[string]string, raw string) (string, error) {
 	if !strings.Contains(raw, "${{") {
 		return raw, nil
 	}
-	text, _, err := jobparser.EvaluateWorkflowConcurrency(&model.RawConcurrency{Group: raw}, generateGiteaContextForRun(run), vars, getRunInputs(run))
-	return text, err
+	sw := new(jobparser.SingleWorkflow) // not job.DecodeWorkflowPayload: SetJob would change the cached copy
+	if err := yaml.Unmarshal(job.WorkflowPayload, sw); err != nil {
+		return "", err
+	}
+	id, j := sw.Job()
+	j.Name = raw
+	if err := sw.SetJob(id, j); err != nil {
+		return "", err
+	}
+	payload, err := sw.Marshal()
+	if err != nil {
+		return "", err
+	}
+	jobs, err := actions_model.GetRunJobsByRunID(ctx, job.RunID)
+	if err != nil {
+		return "", err
+	}
+	needs, outputs, results, err := jobNeedsContext(ctx, job, jobs)
+	if err != nil {
+		return "", err
+	}
+	parsed, err := jobparser.Parse(payload, false,
+		jobparser.WithJobOutputs(outputs),
+		jobparser.WithJobResults(results),
+		jobparser.WithWorkflowNeeds(needs),
+		jobparser.WithVars(vars),
+		jobparser.WithInputs(getRunInputs(job.Run)),
+		jobparser.WithGitContext(generateGiteaContextForRun(job.Run)),
+		jobparser.EnableNamespaces(),
+	)
+	if err != nil {
+		return "", err
+	} else if len(parsed) != 1 {
+		return "", errors.New("the environment of the job could not be evaluated")
+	}
+	_, j = parsed[0].Job()
+	return j.Name, nil
 }
 
 // refAllowed tells if the environment accepts a deployment of the run's ref. The ref is the one the server set on the
@@ -108,8 +145,10 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 		if err != nil {
 			return behaviourError, err
 		}
-		name, err := evaluateEnvironmentText(run, vars, jobEnv.Name)
-		if name = strings.TrimSpace(name); err != nil || name == "" {
+		name, err := evaluateEnvironmentText(ctx, job, vars, jobEnv.Name)
+		if jobEnv.Unsupported {
+			reason = actions_model.DeploymentReasonUnsupported
+		} else if name = strings.TrimSpace(name); err != nil || name == "" {
 			reason = actions_model.DeploymentReasonInvalidName
 		} else if env, err = actions_model.GetOrCreateRepoEnvironment(ctx, job.RepoID, name); errors.Is(err, actions_model.ErrEnvironmentLimit) {
 			reason = actions_model.DeploymentReasonEnvironmentLimit
@@ -120,7 +159,7 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 		}
 		if env != nil {
 			d.EnvironmentID = env.ID
-			if url, err := evaluateEnvironmentText(run, vars, jobEnv.URL); err == nil {
+			if url, err := evaluateEnvironmentText(ctx, job, vars, jobEnv.URL); err == nil {
 				d.URL = actions_model.DeploymentURL(url)
 			}
 		}

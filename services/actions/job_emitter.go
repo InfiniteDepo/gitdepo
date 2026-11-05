@@ -297,6 +297,49 @@ func prepareJobForEmitting(ctx context.Context, blockedJob *actions_model.Action
 	return gateEnvironment(ctx, blockedJob)
 }
 
+// jobNeedsContext returns the needs of blockedJob, with the outputs and results of the jobs it needs, as jobparser
+// takes them to evaluate the job.
+func jobNeedsContext(ctx context.Context, blockedJob *actions_model.ActionRunJob, jobsInRun []*actions_model.ActionRunJob) ([]string, map[string]map[string]string, map[string]string, error) {
+	// Compute jobOutputs for all the other jobs required as needed by this job:
+	jobNeeds := []string{}
+	jobOutputs := make(map[string]map[string]string, len(jobsInRun))
+	jobResults := make(map[string]string, len(jobsInRun))
+	blockedNamespacedNeeds := container.SetOf(blockedJob.NamespacedNeeds()...)
+	for _, job := range jobsInRun {
+		namespacedJobID := job.NamespacedJobID()
+		if !blockedNamespacedNeeds.Contains(namespacedJobID) {
+			// Only include jobs that are in the `needs` of the blocked job.  This filtering includes the namespace so
+			// that we never look at the outputs or results of a similarly named job in a different namespace.
+			continue
+		} else if !job.Status.IsDone() {
+			// Unexpected: `job` is needed by `blockedJob` but it isn't done; `jobStatusResolver` shouldn't be calling
+			// `prepareJobForEmitting` in this case.
+			return nil, nil, nil, fmt.Errorf(
+				"jobStatusResolver attempted to prepareJobForEmitting for a job (id=%d) with an incomplete 'needs' job (id=%d)", blockedJob.ID, job.ID,
+			)
+		}
+
+		// Jobs in a different namespace may be part of `needs` because of runtime order dependencies; for example, if a
+		// pre-req job runs before a reusable workflow, the reusable workflow's jobs will require the pre-req.  These
+		// job identifiers need to be converted to the local namespace of this job for needed jobs prerequisites to be
+		// considered complete, and for their statuses and outputs to be accessible.
+		localJobID := string(namespacedJobID.ToLocal(blockedJob.JobNamespace))
+
+		outputs, err := actions_model.FindTaskOutputByTaskID(ctx, job.TaskID)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("failed loading task outputs: %w", err)
+		}
+		outputsMap := make(map[string]string, len(outputs))
+		for _, v := range outputs {
+			outputsMap[v.OutputKey] = v.OutputValue
+		}
+		jobOutputs[localJobID] = outputsMap
+		jobResults[localJobID] = job.Status.String()
+		jobNeeds = append(jobNeeds, localJobID)
+	}
+	return jobNeeds, jobOutputs, jobResults, nil
+}
+
 // Invoked once a job has all its `needs` parameters met and is ready to transition to waiting. May expand the job's
 // `strategy.matrix` into multiple new jobs, may compute a calculated `runs-on` field, may expand reusable workflows,
 // and may evaluate `if` to see if the job should be skipped -- all things that could change based upon `${{ needs...
@@ -321,42 +364,9 @@ func evaluateJobForEmitting(ctx context.Context, blockedJob *actions_model.Actio
 		return behaviourError, fmt.Errorf("failure LoadRun in prepareJobForEmitting: %w", err)
 	}
 
-	// Compute jobOutputs for all the other jobs required as needed by this job:
-	jobNeeds := []string{}
-	jobOutputs := make(map[string]map[string]string, len(jobsInRun))
-	jobResults := make(map[string]string, len(jobsInRun))
-	blockedNamespacedNeeds := container.SetOf(blockedJob.NamespacedNeeds()...)
-	for _, job := range jobsInRun {
-		namespacedJobID := job.NamespacedJobID()
-		if !blockedNamespacedNeeds.Contains(namespacedJobID) {
-			// Only include jobs that are in the `needs` of the blocked job.  This filtering includes the namespace so
-			// that we never look at the outputs or results of a similarly named job in a different namespace.
-			continue
-		} else if !job.Status.IsDone() {
-			// Unexpected: `job` is needed by `blockedJob` but it isn't done; `jobStatusResolver` shouldn't be calling
-			// `prepareJobForEmitting` in this case.
-			return behaviourError, fmt.Errorf(
-				"jobStatusResolver attempted to prepareJobForEmitting for a job (id=%d) with an incomplete 'needs' job (id=%d)", blockedJob.ID, job.ID,
-			)
-		}
-
-		// Jobs in a different namespace may be part of `needs` because of runtime order dependencies; for example, if a
-		// pre-req job runs before a reusable workflow, the reusable workflow's jobs will require the pre-req.  These
-		// job identifiers need to be converted to the local namespace of this job for needed jobs prerequisites to be
-		// considered complete, and for their statuses and outputs to be accessible.
-		localJobID := string(namespacedJobID.ToLocal(blockedJob.JobNamespace))
-
-		outputs, err := actions_model.FindTaskOutputByTaskID(ctx, job.TaskID)
-		if err != nil {
-			return behaviourError, fmt.Errorf("failed loading task outputs: %w", err)
-		}
-		outputsMap := make(map[string]string, len(outputs))
-		for _, v := range outputs {
-			outputsMap[v.OutputKey] = v.OutputValue
-		}
-		jobOutputs[localJobID] = outputsMap
-		jobResults[localJobID] = job.Status.String()
-		jobNeeds = append(jobNeeds, localJobID)
+	jobNeeds, jobOutputs, jobResults, err := jobNeedsContext(ctx, blockedJob, jobsInRun)
+	if err != nil {
+		return behaviourError, err
 	}
 
 	vars, err := actions_model.GetVariablesOfRun(ctx, blockedJob.Run)
@@ -368,18 +378,22 @@ func evaluateJobForEmitting(ctx context.Context, blockedJob *actions_model.Actio
 	// one-or-more new jobs:
 	expandLocalReusableWorkflow, expandCleanup := lazyRepoExpandLocalReusableWorkflow(ctx, blockedJob.RepoID, blockedJob.Run.GetWorkflowSourceCommit())
 	defer expandCleanup()
+	reusableWorkflows := actions_module.ReusableWorkflows{}
 	newJobWorkflows, err := jobparser.Parse(blockedJob.WorkflowPayload, false,
 		jobparser.WithJobOutputs(jobOutputs),
 		jobparser.WithJobResults(jobResults),
 		jobparser.WithWorkflowNeeds(jobNeeds),
 		jobparser.SupportIncompleteRunsOn(),
-		jobparser.ExpandLocalReusableWorkflows(expandLocalReusableWorkflow),
-		jobparser.ExpandInstanceReusableWorkflows(expandInstanceReusableWorkflows(ctx)),
+		reusableWorkflows.ExpandLocal(expandLocalReusableWorkflow),
+		reusableWorkflows.ExpandInstance(expandInstanceReusableWorkflows(ctx)),
 		jobparser.WithVars(vars),
 		jobparser.WithInputs(getRunInputs(blockedJob.Run)),
 		jobparser.WithGitContext(generateGiteaContextForRun(blockedJob.Run)),
 		jobparser.EnableNamespaces(),
 	)
+	if err == nil { // the jobs of a reusable workflow that was expanded just now bring the environment of their file
+		err = reusableWorkflows.AttachEnvironments(blockedJob.WorkflowPayload, newJobWorkflows)
+	}
 	if err != nil {
 		// Reparsing errors are quite rare here since we were already able to parse this workflow in the past to
 		// generate `blockedJob`, but it would be possible with a remote reusable workflow if the reference disappears
@@ -485,7 +499,17 @@ func evaluateJobForEmitting(ctx context.Context, blockedJob *actions_model.Actio
 			newNeeds = append(newNeeds, string(n.ToLocal(actions_model.JobNamespace(swf.Metadata.Namespace))))
 		}
 
-		err := job.RawNeeds.Encode(newNeeds)
+		environment, err := actions_module.GetJobEnvironment(swf)
+		if err != nil {
+			return behaviourError, err
+		}
+		if actions_model.JobIdentifier(jobID) == blockedJob.JobID && swf.Metadata.Namespace == string(blockedJob.JobNamespace) {
+			if environment, err = blockedJobEnvironment(blockedJob); err != nil {
+				return behaviourError, err
+			}
+		}
+
+		err = job.RawNeeds.Encode(newNeeds)
 		if err != nil {
 			return behaviourError, fmt.Errorf("failure to encode newNeeds: %w", err)
 		}
@@ -494,16 +518,11 @@ func evaluateJobForEmitting(ctx context.Context, blockedJob *actions_model.Actio
 			return behaviourError, fmt.Errorf("failure to reencode updated job: %w", err)
 		}
 
-		// jobparser dropped the environment: the job that was expanded keeps its own
-		if actions_model.JobIdentifier(jobID) == blockedJob.JobID && swf.Metadata.WorkflowCallParent == "" {
-			environment, err := blockedJobEnvironment(blockedJob)
-			if err != nil {
-				return behaviourError, err
-			}
-			if environment != nil {
-				if err := actions_module.SetJobEnvironment(swf, environment); err != nil {
-					return behaviourError, fmt.Errorf("failure to restore the environment: %w", err)
-				}
+		// SetJob drops the environment: the job that was expanded keeps its own, a job of a reusable workflow has the
+		// one AttachEnvironments read from its file
+		if environment != nil {
+			if err := actions_module.SetJobEnvironment(swf, environment); err != nil {
+				return behaviourError, fmt.Errorf("failure to restore the environment: %w", err)
 			}
 		}
 	}

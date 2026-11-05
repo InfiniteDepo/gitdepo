@@ -231,15 +231,16 @@ func (entry *Workflow) Dispatch(ctx context.Context, inputGetter InputValueGette
 		}
 	}
 
-	jobs, err := actions.JobParser(content,
+	reusableWorkflows := actions.ReusableWorkflows{}
+	jobs, err := reusableWorkflows.JobParser(content,
 		jobparser.WithVars(vars),
 		jobparser.WithInputs(inputsAny),
 		// We don't have any job outputs yet, but `WithJobOutputs(...)` triggers JobParser to supporting its
 		// `IncompleteMatrix` tagging for any jobs that require the inputs of other jobs.
 		jobparser.WithJobOutputs(map[string]map[string]string{}),
 		jobparser.SupportIncompleteRunsOn(),
-		jobparser.ExpandLocalReusableWorkflows(expandLocalReusableWorkflows(entry.Commit)),
-		jobparser.ExpandInstanceReusableWorkflows(expandInstanceReusableWorkflows(ctx)),
+		reusableWorkflows.ExpandLocal(expandLocalReusableWorkflows(entry.Commit)),
+		reusableWorkflows.ExpandInstance(expandInstanceReusableWorkflows(ctx)),
 		jobparser.WithGitContext(generateGiteaContextForRun(run)),
 		jobparser.EnableNamespaces(),
 	)

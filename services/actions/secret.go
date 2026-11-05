@@ -36,7 +36,11 @@ func getSecretsOfJob(ctx context.Context, job *actions_model.ActionRunJob) (map[
 	}
 
 	if isInnerWorkflowCall {
-		return getSecretsOfInnerWorkflowCall(ctx, job)
+		secrets, err := getSecretsOfInnerWorkflowCall(ctx, job)
+		if err != nil {
+			return nil, err
+		}
+		return withEnvironmentSecrets(ctx, job, secrets)
 	}
 
 	if job.Run.IsForkPullRequest && job.Run.TriggerEvent != actions_module.GithubEventPullRequestTarget {
@@ -57,15 +61,24 @@ func getSecretsOfJob(ctx context.Context, job *actions_model.ActionRunJob) (map[
 		// FetchActionSecrets logs all errors to the server log.
 		return nil, errors.New("failure to fetch secrets")
 	}
-	if job.EnvironmentName != "" {
-		// the secrets of the environment that released the job win over the others
-		environmentSecrets, err := getEnvironmentSecrets(ctx, job)
-		if err != nil {
-			return nil, err
-		}
-		maps.Copy(jobSecrets, environmentSecrets)
+	return withEnvironmentSecrets(ctx, job, jobSecrets)
+}
+
+// withEnvironmentSecrets adds the secrets of the environment that released the job, which win over the others; a job
+// of a fork pull request gets none (the early return above), a job of a reusable workflow gets those of its own.
+func withEnvironmentSecrets(ctx context.Context, job *actions_model.ActionRunJob, secrets map[string]string) (map[string]string, error) {
+	if job.EnvironmentName == "" || (job.Run.IsForkPullRequest && job.Run.TriggerEvent != actions_module.GithubEventPullRequestTarget) {
+		return secrets, nil
 	}
-	return jobSecrets, nil
+	environmentSecrets, err := getEnvironmentSecrets(ctx, job)
+	if err != nil {
+		return nil, err
+	}
+	if secrets == nil {
+		secrets = make(map[string]string, len(environmentSecrets))
+	}
+	maps.Copy(secrets, environmentSecrets)
+	return secrets, nil
 }
 
 func getSecretsOfInnerWorkflowCall(ctx context.Context, job *actions_model.ActionRunJob) (map[string]string, error) {

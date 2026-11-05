@@ -40,27 +40,14 @@ func TestActionsEnvironments(t *testing.T) {
 		repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: apiRepo.ID})
 		ctx := audit_model.WithSystem(t.Context(), "test")
 
-		labels := []string{"env-a", "env-b", "env-c", "env-d", "env-e", "env-f", "env-g", "env-h", "env-i", "env-j"}
+		labels := []string{"env-a", "env-b", "env-c", "env-d", "env-e", "env-f", "env-g", "env-h", "env-i", "env-j", "env-k", "env-l", "env-m"}
 		runner := newMockRunner()
 		runner.registerAsRepoRunner(t, user2.Name, repo.Name, "env-runner", labels)
 
 		files := 0
-		// push creates a workflow file with one job on label and returns the jobs of the run it starts
-		push := func(label, environment string) []*actions_model.ActionRunJob {
-			files++
-			path := fmt.Sprintf(".gitea/workflows/env%d.yml", files)
-			content := fmt.Sprintf(`name: env%d
-on:
-  push:
-    paths:
-      - '%s'
-jobs:
-  deploy:
-    runs-on: %s
-    %s
-    steps:
-      - run: echo deploy
-`, files, path, label, environment)
+		// pushWorkflow creates the workflow file at path, which content must start on its own path, and returns the run
+		// it starts
+		pushWorkflow := func(path, content string) *actions_model.ActionRun {
 			fileResp := createWorkflowFile(t, token, user2.Name, repo.Name, path, getWorkflowCreateFileOptions(user2, repo.DefaultBranch, "add "+path, content))
 			var run *actions_model.ActionRun
 			require.Eventually(t, func() bool {
@@ -71,9 +58,29 @@ jobs:
 				}
 				return run != nil
 			}, 10*time.Second, 100*time.Millisecond)
+			return run
+		}
+		runJobs := func(run *actions_model.ActionRun) []*actions_model.ActionRunJob {
 			jobs, err := actions_model.GetRunJobsByRunID(t.Context(), run.ID)
 			require.NoError(t, err)
 			return jobs
+		}
+		// push creates a workflow file with one job on label and returns the jobs of the run it starts
+		push := func(label, environment string) []*actions_model.ActionRunJob {
+			files++
+			path := fmt.Sprintf(".gitea/workflows/env%d.yml", files)
+			return runJobs(pushWorkflow(path, fmt.Sprintf(`name: env%d
+on:
+  push:
+    paths:
+      - '%s'
+jobs:
+  deploy:
+    runs-on: %s
+    %s
+    steps:
+      - run: echo deploy
+`, files, path, label, environment)))
 		}
 		reload := func(job *actions_model.ActionRunJob) *actions_model.ActionRunJob {
 			return unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRunJob{ID: job.ID})
@@ -273,6 +280,135 @@ jobs:
 			require.NoError(t, err)
 			assert.EqualValues(t, 1, count)
 			runner.execTask(t, task, &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
+		})
+		t.Run("the job of a reusable workflow is gated, with the inputs of the call", func(t *testing.T) {
+			e := newEnv("called-env", func(e *actions_model.ActionEnvironment) { e.WaitTimerMinutes = 10 })
+			_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, repo.ID, e.ID, "CALLED_SECRET", "called-value")
+			require.NoError(t, err)
+			createWorkflowFile(t, token, user2.Name, repo.Name, ".gitea/workflows/env-called.yml", getWorkflowCreateFileOptions(user2, repo.DefaultBranch, "add called", `name: env-called
+on:
+  workflow_call:
+    inputs:
+      target:
+        type: string
+jobs:
+  deploy:
+    runs-on: env-j
+    environment: ${{ inputs.target }}
+    steps:
+      - run: echo deploy
+`))
+			jobs := runJobs(pushWorkflow(".gitea/workflows/env-caller.yml", `name: env-caller
+on:
+  push:
+    paths:
+      - '.gitea/workflows/env-caller.yml'
+jobs:
+  call:
+    uses: ./.gitea/workflows/env-called.yml
+    with:
+      target: called-env
+`))
+			var inner *actions_model.ActionRunJob
+			for _, job := range jobs {
+				if job.EnvironmentName != "" {
+					inner = job
+				}
+			}
+			require.NotNil(t, inner, "the job of the called workflow keeps its environment")
+			assert.Equal(t, "${{ inputs.target }}", inner.EnvironmentName)
+			d := deployment(inner, 1)
+			require.NotNil(t, d)
+			assert.Equal(t, actions_model.DeploymentWaitingTimer, d.Status)
+			assert.Equal(t, e.ID, d.EnvironmentID)
+			assert.Nil(t, runner.maybeFetchTask(t))
+
+			_, err = db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET release_after_unix = 1 WHERE id = ?", d.ID)
+			require.NoError(t, err)
+			require.NoError(t, actions_service.StartDueDeployments(t.Context()))
+			task := runner.fetchTask(t)
+			assert.Equal(t, "called-value", task.Secrets["CALLED_SECRET"], "after the release, and only then")
+			runner.execTask(t, task, &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
+		})
+
+		t.Run("the name from the matrix of the job", func(t *testing.T) {
+			for _, name := range []string{"mx-a", "mx-b"} {
+				e := newEnv(name, nil)
+				_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, repo.ID, e.ID, "WHO", name)
+				require.NoError(t, err)
+			}
+			jobs := push("env-k", "environment: ${{ matrix.target }}\n    strategy:\n      matrix:\n        target: [mx-a, mx-b]")
+			require.Len(t, jobs, 2)
+			names := map[string]bool{}
+			for _, job := range jobs {
+				d := deployment(job, 1)
+				require.NotNil(t, d)
+				e, err := actions_model.GetRepoEnvironmentByID(t.Context(), repo.ID, d.EnvironmentID)
+				require.NoError(t, err)
+				names[e.Name] = true
+			}
+			assert.Equal(t, map[string]bool{"mx-a": true, "mx-b": true}, names)
+			secrets := map[string]bool{}
+			for range jobs {
+				task := runner.fetchTask(t)
+				secrets[task.Secrets["WHO"]] = true
+				runner.execTask(t, task, &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
+			}
+			assert.Equal(t, map[string]bool{"mx-a": true, "mx-b": true}, secrets, "each job has the secrets of its own environment")
+		})
+
+		t.Run("the name from the output of a needed job", func(t *testing.T) {
+			e := newEnv("needs-env", nil)
+			files++
+			path := fmt.Sprintf(".gitea/workflows/env%d.yml", files)
+			jobs := runJobs(pushWorkflow(path, fmt.Sprintf(`name: env-needs
+on:
+  push:
+    paths:
+      - '%s'
+jobs:
+  prepare:
+    runs-on: env-l
+    outputs:
+      target: ${{ steps.t.outputs.target }}
+    steps:
+      - id: t
+        run: echo target
+  deploy:
+    runs-on: env-l
+    needs: [prepare]
+    environment: ${{ needs.prepare.outputs.target }}
+    steps:
+      - run: echo deploy
+`, path)))
+			require.Len(t, jobs, 2)
+			task := runner.fetchTask(t) // prepare; deploy waits for it
+			runner.execTask(t, task, &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS, outputs: map[string]string{"target": "needs-env"}})
+			task = runner.fetchTask(t)
+			count, err := db.GetEngine(t.Context()).Where("environment_id = ? AND status = ?", e.ID, actions_model.DeploymentReleased).Count(new(actions_model.ActionDeployment))
+			require.NoError(t, err)
+			assert.EqualValues(t, 1, count)
+			runner.execTask(t, task, &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
+		})
+
+		t.Run("a job that calls a reusable workflow can't have an environment", func(t *testing.T) {
+			run := pushWorkflow(".gitea/workflows/env-bad-call.yml", `name: env-bad-call
+on:
+  push:
+    paths:
+      - '.gitea/workflows/env-bad-call.yml'
+jobs:
+  call:
+    uses: ./.gitea/workflows/env-called.yml
+    environment: prod
+`)
+			assert.Equal(t, actions_model.StatusFailure, run.Status)
+			assert.Equal(t, actions_model.ErrorCodeJobParsingError, run.PreExecutionErrorCode)
+			for _, job := range runJobs(run) {
+				assert.Equal(t, actions_model.StatusFailure, job.Status)
+				assert.Empty(t, job.EnvironmentName)
+			}
+			assert.Nil(t, runner.maybeFetchTask(t))
 		})
 	})
 }
