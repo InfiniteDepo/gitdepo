@@ -128,6 +128,9 @@ func SettingsPost(ctx *context.Context) {
 			} else if db.IsErrNamePatternNotAllowed(err) {
 				ctx.Data["Err_Name"] = true
 				ctx.RenderWithErr(ctx.Tr("repo.form.name_pattern_not_allowed", err.(db.ErrNamePatternNotAllowed).Pattern), tplSettingsOptions, &form)
+			} else if errors.Is(err, util.ErrPermissionDenied) {
+				ctx.Data["Err_Name"] = true
+				ctx.RenderWithErr(ctx.Tr("org.settings.rename_not_own_act"), tplSettingsOptions, &form)
 			} else {
 				ctx.ServerError("RenameUser", err)
 			}

@@ -378,6 +378,12 @@ func UpdateTeam(ctx context.Context, t *organization.Team, authChanged, includeA
 	before := old.AuditFields()
 
 	t.LowerName = strings.ToLower(t.Name)
+	// login sources find teams by name, so a new name points their sync at this team
+	if t.LowerName != old.LowerName {
+		if err := organization.CheckMemberAddIsOwnAct(ctx, old); err != nil {
+			return err
+		}
+	}
 	has, err := db.Exist[organization.Team](ctx, builder.Eq{
 		"org_id":     t.OrgID,
 		"lower_name": t.LowerName,
@@ -557,6 +563,12 @@ func InsertTeamMember(ctx context.Context, team *organization.Team, userID int64
 	isAlreadyMember, err := organization.IsTeamMember(ctx, team.OrgID, team.ID, userID)
 	if err != nil || isAlreadyMember {
 		return nil, err
+	}
+	// a user group sync adds the members of the group, as its links (set by a site admin) say, whoever changed the group
+	if reason != organization.MembershipReasonAddedByUserGroup {
+		if err := organization.CheckMemberAddIsOwnAct(ctx, team); err != nil {
+			return nil, err
+		}
 	}
 
 	teamUser := &organization.TeamUser{

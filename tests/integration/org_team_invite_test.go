@@ -113,7 +113,7 @@ func TestOrgTeamEmailInviteWithHiddenMembership(t *testing.T) {
 	assert.False(t, isMember)
 
 	// create the invite
-	invite, err := organization.CreateTeamInviteForUser(db.DefaultContext, inviter, user, team)
+	invite, err := organization.CreateTeamInviteForUser(ownActCtx(t), inviter, user, team)
 	require.NoError(t, err)
 
 	session := loginUser(t, user.Name)
@@ -451,9 +451,9 @@ func TestOrgTeamEmailInviteExistingUser(t *testing.T) {
 	assert.False(t, isMember)
 
 	// create the invites
-	invite1, err := organization.CreateTeamInviteForUser(db.DefaultContext, inviter, user, team1)
+	invite1, err := organization.CreateTeamInviteForUser(ownActCtx(t), inviter, user, team1)
 	require.NoError(t, err)
-	invite2, err := organization.CreateTeamInviteForUser(db.DefaultContext, inviter, user, team2)
+	invite2, err := organization.CreateTeamInviteForUser(ownActCtx(t), inviter, user, team2)
 	require.NoError(t, err)
 
 	// log in the invited user
@@ -505,7 +505,7 @@ func TestOrgTeamEmailInviteCannotBeAcceptedByOtherUser(t *testing.T) {
 	assert.False(t, isMember)
 
 	// create the invite for the invited user
-	invite, err := organization.CreateTeamInviteForUser(db.DefaultContext, inviter, invited, team)
+	invite, err := organization.CreateTeamInviteForUser(ownActCtx(t), inviter, invited, team)
 	require.NoError(t, err)
 
 	// log in as the attacker
@@ -551,7 +551,7 @@ func TestOrgTeamEmailInviteExpired(t *testing.T) {
 	assert.False(t, isMember)
 
 	// create the invite
-	invite, err := organization.CreateTeamInviteForUser(t.Context(), inviter, user, team)
+	invite, err := organization.CreateTeamInviteForUser(ownActCtx(t), inviter, user, team)
 	require.NoError(t, err)
 
 	// set a deadline in the past, so that the invite is expired
@@ -600,7 +600,7 @@ func TestOrgTeamDeclineInvitation(t *testing.T) {
 	assert.False(t, isMember)
 
 	// create the invite
-	invite1, err := organization.CreateTeamInviteForUser(db.DefaultContext, inviter, user, team1)
+	invite1, err := organization.CreateTeamInviteForUser(ownActCtx(t), inviter, user, team1)
 	require.NoError(t, err)
 
 	// log in the invited user

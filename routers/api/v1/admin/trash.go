@@ -12,6 +12,7 @@ import (
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/json"
 	api "forgejo.org/modules/structs"
+	"forgejo.org/modules/util"
 	"forgejo.org/routers/api/v1/utils"
 	"forgejo.org/services/context"
 	trash_service "forgejo.org/services/trash"
@@ -127,6 +128,8 @@ func trashError(ctx *context.APIContext, err error) {
 		ctx.Error(http.StatusUnprocessableEntity, "restore", err)
 	case errors.Is(err, trash_service.ErrOrgHasLiveRepos):
 		ctx.Error(http.StatusConflict, "ErrOrgHasLiveRepos", err)
+	case errors.Is(err, util.ErrPermissionDenied):
+		ctx.Error(http.StatusForbidden, "restore", err)
 	default:
 		ctx.Error(http.StatusInternalServerError, "trash", err)
 	}

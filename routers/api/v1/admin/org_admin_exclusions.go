@@ -10,6 +10,7 @@ import (
 	org_model "forgejo.org/models/organization"
 	user_model "forgejo.org/models/user"
 	api "forgejo.org/modules/structs"
+	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
 	"forgejo.org/services/context"
 	"forgejo.org/services/convert"
@@ -85,6 +86,8 @@ func SetOrgAdminExclusions(ctx *context.APIContext) {
 		ctx.Error(http.StatusUnprocessableEntity, "", err)
 	case org_model.IsErrLastOrgOwner(err):
 		ctx.Error(http.StatusConflict, "", err)
+	case errors.Is(err, util.ErrPermissionDenied):
+		ctx.Error(http.StatusForbidden, "", err)
 	default:
 		ctx.Error(http.StatusInternalServerError, "SetOrgAdminExclusions", err)
 	}

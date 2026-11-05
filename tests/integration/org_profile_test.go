@@ -201,7 +201,7 @@ quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequa
 			ownersTeam := unittest.AssertExistsAndLoadBean(t, &org_model.Team{ID: 1})
 
 			// create an invitation for user10 to org3
-			invite, err := org_model.CreateTeamInviteForUser(t.Context(), user2, user10, ownersTeam)
+			invite, err := org_model.CreateTeamInviteForUser(ownActCtx(t), user2, user10, ownersTeam)
 			require.NoError(t, err)
 
 			session := loginUser(t, "user10")

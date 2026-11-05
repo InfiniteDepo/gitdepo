@@ -137,8 +137,8 @@ func TestBitbucketImportPermissions(t *testing.T) {
 		require.NoError(t, user_model.UpdateUserCols(ctx, user27, "is_restricted"))
 		require.NoError(t, db.Insert(ctx, &user_model.BlockedUser{UserID: org.ID, BlockID: 21}))
 		devs := &organization.UserGroup{Name: "bb-devs"}
-		require.NoError(t, usergroup.CreateGroup(ctx, devs))
-		require.NoError(t, usergroup.AddMember(ctx, devs, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 15})))
+		require.NoError(t, usergroup.CreateGroup(ownActCtx(t), devs))
+		require.NoError(t, usergroup.AddMember(ownActCtx(t), devs, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 15})))
 
 		keyExpiry := now.AddDate(0, 0, 20).Format("2006-01-02")
 		opts := migrations.BitbucketImportOptions{Server: server.URL, Token: bitbucketTestToken, Projects: []string{"PAY"}, KeyExpiry: keyExpiry}

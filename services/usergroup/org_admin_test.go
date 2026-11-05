@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"forgejo.org/models"
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	org_model "forgejo.org/models/organization"
 	"forgejo.org/models/unittest"
@@ -27,7 +28,7 @@ const (
 func ownerTeams(t *testing.T) []*org_model.Team {
 	t.Helper()
 	teams := make([]*org_model.Team, 0, 20)
-	require.NoError(t, db.GetEngine(db.DefaultContext).Where("name=?", org_model.OwnerTeamName).Find(&teams))
+	require.NoError(t, db.GetEngine(ownCtx()).Where("name=?", org_model.OwnerTeamName).Find(&teams))
 	require.NotEmpty(t, teams)
 	return teams
 }
@@ -40,7 +41,7 @@ func withOrg22Owner(t *testing.T) {
 		if team.NumMembers > 0 {
 			continue
 		}
-		_, err := models.InsertTeamMember(db.DefaultContext, loadTeam(t, team.ID), 2, org_model.MembershipReasonAddedByUser, optional.None[int64](), optional.None[int64]())
+		_, err := models.InsertTeamMember(audit_model.WithSystem(ownCtx(), "test"), loadTeam(t, team.ID), 2, org_model.MembershipReasonAddedByUser, optional.None[int64](), optional.None[int64]())
 		require.NoError(t, err)
 	}
 }
@@ -48,9 +49,9 @@ func withOrg22Owner(t *testing.T) {
 func newOrgAdminGroup(t *testing.T, name string, uids ...int64) *org_model.UserGroup {
 	t.Helper()
 	g := &org_model.UserGroup{Name: name}
-	require.NoError(t, org_model.InsertUserGroup(db.DefaultContext, g))
+	require.NoError(t, org_model.InsertUserGroup(ownCtx(), g))
 	for _, uid := range uids {
-		require.NoError(t, AddMember(db.DefaultContext, g, loadUser(t, uid)))
+		require.NoError(t, AddMember(ownCtx(), g, loadUser(t, uid)))
 	}
 	return g
 }
@@ -58,13 +59,13 @@ func newOrgAdminGroup(t *testing.T, name string, uids ...int64) *org_model.UserG
 func setOrgAdmin(t *testing.T, g *org_model.UserGroup, on bool) error {
 	t.Helper()
 	g.GrantsOrgAdmin = on
-	return UpdateGroup(db.DefaultContext, g)
+	return UpdateGroup(ownCtx(), g)
 }
 
 func linkManaged(t *testing.T, g *org_model.UserGroup, team *org_model.Team) int {
 	t.Helper()
 	l := &org_model.UserGroupTeam{GroupID: g.ID, TeamID: team.ID}
-	has, err := db.GetEngine(db.DefaultContext).Get(l)
+	has, err := db.GetEngine(ownCtx()).Get(l)
 	require.NoError(t, err)
 	if !has {
 		return -1
@@ -76,7 +77,7 @@ func linkManaged(t *testing.T, g *org_model.UserGroup, team *org_model.Team) int
 func TestOrgAdminRoleLinksAllOrgs(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	withOrg22Owner(t)
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 	owners := ownerTeams(t)
 	g := newOrgAdminGroup(t, "platform-admins", userA)
 
@@ -106,7 +107,7 @@ func TestOrgAdminRoleLinksAllOrgs(t *testing.T) {
 func TestOrgAdminRoleKeepsOtherMemberships(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	withOrg22Owner(t)
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 	org3 := loadTeam(t, 1)
 	// user 2 is a member of org 3's Owners team by hand (fixture); add user 5 by group
 	g1 := newOrgAdminGroup(t, "g1", userA)
@@ -131,7 +132,7 @@ func TestOrgAdminRoleKeepsOtherMemberships(t *testing.T) {
 func TestOrgAdminRoleOff(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	withOrg22Owner(t)
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 	owners := ownerTeams(t)
 	org3 := loadTeam(t, 1)
 	g := newOrgAdminGroup(t, "platform-admins", userA)
@@ -176,7 +177,7 @@ func TestOrgAdminRoleOffLastOwnerRefused(t *testing.T) {
 func TestOrgAdminExclusions(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	withOrg22Owner(t)
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 	org3 := loadTeam(t, 1)
 	g := newOrgAdminGroup(t, "platform-admins", userA)
 	require.NoError(t, setOrgAdmin(t, g, true))
@@ -197,7 +198,7 @@ func TestOrgAdminExclusions(t *testing.T) {
 // The organization has two owners through two groups, so a stale member count would let the second removal through.
 func TestOrgAdminExclusionLastOwnerRefused(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 	a := newOrgAdminGroup(t, "g-a", userA)
 	b := newOrgAdminGroup(t, "g-b", userB)
 	require.NoError(t, setOrgAdmin(t, a, true))
@@ -220,7 +221,7 @@ func TestOrgAdminExclusionLastOwnerRefused(t *testing.T) {
 // An org without an Owners team is skipped instead of failing the whole change.
 func TestOrgAdminSkipsOrgWithoutOwnersTeam(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	_, err := db.GetEngine(db.DefaultContext).Exec("UPDATE team SET name='Boss', lower_name='boss' WHERE id=?", 1)
+	_, err := db.GetEngine(ownCtx()).Exec("UPDATE team SET name='Boss', lower_name='boss' WHERE id=?", 1)
 	require.NoError(t, err)
 	g := newOrgAdminGroup(t, "platform-admins", userA)
 	require.NoError(t, setOrgAdmin(t, g, true))
@@ -230,7 +231,7 @@ func TestOrgAdminSkipsOrgWithoutOwnersTeam(t *testing.T) {
 // Deleting an organization drops its exclusion and its links.
 func TestOrgAdminOrgDeletion(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 	g := newOrgAdminGroup(t, "platform-admins")
 	require.NoError(t, setOrgAdmin(t, g, true))
 	require.NoError(t, SetOrgAdminExclusions(ctx, []int64{22}))

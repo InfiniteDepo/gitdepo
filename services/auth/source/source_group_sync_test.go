@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"forgejo.org/models"
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	org_model "forgejo.org/models/organization"
@@ -454,7 +455,7 @@ func TestSyncGroupsToTeams(t *testing.T) {
 	}
 	sourceGroupTeamRemoval := false
 
-	err := SyncGroupsToTeams(t.Context(), user, loginSourceID, sourceUserGroups, sourceGroupTeamMapping, sourceGroupTeamRemoval, nil, false)
+	err := SyncGroupsToTeams(audit_model.WithLoginSource(t.Context(), loginSourceID, "source"), user, loginSourceID, sourceUserGroups, sourceGroupTeamMapping, sourceGroupTeamRemoval, nil, false)
 	require.NoError(t, err)
 
 	unittest.AssertExistsAndLoadBean(t, &org_model.TeamUser{
@@ -476,7 +477,7 @@ func TestSyncGroupsToTeamsKeepsUserGroupMembership(t *testing.T) {
 	require.NoError(t, err)
 	mapping := map[string]map[string][]string{"some-group": {org.Name: {team.Name}}}
 
-	require.NoError(t, SyncGroupsToTeams(t.Context(), user, 1, container.SetOf[string](), mapping, true, nil, false))
+	require.NoError(t, SyncGroupsToTeams(audit_model.WithLoginSource(t.Context(), 1, "source"), user, 1, container.SetOf[string](), mapping, true, nil, false))
 
 	unittest.AssertExistsAndLoadBean(t, &org_model.TeamUser{UID: user.ID, TeamID: team.ID, Reason: org_model.MembershipReasonAddedByUserGroup})
 }

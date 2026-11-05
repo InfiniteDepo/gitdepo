@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"forgejo.org/models/organization"
+	"forgejo.org/modules/util"
 	"forgejo.org/services/context"
 	"forgejo.org/services/convert"
 	usergroup_service "forgejo.org/services/usergroup"
@@ -100,7 +101,10 @@ func LinkTeamUserGroup(ctx *context.APIContext) {
 	if ctx.Written() {
 		return
 	}
-	if err := usergroup_service.LinkTeam(ctx, group, ctx.Org().Team); err != nil && !errors.Is(err, usergroup_service.ErrAlreadyLinked) {
+	if err := usergroup_service.LinkTeam(ctx, group, ctx.Org().Team); errors.Is(err, util.ErrPermissionDenied) {
+		ctx.Error(http.StatusForbidden, "LinkTeam", err)
+		return
+	} else if err != nil && !errors.Is(err, usergroup_service.ErrAlreadyLinked) {
 		ctx.Error(http.StatusInternalServerError, "LinkTeam", err)
 		return
 	}

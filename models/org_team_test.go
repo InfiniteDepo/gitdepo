@@ -4,9 +4,11 @@
 package models
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	"forgejo.org/models/organization"
@@ -136,7 +138,7 @@ func TestAddTeamMemberByCooptation(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			team := unittest.AssertExistsAndLoadBean(t, &organization.Team{ID: testCase.teamID})
-			require.NoError(t, AddTeamMemberByCooptation(db.DefaultContext, team, testCase.userID, testCase.inviterID))
+			require.NoError(t, AddTeamMemberByCooptation(ownCtx(), team, testCase.userID, testCase.inviterID))
 			if testCase.userID == 4 {
 				unittest.AssertExistsAndLoadBean(t, &organization.TeamUser{UID: testCase.userID, TeamID: testCase.teamID, Reason: organization.MembershipReasonAddedByUser, CreatedByUserID: optional.Some(testCase.inviterID)})
 			} else {
@@ -167,7 +169,7 @@ func TestAddTeamMemberByLoginSource(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			team := unittest.AssertExistsAndLoadBean(t, &organization.Team{ID: testCase.teamID})
-			require.NoError(t, AddTeamMemberByLoginSource(db.DefaultContext, team, testCase.userID, loginSource.ID))
+			require.NoError(t, AddTeamMemberByLoginSource(audit_model.WithLoginSource(db.DefaultContext, loginSource.ID, "source"), team, testCase.userID, loginSource.ID))
 			unittest.AssertExistsAndLoadBean(t, &organization.TeamUser{UID: testCase.userID, TeamID: testCase.teamID})
 			unittest.CheckConsistencyFor(t, &organization.Team{ID: testCase.teamID}, &user_model.User{ID: team.OrgID})
 		})
@@ -206,7 +208,7 @@ func TestTeam_AddAndReturnTeamMember(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			team := unittest.AssertExistsAndLoadBean(t, &organization.Team{ID: testCase.teamID})
-			teamUser, err := InsertTeamMember(db.DefaultContext, team, testCase.userID, organization.MembershipReasonAddedByUser, optional.Some(testCase.inviterID), optional.None[int64]())
+			teamUser, err := InsertTeamMember(ownCtx(), team, testCase.userID, organization.MembershipReasonAddedByUser, optional.Some(testCase.inviterID), optional.None[int64]())
 			require.NoError(t, err)
 			if testCase.alreadyMember {
 				assert.Nil(t, teamUser)
@@ -298,9 +300,74 @@ func TestRepository_RecalculateAccesses3(t *testing.T) {
 
 	// adding user29 to team5 should add an explicit access row for repo 23
 	// even though repo 23 is public
-	require.NoError(t, AddTeamMemberByCooptation(db.DefaultContext, team5, user29.ID, 1))
+	require.NoError(t, AddTeamMemberByCooptation(ownCtx(), team5, user29.ID, 1))
 
 	has, err = db.GetEngine(db.DefaultContext).Get(&access_model.Access{UserID: 29, RepoID: 23})
 	require.NoError(t, err)
 	assert.True(t, has)
+}
+
+// ownCtx is a request of user 1 with a credential of their own (audit_model.IsOwnAct).
+func ownCtx() context.Context {
+	return audit_model.WithActor(db.DefaultContext, &audit_model.Actor{Type: audit_model.ActorUser, ID: 1, Name: "user1", Credential: audit_model.Credential{Type: audit_model.CredentialAccessToken}})
+}
+
+// Adding a member to the Owners team or to a team listed as an environment's reviewer is only a person's own act;
+// other teams, removals and the user group sync are not affected.
+func TestAddTeamMemberOwnAct(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	grant := audit_model.WithActor(db.DefaultContext, &audit_model.Actor{Type: audit_model.ActorUser, ID: 2, Name: "user2", Credential: audit_model.Credential{Type: audit_model.CredentialOAuth2Grant}})
+	integration := audit_model.WithActor(db.DefaultContext, &audit_model.Actor{Type: audit_model.ActorUser, ID: 2, Name: "user2", Credential: audit_model.Credential{Type: audit_model.CredentialAuthorizedIntegration}})
+	sudoActor := &audit_model.Actor{Type: audit_model.ActorUser, ID: 2, Name: "user2", Credential: audit_model.Credential{Type: audit_model.CredentialAccessToken}}
+	sudoActor.SetSudo(1, "user1")
+	sudo := audit_model.WithActor(db.DefaultContext, sudoActor)
+
+	owners := unittest.AssertExistsAndLoadBean(t, &organization.Team{ID: 1})
+	reviewers := unittest.AssertExistsAndLoadBean(t, &organization.Team{ID: 2})
+	unrelated := unittest.AssertExistsAndLoadBean(t, &organization.Team{ID: 7})
+	_, err := db.GetEngine(db.DefaultContext).Exec("INSERT INTO action_environment_reviewer (environment_id, user_id, team_id) VALUES (1, 0, ?)", reviewers.ID)
+	require.NoError(t, err)
+
+	for name, ctx := range map[string]context.Context{"OAuth2 grant": grant, "authorized integration": integration, "sudo": sudo, "no actor": db.DefaultContext} {
+		for _, team := range []*organization.Team{owners, reviewers} {
+			require.ErrorIs(t, AddTeamMemberByCooptation(ctx, team, 5, 2), audit_model.ErrNotOwnAct, name)
+			assert.False(t, unittest.BeanExists(t, &organization.TeamUser{UID: 5, TeamID: team.ID}), name)
+			_, err := organization.CreateTeamInviteForUser(ctx, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2}), unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5}), team)
+			require.ErrorIs(t, err, audit_model.ErrNotOwnAct, name)
+			_, err = organization.CreateTeamInviteByEmail(ctx, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2}), team, "someone@example.com")
+			require.ErrorIs(t, err, audit_model.ErrNotOwnAct, name)
+		}
+		require.NoError(t, AddTeamMemberByCooptation(ctx, owners, 2, 2), "already a member: nothing to add")
+	}
+	assert.Zero(t, unittest.GetCount(t, &organization.TeamInvite{TeamID: owners.ID}))
+	assert.Zero(t, unittest.GetCount(t, &organization.TeamInvite{TeamID: reviewers.ID}))
+
+	require.NoError(t, AddTeamMemberByCooptation(grant, unrelated, 5, 2), "another team")
+	unittest.AssertExistsAndLoadBean(t, &organization.TeamUser{UID: 5, TeamID: unrelated.ID})
+	require.NoError(t, RemoveTeamMember(grant, reviewers, 4), "a removal")
+
+	// a user group sync adds what the group's links say, whoever changed the group
+	_, err = InsertTeamMember(grant, reviewers, 5, organization.MembershipReasonAddedByUserGroup, optional.None[int64](), optional.None[int64]())
+	require.NoError(t, err)
+	// a login source sync acts as the login source
+	_, err = db.GetEngine(db.DefaultContext).Insert(auth_model.Source{ID: 1})
+	require.NoError(t, err)
+	require.NoError(t, AddTeamMemberByLoginSource(audit_model.WithLoginSource(grant, 1, "ldap"), owners, 5, 1))
+	// the person's own credential
+	require.NoError(t, AddTeamMemberByCooptation(ownCtx(), reviewers, 10, 2))
+	unittest.CheckConsistencyFor(t, &organization.Team{ID: owners.ID}, &organization.Team{ID: reviewers.ID}, &user_model.User{ID: 3})
+
+	// login sources find teams by name, so renaming a protected team is checked too
+	renamed := *reviewers
+	renamed.Name = "contractors"
+	require.ErrorIs(t, UpdateTeam(grant, &renamed, false, false), audit_model.ErrNotOwnAct)
+	assert.Equal(t, reviewers.Name, unittest.AssertExistsAndLoadBean(t, &organization.Team{ID: reviewers.ID}).Name)
+	renamed.Description = "same name"
+	renamed.Name = strings.ToUpper(reviewers.Name)
+	require.NoError(t, UpdateTeam(grant, &renamed, false, false), "only the case")
+	renamed.Name = "contractors"
+	require.NoError(t, UpdateTeam(ownCtx(), &renamed, false, false))
+	unrelatedRenamed := *unrelated
+	unrelatedRenamed.Name = "renamed"
+	require.NoError(t, UpdateTeam(grant, &unrelatedRenamed, false, false), "another team")
 }

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	"forgejo.org/models/perm"
 	repo_model "forgejo.org/models/repo"
@@ -139,6 +140,38 @@ func (t *Team) GetUnitsMap() map[string]string {
 // IsOwnerTeam returns true if team is owner team.
 func (t *Team) IsOwnerTeam() bool {
 	return t.LowerName == strings.ToLower(OwnerTeamName)
+}
+
+// CheckMemberAddIsOwnAct refuses adding a member to a team whose members are part of deployment protection unless it is
+// the doer's own act (audit_model.CheckOwnAct): the Owners team (its members change the rules of environments) and a
+// team listed as a required reviewer of an environment (its members approve deployments). Every request that adds a
+// member or invites one goes through it; a sync of a login source acts as the source and passes.
+func CheckMemberAddIsOwnAct(ctx context.Context, team *Team) error {
+	if audit_model.IsOwnAct(ctx) {
+		return nil
+	}
+	return checkTeamNotProtected(ctx, team)
+}
+
+// CheckInviteIsOwnAct returns audit_model.ErrNotOwnAct when the team is protected now (see CheckMemberAddIsOwnAct)
+// and the invitation was not its inviter's own act.
+func CheckInviteIsOwnAct(ctx context.Context, team *Team, invite *TeamInvite) error {
+	if invite.OwnAct {
+		return nil
+	}
+	return checkTeamNotProtected(ctx, team)
+}
+
+func checkTeamNotProtected(ctx context.Context, team *Team) error {
+	if team.IsOwnerTeam() {
+		return audit_model.ErrNotOwnAct
+	}
+	if listed, err := db.GetEngine(ctx).Table("action_environment_reviewer").Where("team_id = ?", team.ID).Exist(); err != nil {
+		return err
+	} else if listed {
+		return audit_model.ErrNotOwnAct
+	}
+	return nil
 }
 
 // IsMember returns true if given user is a member of team.

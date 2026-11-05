@@ -38,7 +38,7 @@ func fillEmptyOwnerTeams(t *testing.T) {
 	t.Helper()
 	for _, team := range orgAdminOwnerTeams(t) {
 		if team.NumMembers == 0 {
-			_, err := models.InsertTeamMember(db.DefaultContext, team, 2, organization.MembershipReasonAddedByUser, optional.None[int64](), optional.None[int64]())
+			_, err := models.InsertTeamMember(ownActCtx(t), team, 2, organization.MembershipReasonAddedByUser, optional.None[int64](), optional.None[int64]())
 			require.NoError(t, err)
 		}
 	}

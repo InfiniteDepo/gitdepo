@@ -283,6 +283,8 @@ func EditTeam(ctx *context.APIContext) {
 	// responses:
 	//   "200":
 	//     "$ref": "#/responses/Team"
+	//   "403":
+	//     "$ref": "#/responses/forbidden"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 	//   "422":
@@ -340,6 +342,9 @@ func EditTeam(ctx *context.APIContext) {
 	if err := models.UpdateTeam(ctx, team, isAuthChanged, isIncludeAllChanged); err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusUnprocessableEntity, "EditTeam", err)
+			return
+		} else if errors.Is(err, util.ErrPermissionDenied) {
+			ctx.Error(http.StatusForbidden, "EditTeam", err)
 			return
 		}
 		ctx.Error(http.StatusInternalServerError, "EditTeam", err)
@@ -517,7 +522,7 @@ func AddTeamMember(ctx *context.APIContext) {
 	if err := org_service.InviteOrAddTeamMember(ctx, ctx.Doer(), u, ctx.Org().Team); err != nil {
 		if organization.IsErrTeamInviteAlreadyExist(err) {
 			ctx.Error(http.StatusConflict, "InviteOrAddTeamMember", err)
-		} else if organization.IsErrUserNoVerifiedDomainEmail(err) {
+		} else if organization.IsErrUserNoVerifiedDomainEmail(err) || errors.Is(err, util.ErrPermissionDenied) {
 			ctx.Error(http.StatusForbidden, "InviteOrAddTeamMember", err)
 		} else {
 			ctx.Error(http.StatusInternalServerError, "InviteOrAddTeamMember", err)
@@ -1192,7 +1197,7 @@ func AcceptMyTeamInvitation(ctx *context.APIContext) {
 			ctx.NotFound("AcceptInvite")
 		} else if organization.IsErrTeamInviteExpired(err) {
 			ctx.Error(http.StatusNotAcceptable, "AcceptInvite", err)
-		} else if organization.IsErrOrgArchived(err) || organization.IsErrUserNoVerifiedDomainEmail(err) {
+		} else if organization.IsErrOrgArchived(err) || organization.IsErrUserNoVerifiedDomainEmail(err) || errors.Is(err, util.ErrPermissionDenied) {
 			ctx.Error(http.StatusForbidden, "AcceptInvite", err)
 		} else {
 			ctx.ServerError("AcceptInvite", err)

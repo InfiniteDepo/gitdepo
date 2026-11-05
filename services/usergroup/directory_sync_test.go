@@ -6,7 +6,6 @@ package usergroup
 import (
 	"testing"
 
-	"forgejo.org/models/db"
 	org_model "forgejo.org/models/organization"
 	"forgejo.org/models/unittest"
 	"forgejo.org/modules/container"
@@ -17,7 +16,7 @@ import (
 
 func TestSyncDirectoryGroups(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 	const sourceID, otherSourceID = 7, 8
 
 	devs, admins, manual, other := newGroup(t, "devs"), newGroup(t, "admins"), newGroup(t, "manual"), newGroup(t, "other")
@@ -80,7 +79,7 @@ func TestSyncDirectoryGroups(t *testing.T) {
 
 func TestSyncDirectoryGroupsLastOwner(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
-	ctx := db.DefaultContext
+	ctx := ownCtx()
 
 	// team 15 is the owners team of org 22 and has no members
 	owners := loadTeam(t, 15)
