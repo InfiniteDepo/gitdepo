@@ -261,6 +261,16 @@ func registerStartDueDeployments() {
 	})
 }
 
+func registerExpireDeploymentReviews() {
+	RegisterTaskFatal("expire_deployment_reviews", &BaseConfig{
+		Enabled:    true,
+		RunAtStart: true,
+		Schedule:   "@every 1h",
+	}, func(ctx context.Context, _ *user_model.User, _ Config) error {
+		return actions_service.ExpireDeploymentReviews(ctx)
+	})
+}
+
 func registerReloadLogShipping() {
 	RegisterTaskFatal("reload_log_shipping", &BaseConfig{
 		Enabled:    true,
@@ -303,6 +313,7 @@ func initBasicTasks() {
 	registerProcessMergeQueues()
 	registerStartScheduledDispatches()
 	registerStartDueDeployments()
+	registerExpireDeploymentReviews()
 	registerReloadLogShipping()
 	if setting.Packages.Enabled {
 		registerCleanupPackages()

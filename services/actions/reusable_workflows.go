@@ -5,6 +5,7 @@ package actions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -13,6 +14,7 @@ import (
 	actions_module "forgejo.org/modules/actions"
 	"forgejo.org/modules/git"
 	"forgejo.org/modules/gitrepo"
+	"forgejo.org/modules/util"
 
 	"code.forgejo.org/forgejo/runner/v13/act/jobparser"
 	"code.forgejo.org/forgejo/runner/v13/act/model"
@@ -27,6 +29,39 @@ func expandForJob(job *jobparser.Job) bool {
 	return len(job.RunsOn()) == 0
 }
 
+// ErrUnexpandedEnvironment is the refusal of a call that the server doesn't expand, but whose called workflow names an
+// environment: the runner would run it as one job and nothing would stand behind the environment, so the run fails.
+// This holds for the calls the server can read (local, and on this instance when public); a call to an external https
+// workflow can't be read, so an environment inside it is not gated, and it gets no environment secrets (known limitation).
+var ErrUnexpandedEnvironment = util.NewInvalidArgumentErrorf("the called workflow names an environment: remove runs-on from the job that calls it, so that it is expanded")
+
+// unexpandedCall is what a fetcher answers for a call that is not expanded: nothing to expand, except when the called
+// file names an environment. A file that can't be read is no reason to refuse (that call ran before as it does now).
+func unexpandedCall(read func() ([]byte, error)) error {
+	if content, err := read(); err == nil && actions_module.NamesEnvironment(content) {
+		return ErrUnexpandedEnvironment
+	}
+	return jobparser.ErrUnsupportedReusableWorkflowFetch
+}
+
+// readLocalWorkflow reads the file at path of the commit.
+func readLocalWorkflow(commit *git.Commit, path string) ([]byte, error) {
+	blob, err := commit.GetBlobByPath(path)
+	if err != nil {
+		return nil, fmt.Errorf("expanding reusable workflow failed to access path %s: %w", path, err)
+	}
+	reader, err := blob.DataAsync()
+	if err != nil {
+		return nil, fmt.Errorf("expanding reusable workflow failed to read path %s: %w", path, err)
+	}
+	defer reader.Close()
+	content, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("expanding reusable workflow failed to read path %s: %w", path, err)
+	}
+	return content, nil
+}
+
 // Provide a closure for `jobparser.ExpandLocalReusableWorkflows` which resolves reusable workflow references local to
 // the given commit.  A reusable workflow reference is a job with a `uses: ./.forgejo/workflows/some-path.yaml`, and
 // resolving it involves reading the target file in the target commit and returning the file contents.
@@ -35,23 +70,12 @@ func expandForJob(job *jobparser.Job) bool {
 var expandLocalReusableWorkflows = func(commit *git.Commit) jobparser.LocalWorkflowFetcher {
 	return func(job *jobparser.Job, path string) ([]byte, error) {
 		if !expandForJob(job) {
-			return nil, jobparser.ErrUnsupportedReusableWorkflowFetch
+			return nil, unexpandedCall(func() ([]byte, error) { return readLocalWorkflow(commit, path) })
 		}
 
-		blob, err := commit.GetBlobByPath(path)
+		content, err := readLocalWorkflow(commit, path)
 		if err != nil {
-			return nil, fmt.Errorf("expanding reusable workflow failed to access path %s: %w", path, err)
-		}
-
-		reader, err := blob.DataAsync()
-		if err != nil {
-			return nil, fmt.Errorf("expanding reusable workflow failed to read path %s: %w", path, err)
-		}
-		defer reader.Close()
-
-		content, err := io.ReadAll(reader)
-		if err != nil {
-			return nil, fmt.Errorf("expanding reusable workflow failed to read path %s: %w", path, err)
+			return nil, err
 		}
 		if err := actions_module.RejectWorkflowMetadata(content); err != nil {
 			return nil, fmt.Errorf("expanding reusable workflow %s: %w", path, err)
@@ -79,14 +103,7 @@ var lazyRepoExpandLocalReusableWorkflow = func(ctx context.Context, repoID int64
 			gitRepo.Close()
 		}
 	}
-	fetcher := func(job *jobparser.Job, path string) ([]byte, error) {
-		if !expandForJob(job) {
-			return nil, jobparser.ErrUnsupportedReusableWorkflowFetch
-		}
-		if innerFetcher != nil {
-			content, err := innerFetcher(job, path)
-			return content, err
-		}
+	openCommit := func() (*git.Commit, error) {
 		repo, err := repo_model.GetRepositoryByID(ctx, repoID)
 		if err != nil {
 			return nil, fmt.Errorf("expanding reusable workflow failed to get repo: %w", err)
@@ -99,9 +116,20 @@ var lazyRepoExpandLocalReusableWorkflow = func(ctx context.Context, repoID int64
 		if err != nil {
 			return nil, fmt.Errorf("expanding reusable workflow failed to open commit %q on repo %s: %w", commitSHA, repo.FullName(), err)
 		}
-		innerFetcher = expandLocalReusableWorkflows(commit)
-		content, err := innerFetcher(job, path)
-		return content, err
+		return commit, nil
+	}
+	fetcher := func(job *jobparser.Job, path string) ([]byte, error) {
+		if innerFetcher == nil {
+			commit, err := openCommit()
+			if err != nil {
+				if !expandForJob(job) {
+					return nil, jobparser.ErrUnsupportedReusableWorkflowFetch // not expanded, as before
+				}
+				return nil, err
+			}
+			innerFetcher = expandLocalReusableWorkflows(commit)
+		}
+		return innerFetcher(job, path)
 	}
 	return fetcher, cleanupFunc
 }
@@ -114,46 +142,50 @@ var lazyRepoExpandLocalReusableWorkflow = func(ctx context.Context, repoID int64
 // See `expandForJob` for information about jobs that are exempt from expansion.
 var expandInstanceReusableWorkflows = func(ctx context.Context) jobparser.InstanceWorkflowFetcher {
 	return func(job *jobparser.Job, ref *model.NonLocalReusableWorkflowReference) ([]byte, error) {
-		if !expandForJob(job) {
-			return nil, jobparser.ErrUnsupportedReusableWorkflowFetch
+		data, err := fetchInstanceWorkflow(ctx, job, ref)
+		if err != nil && !expandForJob(job) && !errors.Is(err, ErrUnexpandedEnvironment) {
+			return nil, jobparser.ErrUnsupportedReusableWorkflowFetch // not expanded, as before: the call stays monolithic
 		}
-
-		owner, err := user_model.GetUserByName(ctx, ref.Org)
-		// Reusable workflows don't currently support access to any private repos -- that's implemented here as well,
-		// although in the future it might be possible to use context information about the executing workflow to
-		// broaden access (eg. repos within an org could access other repos within the same org, perhaps).
-		if (err != nil && user_model.IsErrUserNotExist(err)) || !owner.Visibility.IsPublic() {
-			// Same error message is returned for non-existing & non-visible to avoid information leak
-			return nil, fmt.Errorf("expanding reusable workflow failed to access user %s: user does not exist", ref.Org)
-		} else if err != nil {
-			return nil, fmt.Errorf("expanding reusable workflow failed to access user %s: %w", ref.Org, err)
-		}
-
-		repo, err := repo_model.GetRepositoryByName(ctx, owner.ID, ref.Repo)
-		if (err != nil && repo_model.IsErrRepoNotExist(err)) || repo.IsPrivate {
-			// Same error message is returned for non-existing & non-visible to avoid information leak
-			return nil, fmt.Errorf("expanding reusable workflow failed to access repo %s: repo does not exist", ref.Repo)
-		} else if err != nil {
-			return nil, fmt.Errorf("expanding reusable workflow failed to access repo %s: %w", ref.Repo, err)
-		}
-
-		gitRepo, err := gitrepo.OpenRepository(ctx, repo)
-		if err != nil {
-			return nil, fmt.Errorf("expanding reusable workflow failed to open repo %s: %w", repo.FullName(), err)
-		}
-		defer gitRepo.Close()
-
-		commitID, err := gitRepo.GetRefCommitID(ref.Ref)
-		if err != nil {
-			return nil, fmt.Errorf("expanding reusable workflow failed to resolve reference %q on repo %s: %w", ref.Ref, repo.FullName(), err)
-		}
-
-		commit, err := gitRepo.GetCommit(commitID)
-		if err != nil {
-			return nil, fmt.Errorf("expanding reusable workflow failed to open commit %q on repo %s: %w", commitID, repo.FullName(), err)
-		}
-
-		data, err := expandLocalReusableWorkflows(commit)(job, ref.FilePath())
 		return data, err
 	}
+}
+
+func fetchInstanceWorkflow(ctx context.Context, job *jobparser.Job, ref *model.NonLocalReusableWorkflowReference) ([]byte, error) {
+	owner, err := user_model.GetUserByName(ctx, ref.Org)
+	// Reusable workflows don't currently support access to any private repos -- that's implemented here as well,
+	// although in the future it might be possible to use context information about the executing workflow to
+	// broaden access (eg. repos within an org could access other repos within the same org, perhaps).
+	if (err != nil && user_model.IsErrUserNotExist(err)) || !owner.Visibility.IsPublic() {
+		// Same error message is returned for non-existing & non-visible to avoid information leak
+		return nil, fmt.Errorf("expanding reusable workflow failed to access user %s: user does not exist", ref.Org)
+	} else if err != nil {
+		return nil, fmt.Errorf("expanding reusable workflow failed to access user %s: %w", ref.Org, err)
+	}
+
+	repo, err := repo_model.GetRepositoryByName(ctx, owner.ID, ref.Repo)
+	if (err != nil && repo_model.IsErrRepoNotExist(err)) || repo.IsPrivate {
+		// Same error message is returned for non-existing & non-visible to avoid information leak
+		return nil, fmt.Errorf("expanding reusable workflow failed to access repo %s: repo does not exist", ref.Repo)
+	} else if err != nil {
+		return nil, fmt.Errorf("expanding reusable workflow failed to access repo %s: %w", ref.Repo, err)
+	}
+
+	gitRepo, err := gitrepo.OpenRepository(ctx, repo)
+	if err != nil {
+		return nil, fmt.Errorf("expanding reusable workflow failed to open repo %s: %w", repo.FullName(), err)
+	}
+	defer gitRepo.Close()
+
+	commitID, err := gitRepo.GetRefCommitID(ref.Ref)
+	if err != nil {
+		return nil, fmt.Errorf("expanding reusable workflow failed to resolve reference %q on repo %s: %w", ref.Ref, repo.FullName(), err)
+	}
+
+	commit, err := gitRepo.GetCommit(commitID)
+	if err != nil {
+		return nil, fmt.Errorf("expanding reusable workflow failed to open commit %q on repo %s: %w", commitID, repo.FullName(), err)
+	}
+
+	data, err := expandLocalReusableWorkflows(commit)(job, ref.FilePath())
+	return data, err
 }

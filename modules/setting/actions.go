@@ -26,6 +26,7 @@ var (
 		ZombieTaskTimeout            time.Duration     `ini:"ZOMBIE_TASK_TIMEOUT"`
 		EndlessTaskTimeout           time.Duration     `ini:"ENDLESS_TASK_TIMEOUT"`
 		AbandonedJobTimeout          time.Duration     `ini:"ABANDONED_JOB_TIMEOUT"`
+		DeploymentApprovalTimeout    time.Duration     `ini:"DEPLOYMENT_APPROVAL_TIMEOUT"`
 		SkipWorkflowStrings          []string          `ini:"SKIP_WORKFLOW_STRINGS"`
 		LimitDispatchInputs          int64             `ini:"LIMIT_DISPATCH_INPUTS"`
 		MaxDelayedRunDays            int               `ini:"MAX_DELAYED_RUN_DAYS"`
@@ -38,6 +39,7 @@ var (
 	}{
 		Enabled:                      true,
 		DefaultActionsURL:            defaultActionsURLForgejo,
+		DeploymentApprovalTimeout:    720 * time.Hour,
 		SkipWorkflowStrings:          []string{"[skip ci]", "[ci skip]", "[no ci]", "[skip actions]", "[actions skip]"},
 		LimitDispatchInputs:          100,
 		MaxDelayedRunDays:            30,
@@ -140,6 +142,14 @@ func loadActionsFrom(rootCfg ConfigProvider) error {
 	Actions.AbandonedJobTimeout, err = sec.Key("ABANDONED_JOB_TIMEOUT").MustDuration(24 * time.Hour)
 	if err != nil {
 		return fmt.Errorf("failed to parse duration for [actions].ABANDONED_JOB_TIMEOUT: %w", err)
+	}
+
+	Actions.DeploymentApprovalTimeout, err = sec.Key("DEPLOYMENT_APPROVAL_TIMEOUT").MustDuration(720 * time.Hour)
+	if err != nil {
+		return fmt.Errorf("failed to parse duration for [actions].DEPLOYMENT_APPROVAL_TIMEOUT: %w", err)
+	}
+	if Actions.DeploymentApprovalTimeout < time.Hour || Actions.DeploymentApprovalTimeout > 8760*time.Hour {
+		return fmt.Errorf("[actions].DEPLOYMENT_APPROVAL_TIMEOUT must be between 1h and 8760h: %v", Actions.DeploymentApprovalTimeout)
 	}
 
 	if !Actions.LogCompression.IsValid() {

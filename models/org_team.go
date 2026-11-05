@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	actions_model "forgejo.org/models/actions"
 	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
@@ -516,6 +517,7 @@ func DeleteTeam(ctx context.Context, t *organization.Team) error {
 		&organization.TeamUnit{TeamID: t.ID},
 		&organization.TeamInvite{TeamID: t.ID},
 		&organization.UserGroupTeam{TeamID: t.ID},
+		&actions_model.ActionEnvironmentReviewer{TeamID: t.ID},
 		&issues_model.Review{Type: issues_model.ReviewTypeRequest, ReviewerTeamID: t.ID}, // batch delete the binding relationship between team and PR (request review from team)
 	); err != nil {
 		return err

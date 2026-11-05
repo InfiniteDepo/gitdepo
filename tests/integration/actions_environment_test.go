@@ -83,7 +83,7 @@ jobs:
     runs-on: %s
     %s
     steps:
-      - run: echo deploy
+      - run: echo deploy ${{ secrets.SHARED }} ${{ secrets.ONLY_ENV }} ${{ secrets.CALLED_SECRET }} ${{ secrets.WHO }} ${{ secrets.REC }}
 `, files, path, label, environment)))
 		}
 		// hasStatus reads the job without require or t.Context(), so that it can run in an Eventually condition
@@ -276,7 +276,7 @@ jobs:
     runs-on: env-i
     environment: ${{ inputs.target }}
     steps:
-      - run: echo deploy
+      - run: echo deploy ${{ secrets.SHARED }} ${{ secrets.ONLY_ENV }} ${{ secrets.CALLED_SECRET }} ${{ secrets.WHO }} ${{ secrets.REC }}
 `
 			createWorkflowFile(t, token, user2.Name, repo.Name, path, getWorkflowCreateFileOptions(user2, repo.DefaultBranch, "add dispatch", content))
 			MakeRequest(t, NewRequestWithJSON(t, http.MethodPost,
@@ -306,7 +306,7 @@ jobs:
     runs-on: env-j
     environment: ${{ inputs.target }}
     steps:
-      - run: echo deploy
+      - run: echo deploy ${{ secrets.SHARED }} ${{ secrets.ONLY_ENV }} ${{ secrets.CALLED_SECRET }} ${{ secrets.WHO }} ${{ secrets.REC }}
 `))
 			jobs := runJobs(pushWorkflow(".gitea/workflows/env-caller.yml", `name: env-caller
 on:
@@ -389,7 +389,7 @@ jobs:
     needs: [prepare]
     environment: ${{ needs.prepare.outputs.target }}
     steps:
-      - run: echo deploy
+      - run: echo deploy ${{ secrets.SHARED }} ${{ secrets.ONLY_ENV }} ${{ secrets.CALLED_SECRET }} ${{ secrets.WHO }} ${{ secrets.REC }}
 `, path)))
 			require.Len(t, jobs, 2)
 			task := runner.fetchTask(t) // prepare; deploy waits for it

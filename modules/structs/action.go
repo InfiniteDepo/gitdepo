@@ -242,3 +242,55 @@ type ActionArtifact struct {
 	// swagger:strfmt date-time
 	ExpiresAt time.Time `json:"expires_at"`
 }
+
+// ReviewDeploymentsOption approves or rejects deployments of a workflow run that wait for a review
+// swagger:model
+type ReviewDeploymentsOption struct {
+	// the jobs to review, at most 100; empty means every waiting job the user may review
+	JobIDs []int64 `json:"job_ids"`
+	// approved or rejected
+	// enum: approved,rejected
+	State string `json:"state"`
+	// plain text of at most 2000 bytes; a rejection needs one
+	Comment string `json:"comment"`
+}
+
+// ActionDeploymentReviewers summarizes who may review a deployment
+// swagger:model
+type ActionDeploymentReviewers struct {
+	// how many users the environment lists as reviewers
+	Users int `json:"users"`
+	// how many teams the environment lists as reviewers
+	Teams int `json:"teams"`
+	// whether the authenticated user may review the deployment now
+	CanReview bool `json:"can_review"`
+}
+
+// ActionDeployment is the gate of one attempt of a job that names an environment
+// swagger:model
+type ActionDeployment struct {
+	ID int64 `json:"id"`
+	// the job, and the attempt of it that this deployment gates
+	JobID   int64  `json:"job_id"`
+	JobName string `json:"job_name"`
+	Attempt int64  `json:"attempt"`
+	// the name of the environment, empty if the job's environment name was invalid
+	Environment string `json:"environment"`
+	// waiting_timer, waiting_review, released, refused, cancelled, rejected or expired; an approved deployment waits
+	// for its wait timer as waiting_timer, with reviewed_by set
+	Status string `json:"status"`
+	// the short code why the deployment was refused
+	Reason    string                     `json:"reason,omitempty"`
+	Reviewers *ActionDeploymentReviewers `json:"reviewers"`
+	// when the wait timer ends
+	// swagger:strfmt date-time
+	ReleaseAfter *time.Time `json:"release_after,omitempty"`
+	// who approved or rejected it, and when
+	ReviewedBy *User `json:"reviewed_by,omitempty"`
+	// swagger:strfmt date-time
+	ReviewedAt *time.Time `json:"reviewed_at,omitempty"`
+	// plain text, never HTML
+	ReviewComment string `json:"review_comment,omitempty"`
+	// swagger:strfmt date-time
+	Created time.Time `json:"created_at"`
+}

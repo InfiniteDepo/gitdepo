@@ -99,3 +99,65 @@ func TestDeploymentStates(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, DeploymentWaitingTimer, got.Status)
 }
+
+func TestDeploymentReviewStates(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := db.DefaultContext
+	now := timeutil.TimeStampNow()
+	_, err := db.GetEngine(ctx).Exec("UPDATE action_run_job SET status = ? WHERE id IN (192, 193)", StatusBlocked)
+	require.NoError(t, err)
+	insert := func(runID, jobID int64, status DeploymentStatus) *ActionDeployment {
+		d := &ActionDeployment{RepoID: 4, RunID: runID, JobID: jobID, Attempt: 3, Status: status}
+		if jobID == 193 {
+			d.Attempt = 1
+		}
+		require.NoError(t, db.Insert(ctx, d))
+		return d
+	}
+	waiting := insert(791, 192, DeploymentWaitingReview)
+	other := insert(792, 193, DeploymentWaitingReview)
+	insert(791, 194, DeploymentWaitingReview) // its job isn't blocked: not reviewable
+
+	ds, err := FindReviewableDeployments(ctx, 791)
+	require.NoError(t, err)
+	require.Len(t, ds, 1)
+	assert.Equal(t, waiting.ID, ds[0].ID)
+	ds, err = FindRunDeployments(ctx, 791)
+	require.NoError(t, err)
+	assert.Len(t, ds, 2, "every deployment of the run")
+
+	// only a waiting deployment takes a review, and only once
+	waiting.Status, waiting.ReviewedBy, waiting.ReviewedUnix, waiting.ReviewComment = DeploymentWaitingTimer, 2, now, "ok"
+	moved, err := ReviewDeployment(ctx, waiting)
+	require.NoError(t, err)
+	assert.True(t, moved)
+	waiting.Status, waiting.ReviewedBy = DeploymentRejected, 3
+	moved, err = ReviewDeployment(ctx, waiting)
+	require.NoError(t, err)
+	assert.False(t, moved, "no longer waiting for a review")
+	got, err := GetDeployment(ctx, 192, 3)
+	require.NoError(t, err)
+	assert.Equal(t, DeploymentWaitingTimer, got.Status)
+	assert.EqualValues(t, 2, got.ReviewedBy)
+	assert.Equal(t, "ok", got.ReviewComment)
+
+	// expiry: the oldest first, bounded, only deployments waiting for a review
+	_, err = db.GetEngine(ctx).Exec("UPDATE action_deployment SET created = ? WHERE id = ?", now-100, other.ID)
+	require.NoError(t, err)
+	expired, err := FindExpiredReviews(ctx, now-50, 10)
+	require.NoError(t, err)
+	require.Len(t, expired, 1)
+	assert.Equal(t, other.ID, expired[0].ID)
+	expired, err = FindExpiredReviews(ctx, now+1000, 1)
+	require.NoError(t, err)
+	assert.Len(t, expired, 1, "bounded")
+
+	// a cancelled run closes a deployment that waits for a review too
+	require.NoError(t, CancelOpenDeployments(ctx, 193))
+	got, err = GetDeployment(ctx, 193, 1)
+	require.NoError(t, err)
+	assert.Equal(t, DeploymentCancelled, got.Status)
+	unpicked, err := FindUnpickedEnvironmentJobs(ctx, 4, 0)
+	require.NoError(t, err)
+	assert.Empty(t, unpicked)
+}

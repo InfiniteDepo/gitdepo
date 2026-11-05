@@ -18,17 +18,41 @@ import (
 type DeploymentStatus int
 
 const (
-	DeploymentWaitingTimer DeploymentStatus = 1 // waits for the wait timer of the environment
-	DeploymentReleased     DeploymentStatus = 2 // the job may be given to a runner
-	DeploymentRefused      DeploymentStatus = 3 // the job failed at the gate, see Reason
-	DeploymentCancelled    DeploymentStatus = 4 // the run was cancelled while the job waited
-	// 5 and up: waiting for reviewers, rejected, expired
+	DeploymentWaitingTimer  DeploymentStatus = 1 // waits for the wait timer of the environment
+	DeploymentReleased      DeploymentStatus = 2 // the job may be given to a runner
+	DeploymentRefused       DeploymentStatus = 3 // the job failed at the gate, see Reason
+	DeploymentCancelled     DeploymentStatus = 4 // the run was cancelled while the job waited
+	DeploymentWaitingReview DeploymentStatus = 5 // waits for a reviewer of the environment; the wait timer runs meanwhile
+	DeploymentRejected      DeploymentStatus = 6 // a reviewer rejected it, the job fails
+	DeploymentExpired       DeploymentStatus = 7 // nobody reviewed it in time, the job fails
 )
 
-// IsWaiting tells if the gate still holds the job: the timer, and later the reviewers, have their own expiry, so the
-// cron that cancels abandoned jobs leaves such a job alone.
+// IsWaiting tells if the gate still holds the job: the timer and the reviewers have their own expiry, so the cron that
+// cancels abandoned jobs leaves such a job alone. An approved deployment waits for the timer, so it is
+// DeploymentWaitingTimer with ReviewedBy set (the timer is due at once without one).
 func (s DeploymentStatus) IsWaiting() bool {
-	return s == DeploymentWaitingTimer
+	return s == DeploymentWaitingTimer || s == DeploymentWaitingReview
+}
+
+// String is the name the API shows.
+func (s DeploymentStatus) String() string {
+	switch s {
+	case DeploymentWaitingTimer:
+		return "waiting_timer"
+	case DeploymentReleased:
+		return "released"
+	case DeploymentRefused:
+		return "refused"
+	case DeploymentCancelled:
+		return "cancelled"
+	case DeploymentWaitingReview:
+		return "waiting_review"
+	case DeploymentRejected:
+		return "rejected"
+	case DeploymentExpired:
+		return "expired"
+	}
+	return "unknown"
 }
 
 // Reasons of a refused deployment; the only values of ActionDeployment.Reason
@@ -39,9 +63,14 @@ const (
 	DeploymentReasonInvalidName        = "invalid_name"
 	DeploymentReasonNotFound           = "environment_not_found"   // a fork pull request names an environment that doesn't exist
 	DeploymentReasonUnsupported        = "environment_unsupported" // a job of a reusable workflow whose environment can't be read
+	DeploymentReasonWorkflowNotAllowed = "workflow_not_allowed"    // the run's workflow file is not in the environment's allowed workflows
 )
 
-const maxDeploymentURL = 1024
+const (
+	maxDeploymentURL = 1024
+	// MaxReviewComment is the longest comment of a review, in bytes.
+	MaxReviewComment = 2000
+)
 
 // ActionDeployment is the gate of one attempt of a job that names an environment: a job attempt never gets the
 // secrets of its environment unless its deployment is released.
@@ -59,8 +88,12 @@ type ActionDeployment struct {
 	Status           DeploymentStatus   `xorm:"INDEX NOT NULL DEFAULT 0"`
 	Reason           string             `xorm:"VARCHAR(64)"` // a short code, never free text
 	ReleaseAfterUnix timeutil.TimeStamp `xorm:"NOT NULL DEFAULT 0"`
-	Created          timeutil.TimeStamp `xorm:"created"`
-	Updated          timeutil.TimeStamp `xorm:"updated"`
+	// the review that decided it: one approval releases and one rejection fails, so one row is enough
+	ReviewedBy    int64              `xorm:"NOT NULL DEFAULT 0"`
+	ReviewedUnix  timeutil.TimeStamp `xorm:"NOT NULL DEFAULT 0"`
+	ReviewComment string             `xorm:"TEXT"` // plain text, never rendered as HTML
+	Created       timeutil.TimeStamp `xorm:"created"`
+	Updated       timeutil.TimeStamp `xorm:"updated"`
 }
 
 func init() {
@@ -94,6 +127,21 @@ func SetDeploymentStatus(ctx context.Context, d *ActionDeployment, from ...Deplo
 	return n == 1, err
 }
 
+// ReviewDeployment moves d from DeploymentWaitingReview to its Status with the review it carries, and reports if it
+// was waiting (another reviewer, or the expiry, may have decided first).
+func ReviewDeployment(ctx context.Context, d *ActionDeployment) (bool, error) {
+	n, err := db.GetEngine(ctx).Where("id = ? AND status = ?", d.ID, DeploymentWaitingReview).
+		Cols("status", "reviewed_by", "reviewed_unix", "review_comment").Update(d)
+	return n == 1, err
+}
+
+// FindExpiredReviews returns at most limit deployments that have waited for a review since before the cutoff, oldest first.
+func FindExpiredReviews(ctx context.Context, cutoff timeutil.TimeStamp, limit int) ([]*ActionDeployment, error) {
+	var ds []*ActionDeployment
+	return ds, db.GetEngine(ctx).Where("status = ? AND created <= ?", DeploymentWaitingReview, cutoff).
+		OrderBy("created, id").Limit(limit).Find(&ds)
+}
+
 // FindDueDeploymentRunIDs returns the runs, at most limit, the longest due first, with a blocked job whose deployment waits for a wait timer
 // that ended.
 func FindDueDeploymentRunIDs(ctx context.Context, now timeutil.TimeStamp, limit int) ([]int64, error) {
@@ -108,7 +156,7 @@ func FindDueDeploymentRunIDs(ctx context.Context, now timeutil.TimeStamp, limit 
 // CancelOpenDeployments marks the deployments of the job that still wait as cancelled.
 func CancelOpenDeployments(ctx context.Context, jobID int64) error {
 	_, err := db.GetEngine(ctx).Table("action_deployment").
-		Where("job_id = ? AND status = ?", jobID, DeploymentWaitingTimer).
+		Where("job_id = ?", jobID).And(builder.In("status", DeploymentWaitingTimer, DeploymentWaitingReview)).
 		Update(map[string]any{"status": DeploymentCancelled, "updated": timeutil.TimeStampNow()})
 	return err
 }
@@ -120,8 +168,24 @@ func FindUnpickedEnvironmentJobs(ctx context.Context, repoID, environmentID int6
 	return jobs, db.GetEngine(ctx).Table("action_run_job").Select("action_run_job.*").
 		Join("INNER", "action_deployment", "action_run_job.id = action_deployment.job_id AND action_run_job.attempt = action_deployment.attempt").
 		Where("action_deployment.repo_id = ? AND action_deployment.environment_id = ?", repoID, environmentID).
-		And(builder.In("action_deployment.status", DeploymentWaitingTimer, DeploymentReleased)).
+		And(builder.In("action_deployment.status", DeploymentWaitingTimer, DeploymentWaitingReview, DeploymentReleased)).
 		And(builder.In("action_run_job.status", StatusBlocked, StatusWaiting)).
 		And("action_run_job.task_id = 0").
 		Find(&jobs)
+}
+
+// FindReviewableDeployments returns the deployments of the run that wait for a review: the current attempt of a job that
+// is still blocked.
+func FindReviewableDeployments(ctx context.Context, runID int64) ([]*ActionDeployment, error) {
+	var ds []*ActionDeployment
+	return ds, db.GetEngine(ctx).Table("action_deployment").Select("action_deployment.*").
+		Join("INNER", "action_run_job", "action_run_job.id = action_deployment.job_id AND action_run_job.attempt = action_deployment.attempt").
+		Where("action_deployment.run_id = ? AND action_deployment.status = ? AND action_run_job.status = ?", runID, DeploymentWaitingReview, StatusBlocked).
+		OrderBy("action_deployment.job_id").Find(&ds)
+}
+
+// FindRunDeployments returns every deployment of the run, past attempts included, by job and attempt.
+func FindRunDeployments(ctx context.Context, runID int64) ([]*ActionDeployment, error) {
+	var ds []*ActionDeployment
+	return ds, db.GetEngine(ctx).Where("run_id = ?", runID).OrderBy("job_id, attempt").Find(&ds)
 }

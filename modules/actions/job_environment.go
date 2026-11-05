@@ -63,6 +63,25 @@ func readRawJobs(content []byte) (map[string]rawJob, error) {
 	return raw.Jobs, nil
 }
 
+// NamesEnvironment tells if any job of the workflow file names an environment. A file that can't be read names none:
+// whoever runs it fails on it anyway.
+func NamesEnvironment(content []byte) bool {
+	var raw struct {
+		Jobs map[string]struct {
+			Environment yaml.Node `yaml:"environment"`
+		} `yaml:"jobs"`
+	}
+	if yaml.Unmarshal(content, &raw) != nil {
+		return false
+	}
+	for _, job := range raw.Jobs {
+		if !job.Environment.IsZero() && job.Environment.ShortTag() != "!!null" { // a null value names none, as for readRawJobs
+			return true
+		}
+	}
+	return false
+}
+
 // attachJobEnvironments reads the `environment:` of every job of the workflow in content and sets it on the single
 // workflows that were made of that job. The jobs of a reusable workflow are left out (their ids belong to another file):
 // ReusableWorkflows.AttachEnvironments does them.

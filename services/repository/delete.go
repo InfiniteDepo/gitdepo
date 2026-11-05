@@ -195,6 +195,11 @@ func DeleteRepositoryDirectly(ctx context.Context, repoID int64, opts DeleteRepo
 			return fmt.Errorf("cleanupEphemeralRunners: %w", err)
 		}
 
+		if _, err := db.GetEngine(ctx).In("environment_id", builder.Select("id").From("action_environment").Where(builder.Eq{"repo_id": repoID})).
+			Delete(new(actions_model.ActionEnvironmentReviewer)); err != nil {
+			return fmt.Errorf("delete the reviewers of the environments: %w", err)
+		}
+
 		if err := db.DeleteBeans(ctx,
 			&access_model.Access{RepoID: repo.ID},
 			&asymkey_model.OrgDeployKeyRepo{RepoID: repoID},

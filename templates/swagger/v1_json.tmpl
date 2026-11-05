@@ -11488,6 +11488,115 @@
         }
       }
     },
+    "/repos/{owner}/{repo}/actions/runs/{run_id}/deployments": {
+      "get": {
+        "description": "The deployments of the jobs of the run that name an environment, those that wait for a review and the past ones, for every attempt of a job.\n",
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "repository"
+        ],
+        "summary": "List the deployments of a workflow run",
+        "operationId": "ListActionRunDeployments",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "owner of the repo",
+            "name": "owner",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the repo",
+            "name": "repo",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "integer",
+            "format": "int64",
+            "description": "ID of the workflow run",
+            "name": "run_id",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/ActionDeploymentList"
+          },
+          "403": {
+            "$ref": "#/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/notFound"
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/actions/runs/{run_id}/deployments/review": {
+      "post": {
+        "description": "Only a reviewer listed by the environment, or a member of a listed team, who can read the repository's Actions may review; site administrators have no exception. One approval releases a job once its wait timer is due, one rejection fails it. Nothing changes unless every named deployment can be reviewed.\n",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "repository"
+        ],
+        "summary": "Approve or reject the deployments of a workflow run that wait for a review",
+        "operationId": "ReviewActionRunDeployments",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "owner of the repo",
+            "name": "owner",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the repo",
+            "name": "repo",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "integer",
+            "format": "int64",
+            "description": "ID of the workflow run",
+            "name": "run_id",
+            "in": "path",
+            "required": true
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "$ref": "#/definitions/ReviewDeploymentsOption"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/ActionDeploymentList"
+          },
+          "403": {
+            "$ref": "#/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/notFound"
+          },
+          "422": {
+            "$ref": "#/responses/validationError"
+          }
+        }
+      }
+    },
     "/repos/{owner}/{repo}/actions/runs/{run_id}/jobs": {
       "get": {
         "produces": [
@@ -31150,6 +31259,99 @@
       },
       "x-go-package": "forgejo.org/modules/structs"
     },
+    "ActionDeployment": {
+      "description": "ActionDeployment is the gate of one attempt of a job that names an environment",
+      "type": "object",
+      "properties": {
+        "attempt": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "Attempt"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "x-go-name": "Created"
+        },
+        "environment": {
+          "description": "the name of the environment, empty if the job's environment name was invalid",
+          "type": "string",
+          "x-go-name": "Environment"
+        },
+        "id": {
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "ID"
+        },
+        "job_id": {
+          "description": "the job, and the attempt of it that this deployment gates",
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "JobID"
+        },
+        "job_name": {
+          "type": "string",
+          "x-go-name": "JobName"
+        },
+        "reason": {
+          "description": "the short code why the deployment was refused",
+          "type": "string",
+          "x-go-name": "Reason"
+        },
+        "release_after": {
+          "description": "when the wait timer ends",
+          "type": "string",
+          "format": "date-time",
+          "x-go-name": "ReleaseAfter"
+        },
+        "review_comment": {
+          "description": "plain text, never HTML",
+          "type": "string",
+          "x-go-name": "ReviewComment"
+        },
+        "reviewed_at": {
+          "type": "string",
+          "format": "date-time",
+          "x-go-name": "ReviewedAt"
+        },
+        "reviewed_by": {
+          "$ref": "#/definitions/User"
+        },
+        "reviewers": {
+          "$ref": "#/definitions/ActionDeploymentReviewers"
+        },
+        "status": {
+          "description": "waiting_timer, waiting_review, released, refused, cancelled, rejected or expired; an approved deployment waits\nfor its wait timer as waiting_timer, with reviewed_by set",
+          "type": "string",
+          "x-go-name": "Status"
+        }
+      },
+      "x-go-package": "forgejo.org/modules/structs"
+    },
+    "ActionDeploymentReviewers": {
+      "description": "ActionDeploymentReviewers summarizes who may review a deployment",
+      "type": "object",
+      "properties": {
+        "can_review": {
+          "description": "whether the authenticated user may review the deployment now",
+          "type": "boolean",
+          "x-go-name": "CanReview"
+        },
+        "teams": {
+          "description": "how many teams the environment lists as reviewers",
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "Teams"
+        },
+        "users": {
+          "description": "how many users the environment lists as reviewers",
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "Users"
+        }
+      },
+      "x-go-package": "forgejo.org/modules/structs"
+    },
     "ActionRun": {
       "description": "ActionRun represents an action run",
       "type": "object",
@@ -42004,6 +42206,36 @@
       },
       "x-go-package": "forgejo.org/modules/structs"
     },
+    "ReviewDeploymentsOption": {
+      "description": "ReviewDeploymentsOption approves or rejects deployments of a workflow run that wait for a review",
+      "type": "object",
+      "properties": {
+        "comment": {
+          "description": "plain text of at most 2000 bytes; a rejection needs one",
+          "type": "string",
+          "x-go-name": "Comment"
+        },
+        "job_ids": {
+          "description": "the jobs to review, at most 100; empty means every waiting job the user may review",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "x-go-name": "JobIDs"
+        },
+        "state": {
+          "description": "approved or rejected",
+          "type": "string",
+          "enum": [
+            "approved",
+            "rejected"
+          ],
+          "x-go-name": "State"
+        }
+      },
+      "x-go-package": "forgejo.org/modules/structs"
+    },
     "ReviewStateType": {
       "description": "ReviewStateType review state type",
       "type": "string",
@@ -44132,6 +44364,15 @@
         "type": "array",
         "items": {
           "$ref": "#/definitions/ActionArtifact"
+        }
+      }
+    },
+    "ActionDeploymentList": {
+      "description": "ActionDeploymentList",
+      "schema": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/ActionDeployment"
         }
       }
     },

@@ -224,3 +224,23 @@ func TestReusableWorkflowEnvironmentsUnsupported(t *testing.T) {
 	)
 	require.Error(t, err)
 }
+
+func TestNamesEnvironment(t *testing.T) {
+	for name, tc := range map[string]struct {
+		content string
+		want    bool
+	}{
+		"string":      {"jobs:\n  a:\n    environment: prod\n", true},
+		"map":         {"jobs:\n  a:\n    environment:\n      name: prod\n", true},
+		"in one job":  {"jobs:\n  a:\n    runs-on: x\n  b:\n    environment: prod\n", true},
+		"expression":  {"jobs:\n  a:\n    environment: ${{ inputs.target }}\n", true},
+		"none":        {"jobs:\n  a:\n    runs-on: x\n", false},
+		"in a step":   {"jobs:\n  a:\n    steps:\n      - env:\n          environment: prod\n", false},
+		"top level":   {"environment: prod\njobs:\n  a:\n    runs-on: x\n", false},
+		"not a file":  {"jobs: [", false},
+		"no jobs":     {"", false},
+		"empty value": {"jobs:\n  a:\n    environment:\n", false},
+	} {
+		assert.Equal(t, tc.want, NamesEnvironment([]byte(tc.content)), name)
+	}
+}

@@ -126,9 +126,10 @@ func refAllowed(ctx context.Context, repoID int64, env *actions_model.ActionEnvi
 
 // gateEnvironment is the one place that lets a job with an environment through, called when the job would run. It
 // finds or creates the environment, records the deployment of this attempt of the job and decides: the ref policy
-// refuses the job (it fails), the wait timer holds it (it stays blocked and a later pass looks again), otherwise the
-// deployment is released and the runner labels of the environment are added to the labels the job runs on. Another
-// condition, such as required reviewers, goes between the ref policy and the timer.
+// refuses the job (it fails), the required reviewers and the wait timer hold it (it stays blocked and a later pass looks
+// again; the timer counts from the creation of the deployment, in parallel with the review, and the job is released
+// when it has been approved and the timer is due), otherwise the deployment is released and the runner labels of the
+// environment are added to the labels the job runs on. A rejected or expired deployment fails the job here too.
 func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (behaviour, error) {
 	jobEnv, err := blockedJobEnvironment(job)
 	if err != nil {
@@ -190,6 +191,9 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 			return behaviourFailJob, nil
 		case actions_model.DeploymentCancelled:
 			return behaviourHoldJob, nil
+		case actions_model.DeploymentRejected, actions_model.DeploymentExpired:
+			// decided by ReviewDeployments or the expiry, which ran the emitter so that the job fails here
+			return behaviourFailJob, nil
 		}
 		if env, err = actions_model.GetRepoEnvironmentByID(ctx, d.RepoID, d.EnvironmentID); errors.Is(err, actions_model.ErrEnvironmentNotFound) {
 			reason = actions_model.DeploymentReasonEnvironmentDeleted
@@ -204,6 +208,16 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 			return behaviourError, err
 		} else if !ok {
 			reason = actions_model.DeploymentReasonRefNotAllowed
+		} else if !env.AllowsWorkflow(run.WorkflowID) {
+			// run.WorkflowID is the file of the run, so a job of a reusable workflow is decided by the file that called
+			// it, never by the called one (a workflow author can't pick the called file's name to pass)
+			reason = actions_model.DeploymentReasonWorkflowNotAllowed
+		}
+	}
+	hasReviewers := false
+	if reason == "" && d.Status == 0 {
+		if hasReviewers, err = actions_model.HasEnvironmentReviewers(ctx, env.ID); err != nil {
+			return behaviourError, err
 		}
 	}
 
@@ -212,6 +226,13 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 	switch {
 	case reason != "":
 		d.Status, d.Reason = actions_model.DeploymentRefused, reason
+	case prior == 0 && hasReviewers:
+		// the review and the wait timer run in parallel: the job needs an approval and the timer due
+		d.Status = actions_model.DeploymentWaitingReview
+		if env.WaitTimerMinutes > 0 {
+			d.ReleaseAfterUnix = now + timeutil.TimeStamp(env.WaitTimerMinutes)*60
+		}
+	case prior == actions_model.DeploymentWaitingReview: // only ReviewDeployments or the expiry moves it
 	case prior == 0 && env.WaitTimerMinutes > 0:
 		d.Status, d.ReleaseAfterUnix = actions_model.DeploymentWaitingTimer, now+timeutil.TimeStamp(env.WaitTimerMinutes)*60
 	case prior == actions_model.DeploymentWaitingTimer && now < d.ReleaseAfterUnix:
@@ -228,7 +249,7 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 			return behaviourError, err
 		}
 		return behaviourFailJob, nil
-	case actions_model.DeploymentWaitingTimer:
+	case actions_model.DeploymentWaitingTimer, actions_model.DeploymentWaitingReview:
 		return behaviourHoldJob, nil
 	}
 	// A job that runs on no label stays so: the labels of the environment only narrow the runners that can take it.
@@ -298,6 +319,18 @@ func releasedEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (
 		return nil, errEnvironmentNotReleased
 	}
 	return env, err
+}
+
+// releasedEnvironmentName returns the name of the environment that released the job, "" if it names none.
+func releasedEnvironmentName(ctx context.Context, job *actions_model.ActionRunJob) (string, error) {
+	if job.EnvironmentName == "" {
+		return "", nil
+	}
+	env, err := releasedEnvironment(ctx, job)
+	if err != nil {
+		return "", err
+	}
+	return env.Name, nil
 }
 
 // getEnvironmentSecrets returns the secrets of the environment that released the job; it fails if none did.

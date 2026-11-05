@@ -7,7 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
+	"slices"
+	"strings"
 
 	actions_model "forgejo.org/models/actions"
 	secret_model "forgejo.org/models/secret"
@@ -67,8 +68,9 @@ func getSecretsOfJob(ctx context.Context, job *actions_model.ActionRunJob) (map[
 	return withEnvironmentSecrets(ctx, job, jobSecrets)
 }
 
-// withEnvironmentSecrets adds the secrets of the environment that released the job, which win over the others; a job
-// of a fork pull request gets none (the early return above), a job of a reusable workflow gets those of its own.
+// withEnvironmentSecrets adds the secrets of the environment that released the job that its payload names, which win
+// over the others; a job of a fork pull request gets none (the early return above), a job of a reusable workflow gets
+// those of its own payload.
 func withEnvironmentSecrets(ctx context.Context, job *actions_model.ActionRunJob, secrets map[string]string) (map[string]string, error) {
 	if job.EnvironmentName == "" || (job.Run.IsForkPullRequest && job.Run.TriggerEvent != actions_module.GithubEventPullRequestTarget) {
 		return secrets, nil
@@ -77,10 +79,20 @@ func withEnvironmentSecrets(ctx context.Context, job *actions_model.ActionRunJob
 	if err != nil {
 		return nil, err
 	}
-	if secrets == nil {
-		secrets = make(map[string]string, len(environmentSecrets))
+	// Only the environment secrets the job's own payload reads by name: a job that can read secrets another way
+	// (toJSON(secrets), secrets[expr], secrets: inherit) gets none, so a step can't dump a secret it never names.
+	names, dynamic, err := actions_module.ReferencedSecrets(job.WorkflowPayload)
+	if err != nil || dynamic {
+		return secrets, nil
 	}
-	maps.Copy(secrets, environmentSecrets)
+	if secrets == nil {
+		secrets = make(map[string]string, len(names))
+	}
+	for name, v := range environmentSecrets {
+		if slices.Contains(names, strings.ToUpper(name)) {
+			secrets[name] = v
+		}
+	}
 	return secrets, nil
 }
 

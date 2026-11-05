@@ -243,3 +243,15 @@ func TestExpandInstanceReusableWorkflowsProject(t *testing.T) {
 	_, err = expandInstanceReusableWorkflows(t.Context())(&jobparser.Job{}, ref)
 	require.ErrorContains(t, err, "payments: repo does not exist")
 }
+
+func TestUnexpandedCall(t *testing.T) {
+	read := func(content string, err error) func() ([]byte, error) {
+		return func() ([]byte, error) { return []byte(content), err }
+	}
+	named := "on: workflow_call\njobs:\n  deploy:\n    runs-on: docker\n    environment: production\n    steps: [{run: echo}]\n"
+	plain := "on: workflow_call\njobs:\n  build:\n    runs-on: docker\n    steps: [{run: echo}]\n"
+	require.ErrorIs(t, unexpandedCall(read(named, nil)), ErrUnexpandedEnvironment, "the run is refused")
+	require.ErrorIs(t, unexpandedCall(read(plain, nil)), jobparser.ErrUnsupportedReusableWorkflowFetch, "an ordinary call stays monolithic")
+	require.ErrorIs(t, unexpandedCall(read("", os.ErrNotExist)), jobparser.ErrUnsupportedReusableWorkflowFetch, "a file that can't be read is not refused")
+	require.ErrorIs(t, unexpandedCall(read("jobs: [", nil)), jobparser.ErrUnsupportedReusableWorkflowFetch)
+}

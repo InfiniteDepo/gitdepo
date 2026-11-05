@@ -156,6 +156,7 @@ func deleteUser(ctx context.Context, u *user_model.User, purge, keepRow bool) (e
 		&user_model.Redirect{RedirectUserID: u.ID},
 		&actions_model.ActionRunner{OwnerID: u.ID},
 		&actions_model.ActionUser{UserID: u.ID},
+		&actions_model.ActionEnvironmentReviewer{UserID: u.ID},
 		&user_model.BlockedUser{BlockID: u.ID},
 		&user_model.BlockedUser{UserID: u.ID},
 		&actions_model.ActionRunnerToken{OwnerID: optional.Some(u.ID)},
@@ -327,6 +328,7 @@ func tombstoneUser(ctx context.Context, u *user_model.User) error {
 		&issues_model.IssueWatch{UserID: u.ID},
 		&secret_model.Secret{OwnerID: u.ID},
 		&actions_model.ActionVariable{OwnerID: u.ID},
+		&actions_model.ActionEnvironmentReviewer{UserID: u.ID},
 	); err != nil {
 		return fmt.Errorf("tombstone: %w", err)
 	}

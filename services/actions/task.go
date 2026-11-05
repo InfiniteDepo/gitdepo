@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 
 	actions_model "forgejo.org/models/actions"
 	"forgejo.org/models/db"
@@ -124,7 +125,12 @@ func pickTask(ctx context.Context, runner *actions_model.ActionRunner, requestKe
 			return fmt.Errorf("GetUnit: %w", err)
 		}
 
-		taskContext, err := generateTaskContext(t, unit.ActionsConfig())
+		environment, err := releasedEnvironmentName(ctx, jobOfTask(t))
+		if err != nil {
+			return fmt.Errorf("releasedEnvironmentName: %w", err)
+		}
+
+		taskContext, err := generateTaskContext(t, unit.ActionsConfig(), environment)
 		if err != nil {
 			return fmt.Errorf("generateTaskContext: %w", err)
 		}
@@ -199,7 +205,15 @@ func RecoverTasks(ctx context.Context, tasks []*actions_model.ActionTask) ([]*ru
 				return fmt.Errorf("GetUnit: %w", err)
 			}
 
-			taskContext, err := generateTaskContext(t, unit.ActionsConfig())
+			environment, err := releasedEnvironmentName(ctx, jobOfTask(t))
+			if errors.Is(err, errEnvironmentNotReleased) {
+				failed = append(failed, t)
+				continue
+			} else if err != nil {
+				return fmt.Errorf("releasedEnvironmentName: %w", err)
+			}
+
+			taskContext, err := generateTaskContext(t, unit.ActionsConfig(), environment)
 			if err != nil {
 				return fmt.Errorf("generateTaskContext: %w", err)
 			}
@@ -228,7 +242,9 @@ func RecoverTasks(ctx context.Context, tasks []*actions_model.ActionTask) ([]*ru
 	return retval, nil
 }
 
-func generateTaskContext(t *actions_model.ActionTask, ac *repo_model.ActionsConfig) (*structpb.Struct, error) {
+// generateTaskContext builds the context of the task for the runner. environment is the name of the environment that
+// released the job ("" for a job without one): the ID token of the job carries it, and it is not part of the context.
+func generateTaskContext(t *actions_model.ActionTask, ac *repo_model.ActionsConfig, environment string) (*structpb.Struct, error) {
 	run := t.Job.Run
 	gitCtx, err := GenerateGiteaContext(run, t.Job)
 	if err != nil {
@@ -247,7 +263,13 @@ func generateTaskContext(t *actions_model.ActionTask, ac *repo_model.ActionsConf
 		enableOpenIDConnect = false
 	}
 
-	giteaRuntimeToken, err := CreateAuthorizationToken(t, gitCtx, enableOpenIDConnect, ac)
+	oidcCtx := gitCtx
+	if environment != "" {
+		// the name is the environment row's, never a text of the workflow
+		oidcCtx = maps.Clone(gitCtx)
+		oidcCtx["environment"] = environment
+	}
+	giteaRuntimeToken, err := CreateAuthorizationToken(t, oidcCtx, enableOpenIDConnect, ac)
 	if err != nil {
 		return nil, err
 	}

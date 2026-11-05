@@ -32,6 +32,7 @@ const (
 	MaxEnvironmentName     = 255
 	MaxRefPatterns         = 50
 	MaxRunnerLabels        = 20
+	MaxAllowedWorkflows    = 20
 	MaxWaitTimerMinutes    = 43200 // 30 days
 )
 
@@ -66,8 +67,9 @@ type ActionEnvironment struct {
 	RefPolicy         int                     `xorm:"NOT NULL DEFAULT 0"`
 	RefPatterns       []EnvironmentRefPattern `xorm:"JSON TEXT"`
 	WaitTimerMinutes  int                     `xorm:"NOT NULL DEFAULT 0"`
-	PreventSelfReview bool                    `xorm:"NOT NULL DEFAULT false"` // used by the approval of required reviewers
+	PreventSelfReview bool                    `xorm:"NOT NULL DEFAULT false"` // the run's triggering user can't review its deployment
 	RunnerLabels      []string                `xorm:"JSON TEXT"`              // appended to the runs-on of the jobs that deploy here
+	AllowedWorkflows  []string                `xorm:"JSON TEXT"`              // patterns over the workflow file name, empty = any workflow
 	Created           timeutil.TimeStamp      `xorm:"created"`
 	Updated           timeutil.TimeStamp      `xorm:"updated"`
 }
@@ -150,6 +152,17 @@ func (e *ActionEnvironment) Normalize() error {
 			return util.NewInvalidArgumentErrorf("invalid runner label")
 		}
 	}
+	if len(e.AllowedWorkflows) > MaxAllowedWorkflows {
+		return util.NewInvalidArgumentErrorf("too many allowed workflows")
+	}
+	for _, p := range e.AllowedWorkflows {
+		if _, err := compilePattern(p); err != nil || p == "" || len(p) > 255 || !isPrintableASCII(p) {
+			return util.NewInvalidArgumentErrorf("invalid allowed workflow")
+		}
+	}
+	if e.AllowedWorkflows == nil {
+		e.AllowedWorkflows = []string{}
+	}
 	if e.RefPatterns == nil {
 		e.RefPatterns = []EnvironmentRefPattern{}
 	}
@@ -177,6 +190,15 @@ func (e *ActionEnvironment) AllowsRef(ref string) bool {
 	return false
 }
 
+// AllowsWorkflow reports if a run of the workflow file (its name without the directory, such as "deploy.yml") may
+// deploy to the environment: it has no allowed workflows, or one of its patterns matches ("*" doesn't cross "/").
+func (e *ActionEnvironment) AllowsWorkflow(workflowID string) bool {
+	if len(e.AllowedWorkflows) == 0 {
+		return true
+	}
+	return slices.ContainsFunc(e.AllowedWorkflows, func(p string) bool { return matchPattern(p, workflowID) })
+}
+
 // EnvironmentRefKind splits ref into EnvironmentPatternBranch or EnvironmentPatternTag and its short name; the kind
 // is "" for any other ref.
 func EnvironmentRefKind(ref string) (kind, name string) {
@@ -197,7 +219,7 @@ func (e *ActionEnvironment) auditData() map[string]any {
 	}
 	return map[string]any{
 		"name": e.Name, "ref_policy": e.RefPolicy, "ref_patterns": patterns, "wait_timer_minutes": e.WaitTimerMinutes,
-		"prevent_self_review": e.PreventSelfReview, "runner_labels": e.RunnerLabels,
+		"prevent_self_review": e.PreventSelfReview, "runner_labels": e.RunnerLabels, "allowed_workflows": e.AllowedWorkflows,
 	}
 }
 
@@ -222,12 +244,16 @@ func insertEnvironmentIfAbsent(ctx context.Context, e *ActionEnvironment) (bool,
 	if err != nil {
 		return false, err
 	}
-	insert := "INSERT INTO action_environment (owner_id, repo_id, name, lower_name, ref_policy, ref_patterns, wait_timer_minutes, prevent_self_review, runner_labels, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (owner_id, repo_id, lower_name) DO NOTHING"
+	workflows, err := json.Marshal(e.AllowedWorkflows)
+	if err != nil {
+		return false, err
+	}
+	insert := "INSERT INTO action_environment (owner_id, repo_id, name, lower_name, ref_policy, ref_patterns, wait_timer_minutes, prevent_self_review, runner_labels, allowed_workflows, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (owner_id, repo_id, lower_name) DO NOTHING"
 	if setting.Database.Type.IsMySQL() {
-		insert = "INSERT IGNORE INTO action_environment (owner_id, repo_id, name, lower_name, ref_policy, ref_patterns, wait_timer_minutes, prevent_self_review, runner_labels, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+		insert = "INSERT IGNORE INTO action_environment (owner_id, repo_id, name, lower_name, ref_policy, ref_patterns, wait_timer_minutes, prevent_self_review, runner_labels, allowed_workflows, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 	}
 	now := timeutil.TimeStampNow()
-	res, err := db.GetEngine(ctx).Exec(insert, e.OwnerID, e.RepoID, e.Name, e.LowerName, e.RefPolicy, string(patterns), e.WaitTimerMinutes, e.PreventSelfReview, string(labels), now, now)
+	res, err := db.GetEngine(ctx).Exec(insert, e.OwnerID, e.RepoID, e.Name, e.LowerName, e.RefPolicy, string(patterns), e.WaitTimerMinutes, e.PreventSelfReview, string(labels), string(workflows), now, now)
 	if err != nil {
 		return false, err
 	}
@@ -352,7 +378,7 @@ func UpdateEnvironment(ctx context.Context, e *ActionEnvironment) error {
 				return err
 			}
 		}
-		_, err = db.GetEngine(ctx).ID(e.ID).Cols("name", "ref_policy", "ref_patterns", "wait_timer_minutes", "prevent_self_review", "runner_labels").Update(e)
+		_, err = db.GetEngine(ctx).ID(e.ID).Cols("name", "ref_policy", "ref_patterns", "wait_timer_minutes", "prevent_self_review", "runner_labels", "allowed_workflows").Update(e)
 		return err
 	})
 }
@@ -373,6 +399,9 @@ func DeleteEnvironment(ctx context.Context, e *ActionEnvironment, failUnpickedJo
 			return err
 		}
 		eng := db.GetEngine(ctx)
+		if _, err := eng.Where("environment_id = ?", stored.ID).Delete(new(ActionEnvironmentReviewer)); err != nil {
+			return err
+		}
 		secrets, err := eng.Table("secret").Where("repo_id = ? AND environment_id = ?", stored.RepoID, stored.ID).Delete()
 		if err != nil {
 			return err

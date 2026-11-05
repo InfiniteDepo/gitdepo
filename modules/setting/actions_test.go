@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"forgejo.org/modules/test"
 
@@ -314,4 +315,31 @@ func Test_getDefaultTokenPermissionsForActions(t *testing.T) {
 	cfg, err = NewConfigProviderFromData("[actions]\nDEFAULT_TOKEN_PERMISSIONS = none\n")
 	require.NoError(t, err)
 	require.ErrorContains(t, loadActionsFrom(cfg), "DEFAULT_TOKEN_PERMISSIONS")
+}
+
+func Test_getDeploymentApprovalTimeoutForActions(t *testing.T) {
+	defer test.MockVariableValue(&Actions, Actions)()
+
+	for iniStr, want := range map[string]time.Duration{
+		"[actions]\n": 720 * time.Hour,
+		"[actions]\nDEPLOYMENT_APPROVAL_TIMEOUT =\n":       720 * time.Hour,
+		"[actions]\nDEPLOYMENT_APPROVAL_TIMEOUT = 1h\n":    time.Hour,
+		"[actions]\nDEPLOYMENT_APPROVAL_TIMEOUT = 48h\n":   48 * time.Hour,
+		"[actions]\nDEPLOYMENT_APPROVAL_TIMEOUT = 8760h\n": 8760 * time.Hour,
+	} {
+		cfg, err := NewConfigProviderFromData(iniStr)
+		require.NoError(t, err)
+		require.NoError(t, loadActionsFrom(cfg))
+		assert.Equal(t, want, Actions.DeploymentApprovalTimeout, iniStr)
+	}
+	for _, iniStr := range []string{
+		"[actions]\nDEPLOYMENT_APPROVAL_TIMEOUT = 59m\n",
+		"[actions]\nDEPLOYMENT_APPROVAL_TIMEOUT = 8761h\n",
+		"[actions]\nDEPLOYMENT_APPROVAL_TIMEOUT = -1h\n",
+		"[actions]\nDEPLOYMENT_APPROVAL_TIMEOUT = soon\n",
+	} {
+		cfg, err := NewConfigProviderFromData(iniStr)
+		require.NoError(t, err)
+		require.ErrorContains(t, loadActionsFrom(cfg), "DEPLOYMENT_APPROVAL_TIMEOUT", iniStr)
+	}
 }
