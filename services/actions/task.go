@@ -28,10 +28,51 @@ import (
 
 var ErrEphemeralRunnerHasAssignedTask = errors.New("ephemeral runner already has an assigned task")
 
+// PickTask hands the runner the next job it can take. A job whose environment can't give it its secrets and
+// variables (it was deleted after the release) fails and the runner gets the next one, or none: such a job never
+// stops the runner from taking the others.
 func PickTask(ctx context.Context, runner *actions_model.ActionRunner, requestKey, handle *string) (*runnerv1.Task, error) {
+	for range maxFailedPicks {
+		task, job, err := pickTask(ctx, runner, requestKey, handle)
+		if !errors.Is(err, errEnvironmentNotReleased) || job == nil {
+			return task, err
+		}
+		if err := failPickedJob(ctx, job.ID); err != nil {
+			return nil, err
+		}
+	}
+	return nil, actions_model.ErrNoMatchingJobFound
+}
+
+// maxFailedPicks bounds how many jobs one request fails before it gives up; the runner asks again.
+const maxFailedPicks = 20
+
+// failPickedJob fails the job whose pick was rolled back because its environment is gone.
+func failPickedJob(ctx context.Context, jobID int64) error {
+	var failure *jobFailure
+	if err := db.WithTx(ctx, func(ctx context.Context) error {
+		job, err := actions_model.GetRunJobByID(ctx, jobID)
+		if err != nil {
+			return err
+		}
+		failure, err = failUnpickedJob(ctx, job, nil)
+		return err
+	}); err != nil {
+		return err
+	}
+	if failure != nil {
+		notifyFailedJobs(ctx, []*jobFailure{failure})
+		// the runner asks again only when the tasks version moved, and a request fails at most maxFailedPicks jobs:
+		// without this, the jobs behind them would wait until something else turns a job to waiting
+		return actions_model.IncreaseTaskVersion(ctx, failure.job.OwnerID, failure.job.RepoID)
+	}
+	return nil
+}
+
+func pickTask(ctx context.Context, runner *actions_model.ActionRunner, requestKey, handle *string) (*runnerv1.Task, *actions_model.ActionRunJob, error) {
 	// no new jobs start while maintenance mode is on, running ones finish
 	if setting.GetMaintenance(ctx).ReadOnly() {
-		return nil, actions_model.ErrNoMatchingJobFound
+		return nil, nil, actions_model.ErrNoMatchingJobFound
 	}
 
 	var (
@@ -43,12 +84,12 @@ func PickTask(ctx context.Context, runner *actions_model.ActionRunner, requestKe
 		hasRunnerAssignedTask, err := actions_model.HasTaskForRunner(ctx, runner.ID)
 		// Let the runner retry the request, do not allow to proceed
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		// if runner has task, dont assign new task
 		if hasRunnerAssignedTask {
-			return nil, ErrEphemeralRunnerHasAssignedTask
+			return nil, nil, ErrEphemeralRunnerHasAssignedTask
 		}
 	}
 
@@ -68,9 +109,9 @@ func PickTask(ctx context.Context, runner *actions_model.ActionRunner, requestKe
 			return fmt.Errorf("GetSecretsOfTask: %w", err)
 		}
 
-		vars, err := actions_model.GetVariablesOfRun(ctx, t.Job.Run)
+		vars, err := getVariablesOfJob(ctx, jobOfTask(t))
 		if err != nil {
-			return fmt.Errorf("GetVariablesOfRun: %w", err)
+			return fmt.Errorf("getVariablesOfJob: %w", err)
 		}
 
 		needs, err := findTaskNeeds(ctx, job)
@@ -99,12 +140,12 @@ func PickTask(ctx context.Context, runner *actions_model.ActionRunner, requestKe
 
 		return nil
 	}); err != nil {
-		return nil, err
+		return nil, job, err
 	}
 
 	CreateCommitStatus(ctx, job)
 
-	return task, nil
+	return task, job, nil
 }
 
 func IsNoTaskAvailable(err error) bool {
@@ -114,10 +155,12 @@ func IsNoTaskAvailable(err error) bool {
 }
 
 func RecoverTasks(ctx context.Context, tasks []*actions_model.ActionTask) ([]*runnerv1.Task, error) {
-	retval := make([]*runnerv1.Task, len(tasks))
+	retval := make([]*runnerv1.Task, 0, len(tasks))
+	var failed []*actions_model.ActionTask // tasks whose environment is gone
 
 	err := db.WithTx(ctx, func(ctx context.Context) error {
-		for i, t := range tasks {
+		retval, failed = retval[:0], failed[:0]
+		for _, t := range tasks {
 			// `Token` is stored in the database w/ a one-way hash, so we can't recover it from the original.  Instead
 			// we generate a new token to create usable runnerv1.Task objects.
 			t.GenerateToken()
@@ -131,13 +174,19 @@ func RecoverTasks(ctx context.Context, tasks []*actions_model.ActionTask) ([]*ru
 			job := t.Job
 
 			secrets, err := getSecretsOfTask(ctx, t)
-			if err != nil {
+			if errors.Is(err, errEnvironmentNotReleased) {
+				failed = append(failed, t)
+				continue
+			} else if err != nil {
 				return fmt.Errorf("GetSecretsOfTask: %w", err)
 			}
 
-			vars, err := actions_model.GetVariablesOfRun(ctx, t.Job.Run)
-			if err != nil {
-				return fmt.Errorf("GetVariablesOfRun: %w", err)
+			vars, err := getVariablesOfJob(ctx, jobOfTask(t))
+			if errors.Is(err, errEnvironmentNotReleased) {
+				failed = append(failed, t)
+				continue
+			} else if err != nil {
+				return fmt.Errorf("getVariablesOfJob: %w", err)
 			}
 
 			needs, err := findTaskNeeds(ctx, job)
@@ -155,19 +204,25 @@ func RecoverTasks(ctx context.Context, tasks []*actions_model.ActionTask) ([]*ru
 				return fmt.Errorf("generateTaskContext: %w", err)
 			}
 
-			retval[i] = &runnerv1.Task{
+			retval = append(retval, &runnerv1.Task{
 				Id:              t.ID,
 				WorkflowPayload: t.Job.WorkflowPayload,
 				Context:         taskContext,
 				Secrets:         secrets,
 				Vars:            vars,
 				Needs:           needs,
-			}
+			})
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	// the other tasks are handed back: a task whose environment is gone stops as failed, it never fails the request
+	for _, t := range failed {
+		if err := StopTask(ctx, t.ID, actions_model.StatusFailure); err != nil {
+			log.Error("stop task %d whose environment is gone: %v", t.ID, err)
+		}
 	}
 
 	return retval, nil

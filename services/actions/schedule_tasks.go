@@ -180,14 +180,15 @@ func CreateScheduleTask(ctx context.Context, cron *actions_model.ActionSchedule)
 	defer expandCleanup()
 
 	// Parse the workflow specification from the cron schedule
-	workflows, err := actions_module.JobParser(cron.Content,
+	reusableWorkflows := actions_module.ReusableWorkflows{}
+	workflows, err := reusableWorkflows.JobParser(cron.Content,
 		jobparser.WithVars(vars),
 		// We don't have any job outputs yet, but `WithJobOutputs(...)` triggers JobParser to supporting its
 		// `IncompleteMatrix` tagging for any jobs that require the inputs of other jobs.
 		jobparser.WithJobOutputs(map[string]map[string]string{}),
 		jobparser.SupportIncompleteRunsOn(),
-		jobparser.ExpandLocalReusableWorkflows(expandLocalReusableWorkflow),
-		jobparser.ExpandInstanceReusableWorkflows(expandInstanceReusableWorkflows(ctx)),
+		reusableWorkflows.ExpandLocal(expandLocalReusableWorkflow),
+		reusableWorkflows.ExpandInstance(expandInstanceReusableWorkflows(ctx)),
 		jobparser.WithGitContext(generateGiteaContextForRun(run)),
 		jobparser.EnableNamespaces(),
 	)

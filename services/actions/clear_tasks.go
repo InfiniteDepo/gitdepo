@@ -90,6 +90,15 @@ func CancelAbandonedJobs(ctx context.Context) error {
 		runsToUpdate := container.Set[int64]{}
 		now := timeutil.TimeStampNow()
 		for _, job := range jobs {
+			if job.Status.IsBlocked() {
+				// a job that the gate of its environment holds (wait timer) isn't abandoned: the gate releases or fails it
+				if d, err := actions_model.GetDeployment(ctx, job.ID, job.Attempt); err != nil {
+					return err
+				} else if d != nil && d.Status.IsWaiting() {
+					continue
+				}
+			}
+
 			// Capture the current status because it is required for sending notifications.
 			priorStatus := job.Status
 

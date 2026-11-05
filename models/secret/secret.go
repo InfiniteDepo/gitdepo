@@ -34,6 +34,7 @@ var (
 //  1. org/user level secret, OwnerID is org/user ID, GroupID and RepoID are 0
 //  2. repo level secret, OwnerID is 0 and RepoID is repo ID
 //  3. project level secret, OwnerID is the org ID, GroupID the project (repo_group) ID and RepoID is 0
+//  4. environment secret, OwnerID and GroupID are 0, RepoID is the repo ID and EnvironmentID the environment
 //
 // Please note that it's not acceptable to have both OwnerID and RepoID to be non-zero,
 // or it will be complicated to find secrets belonging to a specific owner.
@@ -44,13 +45,14 @@ var (
 // Please note that it's not acceptable to have both OwnerID and RepoID to zero, global secrets are not supported.
 // It's for security reasons, admin may be not aware of that the secrets could be stolen by any user when setting them as global.
 type Secret struct {
-	ID          int64
-	OwnerID     int64              `xorm:"INDEX UNIQUE(owner_repo_name) NOT NULL"`
-	GroupID     int64              `xorm:"UNIQUE(owner_repo_name) NOT NULL DEFAULT 0"`
-	RepoID      int64              `xorm:"INDEX UNIQUE(owner_repo_name) NOT NULL DEFAULT 0"`
-	Name        string             `xorm:"UNIQUE(owner_repo_name) NOT NULL"`
-	Data        []byte             `xorm:"BLOB"` // encrypted data
-	CreatedUnix timeutil.TimeStamp `xorm:"created NOT NULL"`
+	ID            int64
+	OwnerID       int64              `xorm:"INDEX UNIQUE(owner_repo_name) NOT NULL"`
+	GroupID       int64              `xorm:"UNIQUE(owner_repo_name) NOT NULL DEFAULT 0"`
+	RepoID        int64              `xorm:"INDEX UNIQUE(owner_repo_name) NOT NULL DEFAULT 0"`
+	EnvironmentID int64              `xorm:"UNIQUE(owner_repo_name) NOT NULL DEFAULT 0"`
+	Name          string             `xorm:"UNIQUE(owner_repo_name) NOT NULL"`
+	Data          []byte             `xorm:"BLOB"` // encrypted data
+	CreatedUnix   timeutil.TimeStamp `xorm:"created NOT NULL"`
 }
 
 // ErrSecretNotFound represents a "secret not found" error.
@@ -68,6 +70,15 @@ func (err ErrSecretNotFound) Unwrap() error {
 
 // InsertEncryptedSecret Creates, encrypts, and validates a new secret with yet unencrypted data and insert into database
 func InsertEncryptedSecret(ctx context.Context, ownerID, groupID, repoID int64, name, data string) (*Secret, error) {
+	return insertEncryptedSecret(ctx, ownerID, groupID, repoID, 0, name, data)
+}
+
+// InsertEncryptedEnvironmentSecret is InsertEncryptedSecret for a secret of an environment of the repository.
+func InsertEncryptedEnvironmentSecret(ctx context.Context, repoID, environmentID int64, name, data string) (*Secret, error) {
+	return insertEncryptedSecret(ctx, 0, 0, repoID, environmentID, name, data)
+}
+
+func insertEncryptedSecret(ctx context.Context, ownerID, groupID, repoID, environmentID int64, name, data string) (*Secret, error) {
 	if ownerID != 0 && repoID != 0 {
 		// It's trying to create a secret that belongs to a repository, but OwnerID has been set accidentally.
 		// Remove OwnerID to avoid confusion; it's not worth returning an error here.
@@ -84,10 +95,11 @@ func InsertEncryptedSecret(ctx context.Context, ownerID, groupID, repoID int64, 
 	}
 
 	secret := &Secret{
-		OwnerID: ownerID,
-		GroupID: groupID,
-		RepoID:  repoID,
-		Name:    strings.ToUpper(name),
+		OwnerID:       ownerID,
+		GroupID:       groupID,
+		RepoID:        repoID,
+		EnvironmentID: environmentID,
+		Name:          strings.ToUpper(name),
 	}
 
 	return secret, db.WithTx(ctx, func(ctx context.Context) error {
@@ -102,6 +114,9 @@ func InsertEncryptedSecret(ctx context.Context, ownerID, groupID, repoID int64, 
 		if _, err := db.GetEngine(ctx).ID(secret.ID).Cols("data").Update(secret); err != nil {
 			return err
 		}
+		if environmentID != 0 {
+			return recordSecret(ctx, audit_model.LevelActions{Repo: "repo.actions_env_secret.created"}, secret, nil)
+		}
 		return recordSecret(ctx, audit_model.LevelActions{Repo: "repo.actions_secret.created", Org: "org.actions_secret.created", Account: "account.actions_secret.created"}, secret, nil)
 	})
 }
@@ -112,6 +127,9 @@ func recordSecret(ctx context.Context, actions audit_model.LevelActions, s *Secr
 		data = map[string]any{}
 	}
 	data["name"] = s.Name
+	if s.EnvironmentID != 0 {
+		data["environment_id"] = s.EnvironmentID
+	}
 	return repo_model.RecordScoped(ctx, actions, s.OwnerID, s.GroupID, s.RepoID, audit_model.Event{
 		TargetType: "actions_secret", TargetID: s.ID, TargetName: s.Name, Data: data,
 	})
@@ -123,7 +141,11 @@ func DeleteSecret(ctx context.Context, s *Secret) error {
 		if err := LockGroup(ctx, s.OwnerID, s.GroupID); err != nil {
 			return err
 		}
-		if err := recordSecret(ctx, audit_model.LevelActions{Repo: "repo.actions_secret.deleted", Org: "org.actions_secret.deleted", Account: "account.actions_secret.deleted"}, s, nil); err != nil {
+		actions := audit_model.LevelActions{Repo: "repo.actions_secret.deleted", Org: "org.actions_secret.deleted", Account: "account.actions_secret.deleted"}
+		if s.EnvironmentID != 0 {
+			actions = audit_model.LevelActions{Repo: "repo.actions_env_secret.deleted"}
+		}
+		if err := recordSecret(ctx, actions, s, nil); err != nil {
 			return err
 		}
 		_, err := db.DeleteByID[Secret](ctx, s.ID)
@@ -147,11 +169,13 @@ func init() {
 
 type FindSecretsOptions struct {
 	db.ListOptions
-	RepoID   int64
-	OwnerID  int64 // it will be ignored if RepoID is set
-	GroupID  int64 // the project of OwnerID; 0 is the organization/user level itself. Ignored if RepoID is set
-	SecretID int64
-	Name     string
+	RepoID  int64
+	OwnerID int64 // it will be ignored if RepoID is set
+	GroupID int64 // the project of OwnerID; 0 is the organization/user level itself. Ignored if RepoID is set
+	// EnvironmentID is always bound: 0 finds no secret of an environment
+	EnvironmentID int64
+	SecretID      int64
+	Name          string
 }
 
 func (opts FindSecretsOptions) ToConds() builder.Cond {
@@ -164,6 +188,7 @@ func (opts FindSecretsOptions) ToConds() builder.Cond {
 	} else {
 		cond = cond.And(builder.Eq{"owner_id": opts.OwnerID, "group_id": opts.GroupID})
 	}
+	cond = cond.And(builder.Eq{"environment_id": opts.EnvironmentID})
 
 	if opts.SecretID != 0 {
 		cond = cond.And(builder.Eq{"id": opts.SecretID})
@@ -199,6 +224,15 @@ func (s *Secret) GetDecryptedData() (string, error) {
 }
 
 func GetSecretByID(ctx context.Context, ownerID, groupID, repoID, id int64) (*Secret, error) {
+	return getSecretByID(ctx, ownerID, groupID, repoID, 0, id)
+}
+
+// GetEnvironmentSecretByID returns the secret with that ID of an environment of the repository.
+func GetEnvironmentSecretByID(ctx context.Context, repoID, environmentID, id int64) (*Secret, error) {
+	return getSecretByID(ctx, 0, 0, repoID, environmentID, id)
+}
+
+func getSecretByID(ctx context.Context, ownerID, groupID, repoID, environmentID, id int64) (*Secret, error) {
 	query := db.GetEngine(ctx).Where("id=?", id)
 
 	if repoID > 0 {
@@ -208,6 +242,7 @@ func GetSecretByID(ctx context.Context, ownerID, groupID, repoID, id int64) (*Se
 	} else {
 		return nil, fmt.Errorf("ownerID and repoID cannot be simultaneously 0")
 	}
+	query = query.And(builder.Eq{"environment_id": environmentID})
 
 	var secret Secret
 	has, err := query.Get(&secret)
@@ -242,7 +277,11 @@ func UpdateSecret(ctx context.Context, secret *Secret, valueChanged bool, column
 				data = map[string]any{}
 			}
 			data["value_changed"] = valueChanged
-			if err := recordSecret(ctx, audit_model.LevelActions{Repo: "repo.actions_secret.updated", Org: "org.actions_secret.updated", Account: "account.actions_secret.updated"}, secret, data); err != nil {
+			actions := audit_model.LevelActions{Repo: "repo.actions_secret.updated", Org: "org.actions_secret.updated", Account: "account.actions_secret.updated"}
+			if secret.EnvironmentID != 0 {
+				actions = audit_model.LevelActions{Repo: "repo.actions_env_secret.updated"}
+			}
+			if err := recordSecret(ctx, actions, secret, data); err != nil {
 				return err
 			}
 		}
@@ -289,6 +328,26 @@ func FetchActionSecrets(ctx context.Context, ownerID, groupID, repoID int64) (ma
 		secrets[secret.Name] = decryptedData
 	}
 
+	return secrets, nil
+}
+
+// FetchEnvironmentSecrets returns the secrets of an environment of the repository. The caller has checked that the
+// job it is for passed the environment's gate.
+func FetchEnvironmentSecrets(ctx context.Context, repoID, environmentID int64) (map[string]string, error) {
+	rows, err := db.Find[Secret](ctx, FindSecretsOptions{RepoID: repoID, EnvironmentID: environmentID})
+	if err != nil {
+		log.Error("find secrets of environment %v: %v", environmentID, err)
+		return nil, err
+	}
+	secrets := make(map[string]string, len(rows))
+	for _, secret := range rows {
+		decryptedData, err := secret.GetDecryptedData()
+		if err != nil {
+			log.Error("%v", err)
+			return nil, err
+		}
+		secrets[secret.Name] = decryptedData
+	}
 	return secrets, nil
 }
 
