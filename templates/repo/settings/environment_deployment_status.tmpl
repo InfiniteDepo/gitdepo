@@ -1,0 +1,8 @@
+{{/* the status of a deployment (environmentDeployment, deploymentRow): its task's status once it runs */}}
+{{if .Task}}{{template "repo/actions/status" (dict "status" .Task.Status.String)}} {{.Task.Status.LocaleString ctx.Locale}}
+{{- else if .Status.IsWaiting}}<span class="text yellow">{{svg "octicon-clock"}}</span> {{ctx.Locale.Tr "actions.environments.deployment.waiting"}}
+{{- else if eq .Status.String "released"}}<span class="text grey">{{svg "octicon-dot-fill"}}</span> {{ctx.Locale.Tr "actions.environments.deployment.released"}}
+{{- else if eq .Status.String "cancelled"}}<span class="text grey">{{svg "octicon-stop"}}</span> {{ctx.Locale.Tr "actions.environments.deployment.cancelled"}}
+{{- else if eq .Status.String "rejected"}}<span class="text red">{{svg "octicon-x-circle"}}</span> {{ctx.Locale.Tr "actions.environments.deployment.rejected"}}
+{{- else if eq .Status.String "expired"}}<span class="text red">{{svg "octicon-x-circle"}}</span> {{ctx.Locale.Tr "actions.environments.deployment.expired"}}
+{{- else}}<span class="text red">{{svg "octicon-x-circle"}}</span> {{ctx.Locale.Tr "actions.environments.deployment.refused"}}{{end}}

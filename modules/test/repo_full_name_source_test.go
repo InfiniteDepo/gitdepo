@@ -30,6 +30,7 @@ func TestNoRepoNameConcatenation(t *testing.T) {
 		`routers/private/serv.go: OwnerName + "/" + results.RepoName`:                             "the path a git client asked for, before any repository is loaded",
 		`routers/private/serv.go: OwnerName + "/" + groupName`:                                    "the path a git client asked for, before any repository is loaded",
 		`services/pull/owner_eligibility.go: Owner.Name + "/" + t.Name`:                           "a team, org/team",
+		`services/actions/deployment_notify.go: OwnerName+"/"+t.Name`:                             "a team, org/team",
 		`services/metrics/pulls.go: OwnerName + "/" + row.RepoName`:                               "metrics rows carry the owner and leaf only; references and mail come with their own PR",
 	}
 	seen := map[string]bool{}

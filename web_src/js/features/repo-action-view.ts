@@ -51,6 +51,18 @@ export async function initRepositoryActionView() {
       graphMatrixCount: el.getAttribute('data-locale-graph-matrix-count'),
       preExecutionError: el.getAttribute('data-locale-pre-execution-error'),
       preExecutionWarning: el.getAttribute('data-locale-pre-execution-warning'),
+      deployments: {
+        review: el.getAttribute('data-locale-deployments-review'),
+        title: el.getAttribute('data-locale-deployments-title'),
+        choose: el.getAttribute('data-locale-deployments-choose'),
+        comment: el.getAttribute('data-locale-deployments-comment'),
+        commentHelp: el.getAttribute('data-locale-deployments-comment-help'),
+        commentRequired: el.getAttribute('data-locale-deployments-comment-required'),
+        approve: el.getAttribute('data-locale-deployments-approve'),
+        reject: el.getAttribute('data-locale-deployments-reject'),
+        deploysTo: el.getAttribute('data-locale-deployments-deploys-to'),
+        gateNote: el.getAttribute('data-locale-deployments-gate-note'),
+      },
       status: {
         unknown: el.getAttribute('data-locale-status-unknown'),
         waiting: el.getAttribute('data-locale-status-waiting'),
