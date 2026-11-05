@@ -826,6 +826,7 @@ export default {
 
 .deployments-panel-item {
   display: flex;
+  align-items: flex-start;
   gap: 8px;
   margin-top: 8px;
   overflow-wrap: anywhere;

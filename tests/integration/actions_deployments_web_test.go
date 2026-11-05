@@ -93,10 +93,11 @@ func TestActionsDeploymentsWeb(t *testing.T) {
 		anonymous := emptyTestSession(t)
 
 		files := 0
-		pushJob := func(t *testing.T, message string) (*actions_model.ActionRun, *actions_model.ActionRunJob) {
+		// pushJobTo pushes a workflow whose job deploys to the environment and waits until its deployment has the status
+		pushJobTo := func(t *testing.T, message, envName string, status actions_model.DeploymentStatus) (*actions_model.ActionRun, *actions_model.ActionRunJob) {
 			files++
 			path := fmt.Sprintf(".gitea/workflows/deploy%d.yml", files)
-			content := fmt.Sprintf("name: deploy%d\non:\n  push:\n    paths:\n      - '%s'\njobs:\n  deploy:\n    runs-on: dw-%d\n    environment: prod\n    steps:\n      - run: echo hi\n", files, path, files)
+			content := fmt.Sprintf("name: deploy%d\non:\n  push:\n    paths:\n      - '%s'\njobs:\n  deploy:\n    runs-on: dw-%d\n    environment: %s\n    steps:\n      - run: echo hi\n", files, path, files, envName)
 			fileResp := createWorkflowFile(t, ownerToken, user2.Name, repo.Name, path, getWorkflowCreateFileOptions(user2, repo.DefaultBranch, message, content))
 			run := new(actions_model.ActionRun)
 			require.Eventually(t, func() bool {
@@ -108,9 +109,12 @@ func TestActionsDeploymentsWeb(t *testing.T) {
 			require.Len(t, jobs, 1)
 			require.Eventually(t, func() bool {
 				d, err := actions_model.GetDeployment(db.DefaultContext, jobs[0].ID, 1)
-				return err == nil && d != nil && d.Status == actions_model.DeploymentWaitingReview
+				return err == nil && d != nil && d.Status == status
 			}, 10*time.Second, 100*time.Millisecond)
 			return run, jobs[0]
+		}
+		pushJob := func(t *testing.T, message string) (*actions_model.ActionRun, *actions_model.ActionRunJob) {
+			return pushJobTo(t, message, "prod", actions_model.DeploymentWaitingReview)
 		}
 		deployment := func(t *testing.T, job *actions_model.ActionRunJob) *actions_model.ActionDeployment {
 			j := unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRunJob{ID: job.ID})
@@ -300,6 +304,36 @@ func TestActionsDeploymentsWeb(t *testing.T) {
 			// the Actions tab links to it
 			doc = NewHTMLParser(t, anonymous.MakeRequest(t, NewRequest(t, "GET", fmt.Sprintf("/%s/%s/actions", user2.Name, repo.Name)), http.StatusOK).Body)
 			assert.Equal(t, 1, doc.Find(`#deployments-menu a[href="`+link+`?environment=prod"]`).Length())
+		})
+
+		t.Run("a refused deployment and one nobody can approve say why", func(t *testing.T) {
+			MakeRequest(t, NewRequestWithJSON(t, "PUT", fmt.Sprintf("/api/v1/repos/%s/%s/actions/environments/release", user2.Name, repo.Name), &api.CreateOrUpdateEnvironmentOption{
+				RefPolicy: "patterns", RefPatterns: []*api.ActionEnvironmentRefPattern{{Type: "branch", Pattern: "release/*"}},
+				WaitTimer: new(0), PreventSelfReview: new(false), Reviewers: []*api.ActionEnvironmentReviewer{}, RunnerLabels: []string{}, AllowedWorkflows: []string{},
+			}).AddTokenAuth(ownerToken), http.StatusCreated)
+			refusedRun, _ := pushJobTo(t, "refused", "release", actions_model.DeploymentRefused)
+			p := panel(t, stranger, refusedRun, 1)
+			assert.Equal(t, "failed", p.State)
+			assert.Equal(t, "Deployment refused", p.Title)
+			assert.Equal(t, "main isn't allowed to deploy to this environment. A repository owner can change its rules in Settings → Actions → Environments.", p.Items[0].Text)
+			assert.Equal(t, "Reason: ref_not_allowed", p.Items[0].Detail)
+
+			// the only reviewer can no longer sign in: nobody can approve
+			u := &user_model.User{Name: "lonely-reviewer", Email: "lonely-reviewer@example.com", IsActive: true}
+			require.NoError(t, user_model.CreateUser(db.DefaultContext, u))
+			MakeRequest(t, NewRequestWithJSON(t, "PUT", fmt.Sprintf("/api/v1/repos/%s/%s/collaborators/%s", user2.Name, repo.Name, u.Name),
+				&api.AddCollaboratorOption{Permission: new("read")}).AddTokenAuth(ownerToken), http.StatusNoContent)
+			lonely := &actions_model.ActionEnvironment{RepoID: repo.ID, Name: "lonely"}
+			require.NoError(t, actions_model.CreateEnvironment(ctx, lonely, nil))
+			require.NoError(t, setEnvironmentReviewers(ctx, lonely, []int64{u.ID}, nil))
+			u.ProhibitLogin = true
+			require.NoError(t, user_model.UpdateUserCols(db.DefaultContext, u, "prohibit_login"))
+			lonelyRun, _ := pushJobTo(t, "lonely", "lonely", actions_model.DeploymentWaitingReview)
+			for _, s := range []*TestSession{owner, reviewer} {
+				p := panel(t, s, lonelyRun, 1)
+				assert.False(t, p.CanReview)
+				assert.Equal(t, "No eligible reviewer is left: ask a repository owner to edit the environment", p.Items[0].Text)
+			}
 		})
 
 		t.Run("the last reviewer of an environment is named to a site administrator", func(t *testing.T) {

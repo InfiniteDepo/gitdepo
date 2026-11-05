@@ -4365,6 +4365,7 @@
 	"actions.deployments.filter.apply": "Filter",
 	"actions.deployments.triggered_by": "Triggered by",
 	"actions.deployments.review": "Review",
+	"actions.deployments.comment": "Comment: %s",
 	"actions.deployments.review_expired": "Nobody, expired",
 	"actions.deployments.review_not_asked": "Not asked",
 	"actions.deployments.review_not_required": "Not required",

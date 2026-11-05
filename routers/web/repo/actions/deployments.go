@@ -279,13 +279,22 @@ func ReviewDeploymentsPost(ctx *app_context.Context) {
 		ctx.Error(http.StatusUnprocessableEntity)
 		return
 	}
-	link := run.Link()
+	// back to the page of the job, not the run's link: its redirect to the latest attempt would take the flash
+	page := jobs[0]
+	if len(jobIDs) > 0 {
+		page = jobs[slices.IndexFunc(jobs, func(j *actions_model.ActionRunJob) bool { return j.ID == jobIDs[0] })]
+	}
+	link, err := page.HTMLURL(ctx)
+	if err != nil {
+		ctx.ServerError("HTMLURL", err)
+		return
+	}
 	if len(jobIDs) == 0 || len(jobIDs) > 100 {
 		ctx.Flash.Error(ctx.Tr("actions.deployments.flash.no_jobs"))
 		ctx.Redirect(link)
 		return
 	}
-	_, err := actions_service.ReviewDeployments(ctx, ctx.Doer, run, slices.Compact(slices.Sorted(slices.Values(jobIDs))), state == "approved", ctx.FormString("comment"))
+	_, err = actions_service.ReviewDeployments(ctx, ctx.Doer, run, slices.Compact(slices.Sorted(slices.Values(jobIDs))), state == "approved", ctx.FormString("comment"))
 	switch {
 	case err == nil:
 		ctx.Flash.Success(util.Iif(state == "approved", ctx.Tr("actions.deployments.flash.approved"), ctx.Tr("actions.deployments.flash.rejected")))
