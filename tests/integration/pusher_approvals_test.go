@@ -4,6 +4,7 @@
 package integration
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -24,7 +25,9 @@ import (
 	"forgejo.org/models/unittest"
 	"forgejo.org/modules/git"
 	api "forgejo.org/modules/structs"
+	"forgejo.org/modules/test"
 	"forgejo.org/services/forms"
+	pull_service "forgejo.org/services/pull"
 	"forgejo.org/tests"
 
 	"github.com/stretchr/testify/assert"
@@ -211,6 +214,32 @@ func TestPusherApprovals(t *testing.T) {
 		})
 
 		// a deploy key with no recorded owner pushed: nobody's approval can be checked
+		// the pin is the head the check read: a head that moves between the check and the merge (the branch and the pull
+		// ref both, as a push and its async update would) is refused, not re-read
+		t.Run("head moves between the check and the merge", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+			e.base("pa-race")
+			e.protectPushers("pa-race", true)
+			index := e.pr("pa-race", create("a.txt", "a"))
+			e.approve("user4", index)
+			e.approve("user5", index)
+			moved := false
+			defer test.MockVariableValue(&pull_service.TestHookBeforeHeadPin, func(ctx context.Context, pr *issues_model.PullRequest) {
+				if moved {
+					return
+				}
+				moved = true
+				dir := repo_model.RepoPath("user2", "repo1")
+				other, err := git.GetFullCommitID(ctx, dir, "refs/heads/master")
+				require.NoError(t, err)
+				require.NoError(t, git.NewCommand(ctx, "update-ref", "refs/heads/head-pa-race").AddDynamicArguments(other).Run(&git.RunOpts{Dir: dir}))
+				require.NoError(t, git.NewCommand(ctx, "update-ref").AddDynamicArguments(pr.GetGitRefName(), other).Run(&git.RunOpts{Dir: dir}))
+			})()
+			e.apiMerge(e.owner, index, false, http.StatusConflict)
+			assert.True(t, moved)
+			assert.False(t, unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{Index: index, BaseRepoID: 1}).HasMerged)
+		})
+
 		t.Run("deploy key without owner", func(t *testing.T) {
 			defer tests.PrintCurrentTest(t)()
 			e.base("pa-key")

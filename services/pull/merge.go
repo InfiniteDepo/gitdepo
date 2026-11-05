@@ -261,6 +261,9 @@ func Merge(ctx context.Context, pr *issues_model.PullRequest, doer *user_model.U
 		return models.ErrInvalidMergeStyle{ID: pr.BaseRepo.ID, Style: mergeStyle}
 	}
 
+	if TestHookBeforeHeadPin != nil {
+		TestHookBeforeHeadPin(ctx, pr)
+	}
 	if expectedHeadCommitID == "" {
 		if expectedHeadCommitID, err = headPinnedByPusherRule(ctx, pr); err != nil {
 			return err
@@ -278,6 +281,9 @@ func Merge(ctx context.Context, pr *issues_model.PullRequest, doer *user_model.U
 	return afterMerge(ctx, pr, doer, wasAutoMerged)
 }
 
+// TestHookBeforeHeadPin runs between the checks and the pin, so a test can move the head there.
+var TestHookBeforeHeadPin func(ctx context.Context, pr *issues_model.PullRequest)
+
 // headPinnedByPusherRule returns the head the pull request was checked at when a matched rule ignores pusher
 // approvals, "" when none does. Who pushed and who approved were read at that head (the pull ref), so the merge must
 // refuse when the head branch moved since, for instance while the pull request was closed and reopened.
@@ -286,7 +292,12 @@ func headPinnedByPusherRule(ctx context.Context, pr *issues_model.PullRequest) (
 	if err != nil || !slices.ContainsFunc(rules, func(pb *git_model.ProtectedBranch) bool { return pb.IgnorePusherApprovals }) {
 		return "", err
 	}
-	return git.GetFullCommitID(ctx, pr.BaseRepo.RepoPath(), pr.GetGitRefName())
+	// the head the pushers were read at (once per request), never the pull ref as it is now
+	head, err := issues_model.PullPushersHead(ctx, pr)
+	if err == nil && head == "" {
+		err = fmt.Errorf("the head of %-v can't be read", pr)
+	}
+	return head, err
 }
 
 // afterMerge notifies about the merge of pr, which the post-receive hook recorded, and closes the issues it references

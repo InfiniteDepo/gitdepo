@@ -43,25 +43,42 @@ func (p Pushers) Blocked() bool { return p[PusherUnknownDeployKey] || p[PusherTo
 // from the approvers, so a mistake here can only remove an approver, never admit one. The result is computed once per
 // request.
 func PullPushers(ctx context.Context, pr *PullRequest) (Pushers, error) {
-	return cache.GetWithContextCache(ctx, "pull_pushers", strconv.FormatInt(pr.ID, 10), func() (Pushers, error) {
+	r, err := pullPushersAtHead(ctx, pr)
+	return r.pushers, err
+}
+
+// PullPushersHead returns the head commit the pushers of PullPushers were read at (the pull ref, read once and kept
+// with them), "" when it can't be read. A merge pins itself to it, so it refuses a head that moved after the check.
+func PullPushersHead(ctx context.Context, pr *PullRequest) (string, error) {
+	r, err := pullPushersAtHead(ctx, pr)
+	return r.head, err
+}
+
+type pushersAtHead struct {
+	pushers Pushers
+	head    string
+}
+
+func pullPushersAtHead(ctx context.Context, pr *PullRequest) (pushersAtHead, error) {
+	return cache.GetWithContextCache(ctx, "pull_pushers", strconv.FormatInt(pr.ID, 10), func() (pushersAtHead, error) {
 		return pullPushers(ctx, pr)
 	})
 }
 
-func pullPushers(ctx context.Context, pr *PullRequest) (Pushers, error) {
+func pullPushers(ctx context.Context, pr *PullRequest) (pushersAtHead, error) {
 	if err := pr.LoadBaseRepo(ctx); err != nil {
-		return nil, err
+		return pushersAtHead{}, err
 	}
 	ids := make([]int64, 0, 4)
 	if err := db.GetEngine(ctx).Table("comment").Distinct("poster_id").
 		Where("issue_id = ? AND type = ?", pr.IssueID, CommentTypePullRequestPush).Find(&ids); err != nil {
-		return nil, err
+		return pushersAtHead{}, err
 	}
 	// an AGit pull request has no head branch: its head is the poster's, read through the comments and the emails
 	if pr.Flow != PullRequestFlowAGit {
 		pushed, err := git_model.FindBranchPusherIDs(ctx, pr.HeadRepoID, pr.HeadBranch)
 		if err != nil {
-			return nil, err
+			return pushersAtHead{}, err
 		}
 		ids = append(ids, pushed...)
 	}
@@ -71,15 +88,22 @@ func pullPushers(ctx context.Context, pr *PullRequest) (Pushers, error) {
 		pushers[id] = true
 	}
 
-	// the head is read from the pull ref of the base repository, which holds it for every kind of pull request
+	// the head is read once from the pull ref of the base repository, which holds it for every kind of pull request;
+	// the commits are read at that commit, and the merge is pinned to it
+	head, err := git.GetFullCommitID(ctx, pr.BaseRepo.RepoPath(), pr.GetGitRefName())
+	if err != nil {
+		log.Error("Unable to read the head of %-v to find its pushers: %v", pr, err)
+		pushers[PusherTooMany] = true
+		return pushersAtHead{pushers: pushers}, nil
+	}
 	stdout, _, err := git.NewCommand(ctx, "log", "--format=%ae%x00%ce").AddOptionFormat("--max-count=%d", MaxPusherCommits+1).
-		AddDynamicArguments(git.BranchPrefix + pr.BaseBranch + ".." + pr.GetGitRefName()).
+		AddDynamicArguments(git.BranchPrefix + pr.BaseBranch + ".." + head).
 		RunStdString(&git.RunOpts{Dir: pr.BaseRepo.RepoPath()})
 	if err != nil {
 		// e.g. the base branch of a closed pull request was deleted: nothing is counted, and the page and API still answer
 		log.Error("Unable to read the commits of %-v to find its pushers: %v", pr, err)
 		pushers[PusherTooMany] = true
-		return pushers, nil
+		return pushersAtHead{pushers, head}, nil
 	}
 	emails := map[string]struct{}{}
 	commits := 0
@@ -96,7 +120,7 @@ func pullPushers(ctx context.Context, pr *PullRequest) (Pushers, error) {
 	}
 	if commits > MaxPusherCommits {
 		pushers[PusherTooMany] = true
-		return pushers, nil
+		return pushersAtHead{pushers, head}, nil
 	}
 
 	var lower, names []string
@@ -111,7 +135,7 @@ func pullPushers(ctx context.Context, pr *PullRequest) (Pushers, error) {
 		var uids []int64
 		if err := db.GetEngine(ctx).Table("email_address").Cols("uid").
 			Where(builder.In("lower_email", lower)).And("is_activated = ?", true).Find(&uids); err != nil {
-			return nil, err
+			return pushersAtHead{}, err
 		}
 		for _, id := range uids {
 			pushers[id] = true
@@ -121,11 +145,11 @@ func pullPushers(ctx context.Context, pr *PullRequest) (Pushers, error) {
 		var uids []int64
 		if err := db.GetEngine(ctx).Table("user").Cols("id").
 			Where(builder.In("lower_name", names)).And("trashed_unix = 0").Find(&uids); err != nil {
-			return nil, err
+			return pushersAtHead{}, err
 		}
 		for _, id := range uids {
 			pushers[id] = true
 		}
 	}
-	return pushers, nil
+	return pushersAtHead{pushers, head}, nil
 }
