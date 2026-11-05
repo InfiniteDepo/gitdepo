@@ -160,8 +160,10 @@ func TestDeploymentMails(t *testing.T) {
 		sent := mockDeploymentMails(t)
 		f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{4}, nil)
 		first := f.deployment(t)
-		other := &actions_model.ActionDeployment{RepoID: first.RepoID, RunID: first.RunID, JobID: first.JobID + 1000, Attempt: first.Attempt,
-			EnvironmentID: first.EnvironmentID, Status: actions_model.DeploymentWaitingReview, TriggerUserID: first.TriggerUserID}
+		other := &actions_model.ActionDeployment{
+			RepoID: first.RepoID, RunID: first.RunID, JobID: first.JobID + 1000, Attempt: first.Attempt,
+			EnvironmentID: first.EnvironmentID, Status: actions_model.DeploymentWaitingReview, TriggerUserID: first.TriggerUserID,
+		}
 		require.NoError(t, db.Insert(t.Context(), other))
 		mailDeploymentReviewers(f.ctx, f.run, "deploy", f.env, other)
 		assert.Len(t, sent.review, 1, "the first job's mail covers it")

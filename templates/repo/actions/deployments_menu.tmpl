@@ -1,5 +1,5 @@
 {{if .DeploymentEnvironments}}
-	<div class="ui fluid vertical menu actions-menu tw-mt-4" id="deployments-menu">
+	<div class="ui fluid vertical menu actions-menu tw-mt-4">
 		<div class="header item">{{ctx.Locale.Tr "actions.deployments.title"}}</div>
 		<a class="item{{if and .PageIsDeployments (not .CurEnvironment)}} active{{end}}" href="{{.DeploymentsLink}}">{{ctx.Locale.Tr "actions.deployments.all"}}</a>
 		{{range .DeploymentEnvironments}}

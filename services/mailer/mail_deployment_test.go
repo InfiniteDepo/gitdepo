@@ -57,6 +57,17 @@ func TestMailDeployment(t *testing.T) {
 		assert.NotContains(t, body, "<b>job")
 	})
 
+	t.Run("expiry in the reviewer's time zone", func(t *testing.T) {
+		sent = nil
+		require.NoError(t, user_model.SetUserSetting(t.Context(), user4.ID, user_model.SettingsKeyTimeZone, "Asia/Tokyo"))
+		defer func() {
+			require.NoError(t, user_model.DeleteUserSetting(t.Context(), user4.ID, user_model.SettingsKeyTimeZone))
+		}()
+		require.NoError(t, MailDeploymentReview(t.Context(), []*user_model.User{user4}, deploymentMailOf(t, 1, actions_model.DeploymentWaitingReview)))
+		require.Len(t, sent, 1)
+		assert.Contains(t, sent[0].Body, "2026-11-05 21:00 JST (+09:00)")
+	})
+
 	t.Run("rejected", func(t *testing.T) {
 		sent = nil
 		m := deploymentMailOf(t, 1, actions_model.DeploymentRejected)

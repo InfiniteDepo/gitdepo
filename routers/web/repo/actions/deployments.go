@@ -5,15 +5,19 @@ package actions
 
 import (
 	"errors"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	actions_model "forgejo.org/models/actions"
 	"forgejo.org/models/db"
+	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/actions"
 	"forgejo.org/modules/base"
 	"forgejo.org/modules/git"
 	"forgejo.org/modules/setting"
@@ -26,13 +30,13 @@ import (
 const tplDeployments base.TplName = "repo/actions/deployments"
 
 // ViewDeployments is the Deployments panel of the run page: the deployment of the current attempt of each job of the
-// run that names an environment. Every text is plain, shown escaped; the review comment is the only stored text.
+// run that names an environment. Every text is plain, shown escaped; the review comment is the only stored text. The
+// texts of the review dialog come from the page (data-locale-*), not with every poll.
 type ViewDeployments struct {
 	Title     string            `json:"title"`
 	State     string            `json:"state"`     // "waiting", "failed" or "": the colour of the panel
 	CanReview bool              `json:"canReview"` // the doer may review at least one of them now
 	ReviewURL string            `json:"reviewURL"`
-	Labels    map[string]string `json:"labels"` // the texts of the review dialog
 	Items     []*ViewDeployment `json:"items"`
 }
 
@@ -43,6 +47,7 @@ type ViewDeployment struct {
 	EnvironmentLink string `json:"environmentLink"`
 	Status          string `json:"status"` // a job status, for the icon
 	Text            string `json:"text"`
+	Pane            string `json:"pane"` // the subtitle of the job's pane
 	Detail          string `json:"detail"`
 	Comment         string `json:"comment"`
 	Gate            bool   `json:"gate"`       // the job has no log: its pane shows the deployment instead
@@ -54,8 +59,17 @@ type ViewDeployment struct {
 // maxReviewerNames is how many reviewers "Waiting for a reviewer" names.
 const maxReviewerNames = 10
 
-func formatTime(t timeutil.TimeStamp) string {
-	return t.AsLocalTime().Format("2006-01-02 15:04")
+// viewerLocation is the time zone of the doer (their setting), else the server's.
+func viewerLocation(ctx *app_context.Context) *time.Location {
+	if ctx.Doer == nil {
+		return time.Local
+	}
+	return user_model.GetUserLocation(ctx, ctx.Doer.ID)
+}
+
+// formatTime shows t in loc with its zone, in characters that don't break the line.
+func formatTime(t timeutil.TimeStamp, loc *time.Location) string {
+	return strings.NewReplacer("-", "‑", " ", " ").Replace(t.AsTimeInLocation(loc).Format("2006-01-02 15:04 MST"))
 }
 
 // deploymentsLink is the deployments view of the repository, of one environment if name isn't empty.
@@ -68,25 +82,25 @@ func deploymentsLink(ctx *app_context.Context, name string) string {
 }
 
 // refusalText is the message of a deployment the gate refused, by its reason code through a fixed switch: never the
-// stored text. It returns the code it recognised, "" for an unknown one.
-func refusalText(ctx *app_context.Context, d *actions_model.ActionDeployment) (string, string) {
+// stored text.
+func refusalText(ctx *app_context.Context, d *actions_model.ActionDeployment) string {
 	switch d.Reason {
 	case actions_model.DeploymentReasonRefNotAllowed:
-		return ctx.Locale.TrString("actions.deployments.refused.ref_not_allowed", git.RefName(d.Ref).ShortName()), actions_model.DeploymentReasonRefNotAllowed
+		return ctx.Locale.TrString("actions.deployments.refused.ref_not_allowed", git.RefName(d.Ref).ShortName())
 	case actions_model.DeploymentReasonWorkflowNotAllowed:
-		return ctx.Locale.TrString("actions.deployments.refused.workflow_not_allowed"), actions_model.DeploymentReasonWorkflowNotAllowed
+		return ctx.Locale.TrString("actions.deployments.refused.workflow_not_allowed")
 	case actions_model.DeploymentReasonEnvironmentLimit:
-		return ctx.Locale.TrString("actions.deployments.refused.environment_limit"), actions_model.DeploymentReasonEnvironmentLimit
+		return ctx.Locale.TrString("actions.deployments.refused.environment_limit")
 	case actions_model.DeploymentReasonEnvironmentDeleted:
-		return ctx.Locale.TrString("actions.deployments.refused.environment_deleted"), actions_model.DeploymentReasonEnvironmentDeleted
+		return ctx.Locale.TrString("actions.deployments.refused.environment_deleted")
 	case actions_model.DeploymentReasonInvalidName:
-		return ctx.Locale.TrString("actions.deployments.refused.invalid_name"), actions_model.DeploymentReasonInvalidName
+		return ctx.Locale.TrString("actions.deployments.refused.invalid_name")
 	case actions_model.DeploymentReasonNotFound:
-		return ctx.Locale.TrString("actions.deployments.refused.environment_not_found"), actions_model.DeploymentReasonNotFound
+		return ctx.Locale.TrString("actions.deployments.refused.environment_not_found")
 	case actions_model.DeploymentReasonUnsupported:
-		return ctx.Locale.TrString("actions.deployments.refused.environment_unsupported"), actions_model.DeploymentReasonUnsupported
+		return ctx.Locale.TrString("actions.deployments.refused.environment_unsupported")
 	}
-	return ctx.Locale.TrString("actions.deployments.refused.other"), ""
+	return ctx.Locale.TrString("actions.deployments.refused.other")
 }
 
 func userName(users map[int64]*user_model.User, id int64) string {
@@ -94,8 +108,15 @@ func userName(users map[int64]*user_model.User, id int64) string {
 	return u.GetDisplayName()
 }
 
-// viewDeployments builds the Deployments panel of the run, nil if no job of it names an environment. Who may review is
-// decided by the checker of the review itself.
+// seesReviewers tells if the doer is shown who may review the run's deployments, and that nobody can: those who may
+// change the repository's Actions. Everyone else, readers of a public repository included, learns nothing about the
+// reviewers, their accounts or their memberships.
+func seesReviewers(ctx *app_context.Context) bool {
+	return ctx.Doer != nil && ctx.Repo.CanWrite(unit.TypeActions)
+}
+
+// viewDeployments builds the Deployments panel of the run, nil if no job of it names an environment, with a fixed
+// number of queries however many jobs wait. Who may review is decided by the checker of the review itself.
 func viewDeployments(ctx *app_context.Context, run *actions_model.ActionRun, jobs []*actions_model.ActionRunJob) (*ViewDeployments, error) {
 	all, err := actions_model.FindRunDeployments(ctx, run.ID)
 	if err != nil || len(all) == 0 {
@@ -123,48 +144,67 @@ func viewDeployments(ctx *app_context.Context, run *actions_model.ActionRun, job
 	if err != nil {
 		return nil, err
 	}
+	loc := viewerLocation(ctx)
 
-	v := &ViewDeployments{ReviewURL: run.Link() + "/deployments/review", Labels: map[string]string{
-		"review":          ctx.Locale.TrString("actions.deployments.dialog.review"),
-		"title":           ctx.Locale.TrString("actions.deployments.dialog.title"),
-		"choose":          ctx.Locale.TrString("actions.deployments.dialog.choose"),
-		"comment":         ctx.Locale.TrString("actions.deployments.dialog.comment"),
-		"commentHelp":     ctx.Locale.TrString("actions.deployments.dialog.comment_help"),
-		"commentRequired": ctx.Locale.TrString("actions.deployments.dialog.comment_required"),
-		"approve":         ctx.Locale.TrString("actions.deployments.dialog.approve"),
-		"reject":          ctx.Locale.TrString("actions.deployments.dialog.reject"),
-		"cancel":          ctx.Locale.TrString("cancel"),
-	}}
-	waiting, failed := 0, ""
+	type shown struct {
+		item *ViewDeployment
+		d    *actions_model.ActionDeployment
+		env  *actions_model.ActionEnvironment
+	}
+	var items []shown
+	waitingEnvs := map[int64]*actions_model.ActionEnvironment{}
+	envReviewers := map[int64][]*actions_model.ActionEnvironmentReviewer{}
 	for _, job := range jobs {
 		d := current[job.ID]
 		if d == nil || d.Attempt != job.Attempt {
 			continue
 		}
-		env, _, err := checker.Environment(ctx, d.EnvironmentID)
+		env, rs, err := checker.Environment(ctx, d.EnvironmentID)
 		if err != nil {
 			return nil, err
 		}
 		item := &ViewDeployment{JobID: job.ID, JobName: job.Name, Comment: d.ReviewComment, Status: "blocked", Gate: true}
 		if env != nil {
 			item.Environment, item.EnvironmentLink = env.Name, deploymentsLink(ctx, env.Name)
+			if d.Status == actions_model.DeploymentWaitingReview {
+				waitingEnvs[env.ID], envReviewers[env.ID] = env, rs
+			}
 		}
+		items = append(items, shown{item, d, env})
+	}
+	if len(items) == 0 {
+		return nil, nil //nolint:nilnil // nil means no job of the current attempts names an environment
+	}
+	var runReviewers *actions_service.RunReviewers
+	if len(waitingEnvs) > 0 && seesReviewers(ctx) {
+		envs := slices.Collect(maps.Values(waitingEnvs))
+		if runReviewers, err = actions_service.LoadRunReviewers(ctx, ctx.Doer, run, envs, envReviewers); err != nil {
+			return nil, err
+		}
+	}
+
+	v := &ViewDeployments{ReviewURL: run.Link() + "/deployments/review"}
+	waiting, failed := 0, ""
+	for _, s := range items {
+		item, d, env := s.item, s.d, s.env
 		switch d.Status {
 		case actions_model.DeploymentWaitingReview:
 			waiting++
-			item.Waiting = true
+			item.Waiting, item.Status = true, "waiting"
 			if slices.ContainsFunc(reviewable, func(r *actions_model.ActionDeployment) bool { return r.ID == d.ID }) {
 				if item.Reviewable, err = checker.May(ctx, d); err != nil {
 					return nil, err
 				}
 			}
-			if err := waitingText(ctx, run, env, d, item); err != nil {
-				return nil, err
+			waitingText(ctx, run, env, d, item, runReviewers, loc)
+			if env != nil {
+				item.Pane = ctx.Locale.TrString("actions.deployments.pane_waiting", env.Name)
 			}
 		case actions_model.DeploymentWaitingTimer:
-			item.Text = ctx.Locale.TrString("actions.deployments.timer", formatTime(d.ReleaseAfterUnix))
+			item.Status = "waiting"
+			item.Text = ctx.Locale.TrString("actions.deployments.timer", formatTime(d.ReleaseAfterUnix, loc))
 			if d.ReviewedBy != 0 {
-				item.Text = ctx.Locale.TrString("actions.deployments.approved_timer", userName(users, d.ReviewedBy), formatTime(d.ReleaseAfterUnix))
+				item.Text = ctx.Locale.TrString("actions.deployments.approved_timer", userName(users, d.ReviewedBy), formatTime(d.ReleaseAfterUnix, loc))
 			}
 		case actions_model.DeploymentReleased:
 			item.Gate, item.Status = false, "waiting"
@@ -174,42 +214,38 @@ func viewDeployments(ctx *app_context.Context, run *actions_model.ActionRun, job
 			item.Text = ctx.Locale.TrString("actions.deployments.released")
 			if d.ReviewedBy != 0 {
 				item.Text = ctx.Locale.TrString("actions.deployments.approved", userName(users, d.ReviewedBy))
-				item.Detail = ctx.Locale.TrString("actions.deployments.approved_at", formatTime(d.ReviewedUnix))
+				item.Detail = ctx.Locale.TrString("actions.deployments.approved_at", formatTime(d.ReviewedUnix, loc))
 			}
 		case actions_model.DeploymentRejected:
 			item.Status, failed = "failure", ctx.Locale.TrString("actions.deployments.title_rejected")
 			item.Text = ctx.Locale.TrString("actions.deployments.rejected", userName(users, d.ReviewedBy))
-			item.Detail = ctx.Locale.TrString("actions.deployments.rerun_asks_again", formatTime(d.ReviewedUnix))
+			item.Detail = ctx.Locale.TrString("actions.deployments.rerun_asks_again", formatTime(d.ReviewedUnix, loc))
 		case actions_model.DeploymentExpired:
 			item.Status = "failure"
 			if failed == "" {
 				failed = ctx.Locale.TrString("actions.deployments.title_expired")
 			}
 			item.Text = ctx.Locale.TrString("actions.deployments.expired")
-			item.Detail = ctx.Locale.TrString("actions.deployments.expired_detail", formatTime(d.Created), formatTime(d.Updated))
+			item.Detail = ctx.Locale.TrString("actions.deployments.expired_detail", formatTime(d.Created, loc), formatTime(d.Updated, loc))
 		case actions_model.DeploymentRefused:
 			item.Status = "failure"
 			if failed == "" {
 				failed = ctx.Locale.TrString("actions.deployments.title_refused")
 			}
-			var code string
-			item.Text, code = refusalText(ctx, d)
-			if code != "" {
-				item.Detail = ctx.Locale.TrString("actions.deployments.reason_code", code)
-			}
+			item.Text = refusalText(ctx, d)
 		case actions_model.DeploymentCancelled:
 			item.Gate, item.Status = false, "cancelled"
 			item.Text = ctx.Locale.TrString("actions.deployments.cancelled")
 		}
+		if item.Pane == "" {
+			item.Pane = item.Text
+		}
 		v.CanReview = v.CanReview || item.Reviewable
 		v.Items = append(v.Items, item)
 	}
-	if len(v.Items) == 0 {
-		return nil, nil //nolint:nilnil // nil means no job of the current attempts names an environment
-	}
 	switch {
 	case waiting > 0:
-		v.State, v.Title = "waiting", ctx.Locale.TrString("actions.deployments.title_waiting", waiting)
+		v.State, v.Title = "waiting", string(ctx.Locale.TrPluralString(waiting, "actions.deployments.title_waiting", waiting))
 	case failed != "":
 		v.State, v.Title = "failed", failed
 	default:
@@ -218,43 +254,40 @@ func viewDeployments(ctx *app_context.Context, run *actions_model.ActionRun, job
 	return v, nil
 }
 
-// waitingText says who the deployment waits for: the doer, if they may review it, else the users who may (those the
-// doer can see), or that nobody is left, with the self-review rule for the user it bars.
-func waitingText(ctx *app_context.Context, run *actions_model.ActionRun, env *actions_model.ActionEnvironment, d *actions_model.ActionDeployment, item *ViewDeployment) error {
-	item.Detail = ctx.Locale.TrString("actions.deployments.waiting_detail", formatTime(d.Created),
-		formatTime(d.Created.AddDuration(setting.Actions.DeploymentApprovalTimeout)))
+// waitingText says who the deployment waits for. A doer who may review it is asked to; one who may change the
+// repository's Actions is shown the listed reviewers, or that nobody can approve; anyone else sees that it waits for a
+// review, and the user the self-review rule bars is told so.
+func waitingText(ctx *app_context.Context, run *actions_model.ActionRun, env *actions_model.ActionEnvironment, d *actions_model.ActionDeployment, item *ViewDeployment, reviewers *actions_service.RunReviewers, loc *time.Location) {
+	item.Detail = ctx.Locale.TrString("actions.deployments.waiting_detail", formatTime(d.Created, loc),
+		formatTime(d.Created.AddDuration(setting.Actions.DeploymentApprovalTimeout), loc))
 	if item.Reviewable {
 		item.Text = ctx.Locale.TrString("actions.deployments.waiting_review")
-		return nil
-	}
-	item.Text = ctx.Locale.TrString("actions.deployments.no_reviewer")
-	if env == nil {
-		return nil
-	}
-	item.NotReviewable = ctx.Locale.TrString("actions.deployments.not_reviewer", env.Name)
-	if ctx.Doer != nil && env.PreventSelfReview && (ctx.Doer.ID == run.TriggerUserID || ctx.Doer.ID == d.TriggerUserID) {
-		item.NotReviewable = ctx.Locale.TrString("actions.deployments.self_review", env.Name)
-		item.Detail = item.NotReviewable + " " + item.Detail
-	}
-	ids, check, err := actions_service.DeploymentApprovers(ctx, ctx.Doer, run, env, d)
-	if err != nil || check.NoReviewer[env.ID] || len(ids) == 0 {
-		return err
-	}
-	users, err := actions_service.VisibleUsers(ctx, ctx.Doer, ids)
-	if err != nil {
-		return err
-	}
-	var names []string
-	for _, id := range ids {
-		if u := users[id]; u != nil && !u.IsGhost() && len(names) < maxReviewerNames {
-			names = append(names, u.GetDisplayName())
-		}
+		return
 	}
 	item.Text = ctx.Locale.TrString("actions.deployments.waiting_reviewer")
-	if len(names) > 0 {
-		item.Text = ctx.Locale.TrString("actions.deployments.waiting_for", strings.Join(names, ", "))
+	if env == nil {
+		return
 	}
-	return nil
+	item.NotReviewable = ctx.Locale.TrString("actions.deployments.not_reviewer", env.Name)
+	barred := ctx.Doer != nil && env.PreventSelfReview && (ctx.Doer.ID == run.TriggerUserID || ctx.Doer.ID == d.TriggerUserID)
+	if barred {
+		item.NotReviewable = ctx.Locale.TrString("actions.deployments.self_review", env.Name)
+	}
+	if reviewers != nil {
+		if nobody, selfReview := reviewers.Nobody(env, d); nobody {
+			item.Text = ctx.Locale.TrString("actions.deployments.no_reviewer")
+			if selfReview && barred { // one message: there is no other reviewer to wait for
+				item.Text = ctx.Locale.TrString("actions.deployments.no_reviewer_self", env.Name)
+			}
+			return
+		}
+		if names := reviewers.Names(env.ID); len(names) > 0 {
+			item.Text = ctx.Locale.TrString("actions.deployments.waiting_for", strings.Join(names[:min(len(names), maxReviewerNames)], ", "))
+		}
+	}
+	if barred {
+		item.Detail = item.NotReviewable + " " + item.Detail
+	}
 }
 
 // ReviewDeploymentsPost approves or rejects deployments of the run with the service of the API (who may review, all or
@@ -294,10 +327,13 @@ func ReviewDeploymentsPost(ctx *app_context.Context) {
 		ctx.Redirect(link)
 		return
 	}
-	_, err = actions_service.ReviewDeployments(ctx, ctx.Doer, run, slices.Compact(slices.Sorted(slices.Values(jobIDs))), state == "approved", ctx.FormString("comment"))
+	jobIDs = slices.Compact(slices.Sorted(slices.Values(jobIDs)))
+	_, err = actions_service.ReviewDeployments(ctx, ctx.Doer, run, jobIDs, state == "approved", ctx.FormString("comment"))
 	switch {
+	case err == nil && state == "approved":
+		ctx.Flash.Success(ctx.Locale.TrPluralString(len(jobIDs), "actions.deployments.flash.approved", len(jobIDs)))
 	case err == nil:
-		ctx.Flash.Success(util.Iif(state == "approved", ctx.Tr("actions.deployments.flash.approved"), ctx.Tr("actions.deployments.flash.rejected")))
+		ctx.Flash.Success(ctx.Locale.TrPluralString(len(jobIDs), "actions.deployments.flash.rejected", len(jobIDs)))
 	case errors.Is(err, actions_service.ErrReviewForbidden):
 		ctx.Error(http.StatusForbidden)
 		return
@@ -321,6 +357,9 @@ type deploymentRow struct {
 	RefName     string
 	RunLink     string
 	RunTitle    string
+	RunIndex    int64
+	CommitLink  string
+	ShortSHA    string
 	Task        *actions_model.ActionTask
 	When        timeutil.TimeStamp
 	Environment string
@@ -347,7 +386,10 @@ func deploymentRows(ctx *app_context.Context, ds []*actions_model.ActionDeployme
 			row.When = row.Task.Updated
 		}
 		if r := data.Runs[d.RunID]; r != nil {
-			row.RunLink, row.RunTitle = repo.Link()+"/actions/runs/"+strconv.FormatInt(r.Index, 10), r.Title
+			row.RunLink, row.RunTitle, row.RunIndex = repo.Link()+"/actions/runs/"+strconv.FormatInt(r.Index, 10), r.Title, r.Index
+		}
+		if d.CommitSHA != "" {
+			row.CommitLink, row.ShortSHA = repo.Link()+"/commit/"+url.PathEscape(d.CommitSHA), base.ShortSha(d.CommitSHA)
 		}
 		if e := data.Envs[d.EnvironmentID]; e != nil {
 			row.Environment = e.Name
@@ -364,6 +406,26 @@ func deploymentRows(ctx *app_context.Context, ds []*actions_model.ActionDeployme
 		rows = append(rows, row)
 	}
 	return rows, nil
+}
+
+// workflowEntries are the workflows of the default branch, for the workflow menu of the deployments view.
+func workflowEntries(ctx *app_context.Context) ([]Workflow, error) {
+	if empty, err := ctx.Repo.GitRepo.IsEmpty(); err != nil || empty {
+		return nil, err
+	}
+	commit, err := ctx.Repo.GitRepo.GetBranchCommit(ctx.Repo.Repository.DefaultBranch)
+	if err != nil {
+		return nil, err
+	}
+	_, entries, err := actions.ListWorkflows(commit)
+	if err != nil {
+		return nil, err
+	}
+	workflows := make([]Workflow, 0, len(entries))
+	for _, entry := range entries {
+		workflows = append(workflows, Workflow{Entry: *entry})
+	}
+	return workflows, nil
 }
 
 // deploymentStatuses are the values of the status filter of the deployments view.
@@ -391,6 +453,12 @@ func Deployments(ctx *app_context.Context) {
 	}
 	ctx.Data["DeploymentEnvironments"] = envs
 	ctx.Data["DeploymentsLink"] = deploymentsLink(ctx, "")
+	ctx.Data["RepoLink"] = repo.Link()
+	ctx.Data["ActionsConfig"] = repo.MustGetUnit(ctx, unit.TypeActions).ActionsConfig()
+	if ctx.Data["workflows"], err = workflowEntries(ctx); err != nil {
+		ctx.ServerError("workflowEntries", err)
+		return
+	}
 
 	name := ctx.FormString("environment")
 	var env *actions_model.ActionEnvironment
@@ -414,11 +482,15 @@ func Deployments(ctx *app_context.Context) {
 			return
 		}
 		var ds []*actions_model.ActionDeployment
+		var idle []*actions_model.ActionEnvironment
 		for _, e := range envs { // in name order
 			if d := last[e.ID]; d != nil {
 				ds = append(ds, d)
+			} else {
+				idle = append(idle, e)
 			}
 		}
+		ctx.Data["IdleEnvironments"] = idle
 		if ctx.Data["Deployments"], err = deploymentRows(ctx, ds); err != nil {
 			ctx.ServerError("deploymentRows", err)
 			return
@@ -460,10 +532,14 @@ func Deployments(ctx *app_context.Context) {
 
 	page := max(ctx.FormInt("page"), 1)
 	opts := db.ListOptions{Page: page, PageSize: 30}
-	ds, total, err := actions_model.FindRepoDeployments(ctx, repo.ID, filter, opts)
-	if err != nil {
-		ctx.ServerError("FindRepoDeployments", err)
-		return
+	var ds []*actions_model.ActionDeployment
+	var total int64
+	// only a user the doer may see filters: one they may not finds nothing, so the filter tells nothing about them
+	if filter.TriggerUserID == 0 || slices.ContainsFunc(visibleActors, func(u *user_model.User) bool { return u.ID == filter.TriggerUserID }) {
+		if ds, total, err = actions_model.FindRepoDeployments(ctx, repo.ID, filter, opts); err != nil {
+			ctx.ServerError("FindRepoDeployments", err)
+			return
+		}
 	}
 	if ctx.Data["Deployments"], err = deploymentRows(ctx, ds); err != nil {
 		ctx.ServerError("deploymentRows", err)

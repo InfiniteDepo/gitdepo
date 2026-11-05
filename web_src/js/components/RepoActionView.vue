@@ -287,6 +287,12 @@ export default {
       POST(`${this.run.link}/cancel`);
     },
 
+    // a job the deployment gate holds waits (a clock), it isn't blocked
+    jobStatus(job) {
+      const item = this.run.deployments?.items.find((item) => item.jobID === job.id && item.gate);
+      return item?.status === 'waiting' ? 'waiting' : job.status;
+    },
+
     openDeploymentReview() {
       this.reviewCommentError = false;
       this.$refs.reviewDialog.showModal();
@@ -297,6 +303,7 @@ export default {
       if (event.submitter?.value === 'rejected' && !this.reviewComment.trim()) {
         event.preventDefault();
         this.reviewCommentError = true;
+        this.$nextTick(() => this.$refs.reviewComment.focus());
       }
     },
 
@@ -592,15 +599,15 @@ export default {
     </div>
     <section class="deployments-panel" :class="run.deployments.state" v-if="run.deployments" :aria-label="run.deployments.title">
       <div class="deployments-panel-header">
-        <strong>{{ run.deployments.title }}</strong>
+        <strong aria-live="polite">{{ run.deployments.title }}</strong>
         <button class="ui primary small compact button" id="review-deployments" @click="openDeploymentReview()" v-if="run.deployments.canReview && currentlyViewingMostRecentAttempt">
-          <SvgIcon name="octicon-rocket"/> {{ run.deployments.labels.review }}
+          <SvgIcon name="octicon-rocket"/> {{ locale.deployments.review }}
         </button>
       </div>
       <div class="deployments-panel-item" v-for="item in run.deployments.items" :key="item.jobID">
         <ActionRunStatus :locale-status="locale.status[item.status]" :status="item.status"/>
         <div>
-          <div><strong>{{ item.jobName }}</strong> → <a :href="item.environmentLink">{{ item.environment }}</a> · <span class="deployment-text">{{ item.text }}</span></div>
+          <div><strong>{{ item.jobName }}</strong> <span aria-hidden="true">→</span><span class="tw-sr-only">{{ locale.deployments.deploysTo }}</span> <a :href="item.environmentLink">{{ item.environment }}</a> · <span class="deployment-text">{{ item.text }}</span></div>
           <div class="deployment-detail" v-if="item.detail">
             {{ item.detail }}
           </div>
@@ -610,12 +617,14 @@ export default {
         </div>
       </div>
     </section>
-    <dialog class="modal" ref="reviewDialog" id="review-deployments-modal" v-if="run.deployments?.canReview">
+    <dialog class="modal" ref="reviewDialog" id="review-deployments-modal" aria-labelledby="review-deployments-title" v-if="run.deployments?.canReview">
       <article>
-        <header>{{ run.deployments.labels.title }}</header>
+        <header id="review-deployments-title">
+          {{ locale.deployments.title }}
+        </header>
         <form class="ui form" method="post" :action="run.deployments.reviewURL" @submit="checkDeploymentReview">
           <div class="content">
-            <p>{{ run.deployments.labels.choose }}</p>
+            <p>{{ locale.deployments.choose }}</p>
             <label class="deployment-review-choice" v-for="item in waitingDeployments" :key="item.jobID" :class="{disabled: !item.reviewable}">
               <input type="checkbox" name="job_ids" :value="item.jobID" :disabled="!item.reviewable" :checked="item.reviewable">
               <span><strong>{{ item.environment }}</strong> · {{ item.jobName }}
@@ -623,22 +632,25 @@ export default {
               </span>
             </label>
             <div class="field" :class="{error: reviewCommentError}">
-              <label for="review-comment">{{ run.deployments.labels.comment }}</label>
-              <textarea id="review-comment" name="comment" rows="3" v-model="reviewComment"/>
-              <p class="help">
-                {{ reviewCommentError ? run.deployments.labels.commentRequired : run.deployments.labels.commentHelp }}
+              <label for="review-comment">{{ locale.deployments.comment }}</label>
+              <textarea id="review-comment" ref="reviewComment" name="comment" rows="3" v-model="reviewComment" :aria-invalid="reviewCommentError" :aria-describedby="reviewCommentError ? 'review-comment-error review-comment-help' : 'review-comment-help'"/>
+              <p class="help" id="review-comment-help">
+                {{ locale.deployments.commentHelp }}
+              </p>
+              <p class="help deployment-comment-error" id="review-comment-error" role="alert" v-if="reviewCommentError">
+                {{ locale.deployments.commentRequired }}
               </p>
             </div>
           </div>
           <div class="actions">
             <button type="button" class="ui button" @click="$refs.reviewDialog.close()">
-              {{ run.deployments.labels.cancel }}
+              {{ locale.cancel }}
             </button>
             <button class="ui red button" name="state" value="rejected">
-              {{ run.deployments.labels.reject }}
+              {{ locale.deployments.reject }}
             </button>
             <button class="ui primary button" name="state" value="approved">
-              {{ run.deployments.labels.approve }}
+              {{ locale.deployments.approve }}
             </button>
           </div>
         </form>
@@ -651,7 +663,7 @@ export default {
           <div class="job-brief-list">
             <a class="job-brief-item" :href="run.link+'/jobs/'+index" :class="parseInt(jobIndex) === index ? 'selected' : ''" v-for="(job, index) in run.jobs" :key="job.id">
               <div class="job-brief-item-left">
-                <ActionRunStatus :locale-status="locale.status[job.status]" :status="job.status"/>
+                <ActionRunStatus :locale-status="locale.status[jobStatus(job)]" :status="jobStatus(job)"/>
                 <span class="job-brief-name tw-mx-2 gt-ellipsis">{{ job.name }}</span>
               </div>
               <span class="job-brief-item-right">
@@ -690,8 +702,13 @@ export default {
               {{ currentJob.title }}
             </h3>
             <ul class="job-info-header-detail">
-              <!-- eslint-disable-next-line vue/no-v-html -->
-              <li v-for="detail in statusDiagnostics" :key="detail" v-html="detail"/>
+              <li v-if="gatedDeployment">
+                {{ gatedDeployment.pane }}
+              </li>
+              <template v-else>
+                <!-- eslint-disable-next-line vue/no-v-html -->
+                <li v-for="detail in statusDiagnostics" :key="detail" v-html="detail"/>
+              </template>
             </ul>
           </div>
           <div class="job-info-header-right job-attempt-dropdown tw-mr-8" v-if="shouldShowAttemptDropdown" v-cloak>
@@ -740,6 +757,9 @@ export default {
         </div>
         <div v-if="gatedDeployment" class="job-deployment-gate" :class="gatedDeployment.status">
           <strong>{{ gatedDeployment.text }}</strong>
+          <p v-if="gatedDeployment.status === 'waiting'">
+            {{ locale.deployments.gateNote }}
+          </p>
           <p v-if="gatedDeployment.detail">
             {{ gatedDeployment.detail }}
           </p>
@@ -849,6 +869,15 @@ export default {
   display: flex;
   gap: 8px;
   margin-bottom: 10px;
+}
+
+.deployment-review-choice input {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.deployment-comment-error {
+  color: var(--color-error-text);
 }
 
 .deployment-review-choice.disabled {

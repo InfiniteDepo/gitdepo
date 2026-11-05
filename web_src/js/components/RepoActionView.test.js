@@ -28,6 +28,7 @@ const testLocale = {
   viewMostRecentRun: '',
   preExecutionError: 'pre-execution error',
   preExecutionWarning: 'pre-execution warning',
+  deployments: {review: 'Review deployments', title: 'Review pending deployments', choose: '', comment: 'Comment', commentHelp: 'help', commentRequired: 'A comment is required to reject.', approve: 'Approve', reject: 'Reject', deploysTo: 'deploys to', gateNote: 'gate note'},
   status: {
     unknown: '',
     waiting: '',
@@ -755,12 +756,11 @@ test('keep button and kept marker', async () => {
 });
 
 const testDeployments = (canReview) => ({
-  title: 'Deployments waiting for approval: 1',
+  title: '1 deployment is waiting for approval',
   state: 'waiting',
   canReview,
   reviewURL: '/o/r/actions/runs/10/deployments/review',
-  labels: {review: 'Review deployments', title: 'Review pending deployments', choose: '', comment: 'Comment', commentHelp: 'help', commentRequired: 'A comment is required to reject.', approve: 'Approve', reject: 'Reject', cancel: 'Cancel'},
-  items: [{jobID: 5, jobName: '<b>deploy</b>', environment: 'prod', environmentLink: '/o/r/actions/deployments?environment=prod', status: 'blocked', text: 'Waiting for a reviewer: <i>user4</i>', detail: '', comment: '<b>old</b>', gate: true, waiting: true, reviewable: canReview}],
+  items: [{jobID: 5, jobName: '<b>deploy</b>', environment: 'prod', environmentLink: '/o/r/actions/deployments?environment=prod', status: 'waiting', pane: 'Waiting for approval to deploy to prod', text: 'Waiting for a reviewer: <i>user4</i>', detail: '', comment: '<b>old</b>', gate: true, waiting: true, reviewable: canReview}],
 });
 
 test('deployments panel, review button and dialog', async () => {
@@ -774,6 +774,9 @@ test('deployments panel, review button and dialog', async () => {
   expect(wrapper.find('.deployments-panel').text()).toContain('Waiting for a reviewer: <i>user4</i>');
   expect(wrapper.find('.deployments-panel').text()).toContain('<b>deploy</b>');
   expect(wrapper.find('.deployments-panel b, .deployments-panel i').exists()).toBe(false);
+  // a job the gate holds shows the clock, not "blocked"
+  expect(wrapper.vm.jobStatus({id: 5, status: 'blocked'})).toBe('waiting');
+  expect(wrapper.vm.jobStatus({id: 6, status: 'blocked'})).toBe('blocked');
 
   wrapper = mount(RepoActionView, {props: withRun({deployments: testDeployments(true)})});
   await flushPromises();
@@ -788,6 +791,11 @@ test('deployments panel, review button and dialog', async () => {
   expect(reject.preventDefault).toHaveBeenCalled();
   await flushPromises();
   expect(wrapper.find('#review-deployments-modal .field.error').text()).toContain('A comment is required to reject.');
+  const comment = wrapper.find('#review-comment');
+  expect(comment.attributes('aria-invalid')).toBe('true');
+  expect(comment.attributes('aria-describedby')).toContain('review-comment-error');
+  expect(wrapper.find('#review-comment-error').attributes('role')).toBe('alert');
+  expect(wrapper.find('#review-deployments-modal').attributes('aria-labelledby')).toBe('review-deployments-title');
   const approve = {submitter: {value: 'approved'}, preventDefault: vi.fn()};
   wrapper.vm.checkDeploymentReview(approve);
   expect(approve.preventDefault).not.toHaveBeenCalled();

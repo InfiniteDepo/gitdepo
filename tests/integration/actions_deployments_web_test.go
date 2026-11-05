@@ -175,12 +175,18 @@ func TestActionsDeploymentsWeb(t *testing.T) {
 			assert.Equal(t, "prod", p.Items[0].Environment)
 			assert.Equal(t, runLink(run)+"/deployments/review", p.ReviewURL)
 
+			// only who may change the repository's Actions is shown the reviewers
 			for name, s := range map[string]*TestSession{"owner": owner, "stranger": stranger, "anonymous": anonymous} {
 				p := panel(t, s, run, 1)
 				require.NotNil(t, p, name)
 				assert.False(t, p.CanReview, name)
 				assert.False(t, p.Items[0].Reviewable, name)
-				assert.Equal(t, "Waiting for a reviewer: "+user4.GetDisplayName(), p.Items[0].Text, name)
+				assert.Equal(t, "Waiting for approval to deploy to prod", p.Items[0].Pane, name)
+				if s == owner {
+					assert.Equal(t, "Waiting for a reviewer: "+user4.GetDisplayName(), p.Items[0].Text, name)
+				} else {
+					assert.Equal(t, "Waiting for review", p.Items[0].Text, name)
+				}
 			}
 		})
 
@@ -230,7 +236,7 @@ func TestActionsDeploymentsWeb(t *testing.T) {
 			assert.Contains(t, flash(t, reviewer), "Choose at least one deployment to review.")
 
 			review(t, reviewer, run, "rejected", "not <b>now</b>", http.StatusSeeOther, job.ID)
-			assert.Contains(t, flash(t, reviewer), "The deployments were rejected.")
+			assert.Contains(t, flash(t, reviewer), "The deployment was rejected.")
 			d := deployment(t, job)
 			assert.Equal(t, actions_model.DeploymentRejected, d.Status)
 			assert.Equal(t, user4.ID, d.ReviewedBy)
@@ -262,7 +268,7 @@ func TestActionsDeploymentsWeb(t *testing.T) {
 
 			since := auditNow(t)
 			review(t, reviewer, run, "approved", "", http.StatusSeeOther, job.ID)
-			assert.Contains(t, flash(t, reviewer), "The deployments were approved.")
+			assert.Contains(t, flash(t, reviewer), "The deployment was approved.")
 			d := deployment(t, job)
 			assert.Equal(t, actions_model.DeploymentReleased, d.Status)
 			assert.Equal(t, user4.ID, d.ReviewedBy)
@@ -277,6 +283,10 @@ func TestActionsDeploymentsWeb(t *testing.T) {
 				doc := NewHTMLParser(t, s.MakeRequest(t, NewRequest(t, "GET", link), http.StatusOK).Body)
 				assert.Equal(t, 1, doc.Find("#deployment-list .deployment-item").Length())
 				assert.Contains(t, text(doc, "#deployments-menu"), "prod")
+				assert.Equal(t, 1, doc.Find(`#deployment-list a[aria-label="History of prod"]`).Length())
+				assert.Equal(t, 1, doc.Find(`#deployment-list a.deployment-run[href="`+runLink(run)+`"]`).Length())
+				assert.Equal(t, 1, doc.Find("#deployment-list a.deployment-commit").Length())
+				assert.Positive(t, doc.Find(`.actions-menu a[href="/`+user2.Name+"/"+repo.Name+`/actions"]`).Length(), "the workflow menu")
 			}
 			doc := NewHTMLParser(t, anonymous.MakeRequest(t, NewRequest(t, "GET", link+"?environment=prod"), http.StatusOK).Body)
 			assert.Equal(t, 3, doc.Find("#deployment-list .deployment-item").Length(), "two attempts of one job and the other run")
@@ -316,7 +326,7 @@ func TestActionsDeploymentsWeb(t *testing.T) {
 			assert.Equal(t, "failed", p.State)
 			assert.Equal(t, "Deployment refused", p.Title)
 			assert.Equal(t, "main isn't allowed to deploy to this environment. A repository owner can change its rules in Settings → Actions → Environments.", p.Items[0].Text)
-			assert.Equal(t, "Reason: ref_not_allowed", p.Items[0].Detail)
+			assert.Empty(t, p.Items[0].Detail, "no reason code")
 
 			// the only reviewer can no longer sign in: nobody can approve
 			u := &user_model.User{Name: "lonely-reviewer", Email: "lonely-reviewer@example.com", IsActive: true}
@@ -329,10 +339,13 @@ func TestActionsDeploymentsWeb(t *testing.T) {
 			u.ProhibitLogin = true
 			require.NoError(t, user_model.UpdateUserCols(db.DefaultContext, u, "prohibit_login"))
 			lonelyRun, _ := pushJobTo(t, "lonely", "lonely", actions_model.DeploymentWaitingReview)
-			for _, s := range []*TestSession{owner, reviewer} {
+			p = panel(t, owner, lonelyRun, 1)
+			assert.False(t, p.CanReview)
+			assert.Equal(t, "No eligible reviewer is left: ask a repository owner to edit the environment.", p.Items[0].Text)
+			for _, s := range []*TestSession{reviewer, stranger, anonymous} {
 				p := panel(t, s, lonelyRun, 1)
 				assert.False(t, p.CanReview)
-				assert.Equal(t, "No eligible reviewer is left: ask a repository owner to edit the environment", p.Items[0].Text)
+				assert.Equal(t, "Waiting for review", p.Items[0].Text, "only writers learn that nobody can approve")
 			}
 		})
 
@@ -398,4 +411,119 @@ func TestActionsDeploymentsWebQueries(t *testing.T) {
 	one := counts()
 	add(20)
 	assert.Equal(t, one, counts())
+}
+
+// insertWaitingRun inserts a run of n jobs whose deployments to env wait for a review, triggered by the user.
+func insertWaitingRun(t *testing.T, repo *repo_model.Repository, env *actions_model.ActionEnvironment, triggerUserID, index int64, n int) *actions_model.ActionRun {
+	t.Helper()
+	run := &actions_model.ActionRun{
+		RepoID: repo.ID, OwnerID: repo.OwnerID, Index: index, Title: fmt.Sprintf("run %d", index), WorkflowID: "deploy.yml", Ref: "refs/heads/main",
+		CommitSHA: "65f1bf27bc3bf70f64657658635e66094edbcb4d", TriggerUserID: triggerUserID, Status: actions_model.StatusBlocked,
+	}
+	require.NoError(t, db.Insert(db.DefaultContext, run))
+	for i := range n {
+		job := &actions_model.ActionRunJob{
+			RunID: run.ID, RepoID: repo.ID, OwnerID: repo.OwnerID, Name: fmt.Sprintf("deploy-%d", i), JobID: actions_model.JobIdentifier(fmt.Sprintf("deploy-%d", i)),
+			Attempt: 1, Status: actions_model.StatusBlocked, Handle: fmt.Sprintf("wr-%d-%d", run.ID, i),
+		}
+		require.NoError(t, db.Insert(db.DefaultContext, job))
+		require.NoError(t, db.Insert(db.DefaultContext, &actions_model.ActionDeployment{
+			RepoID: repo.ID, RunID: run.ID, JobID: job.ID, Attempt: 1, EnvironmentID: env.ID, Status: actions_model.DeploymentWaitingReview,
+			Ref: "refs/heads/main", CommitSHA: run.CommitSHA, TriggerUserID: triggerUserID,
+		}))
+	}
+	return run
+}
+
+// Who may review is shown only to those who may change the repository's Actions: an anonymous visitor and a reader of
+// a public repository learn no reviewer, team or count from the run page, its JSON or the deployments view.
+func TestActionsDeploymentsReviewersHidden(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+	ctx := audit_model.WithSystem(t.Context(), "test")
+	token := getUserToken(t, "user2", auth_model.AccessTokenScopeWriteOrganization, auth_model.AccessTokenScopeWriteRepository)
+	resp := MakeRequest(t, NewRequestWithJSON(t, "POST", "/api/v1/orgs/org3/repos", &api.CreateRepoOption{Name: "deploy-gate", AutoInit: true}).AddTokenAuth(token), http.StatusCreated)
+	var apiRepo api.Repository
+	DecodeJSON(t, resp, &apiRepo)
+	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: apiRepo.ID})
+	resp = MakeRequest(t, NewRequestWithJSON(t, "POST", "/api/v1/orgs/org3/teams", &api.CreateTeamOption{
+		Name: "secret-deployers", Permission: "read", Units: []string{"repo.code", "repo.actions"}, IncludesAllRepositories: true,
+	}).AddTokenAuth(token), http.StatusCreated)
+	var team api.Team
+	DecodeJSON(t, resp, &team)
+	MakeRequest(t, NewRequest(t, "PUT", fmt.Sprintf("/api/v1/teams/%d/members/user4", team.ID)).AddTokenAuth(token), http.StatusNoContent)
+	reviewer := &user_model.User{Name: "hidden-reviewer", Email: "hidden-reviewer@example.com", IsActive: true}
+	require.NoError(t, user_model.CreateUser(db.DefaultContext, reviewer))
+	MakeRequest(t, NewRequestWithJSON(t, "PUT", fmt.Sprintf("/api/v1/repos/org3/%s/collaborators/%s", repo.Name, reviewer.Name),
+		&api.AddCollaboratorOption{Permission: new("read")}).AddTokenAuth(token), http.StatusNoContent)
+	env := &actions_model.ActionEnvironment{RepoID: repo.ID, Name: "prod"}
+	require.NoError(t, actions_model.CreateEnvironment(ctx, env, nil))
+	require.NoError(t, setEnvironmentReviewers(ctx, env, []int64{reviewer.ID}, []int64{team.ID}))
+	run := insertWaitingRun(t, repo, env, 2, 1, 1)
+
+	runLink := fmt.Sprintf("/org3/%s/actions/runs/%d", repo.Name, run.Index)
+	pages := func(t *testing.T, s *TestSession) []string {
+		t.Helper()
+		return []string{
+			s.MakeRequest(t, NewRequestWithJSON(t, "POST", runLink+"/jobs/0/attempt/1", map[string]any{"logCursors": []any{}}), http.StatusOK).Body.String(),
+			s.MakeRequest(t, NewRequest(t, "GET", runLink+"/jobs/0/attempt/1"), http.StatusOK).Body.String(),
+			s.MakeRequest(t, NewRequest(t, "GET", fmt.Sprintf("/org3/%s/actions/deployments", repo.Name)), http.StatusOK).Body.String(),
+			s.MakeRequest(t, NewRequest(t, "GET", fmt.Sprintf("/org3/%s/actions/deployments?environment=prod", repo.Name)), http.StatusOK).Body.String(),
+		}
+	}
+	for name, s := range map[string]*TestSession{"anonymous": emptyTestSession(t), "reader": loginUser(t, "user5")} {
+		for i, body := range pages(t, s) {
+			for _, leak := range []string{"hidden-reviewer", "secret-deployers", "Waiting for a reviewer", "No eligible reviewer", "reviewers"} {
+				assert.NotContains(t, body, leak, "%s, page %d", name, i)
+			}
+			if i < 2 {
+				assert.Contains(t, body, "Waiting for review", "%s, page %d", name, i)
+			}
+		}
+	}
+	// the organization's owner sees them
+	body := pages(t, loginUser(t, "user2"))[0]
+	assert.Contains(t, body, "Waiting for a reviewer: hidden-reviewer, org3/secret-deployers")
+}
+
+// The run page's JSON runs a fixed number of queries however many of its jobs wait for a review, and an actor the
+// doer can't see filters the deployments view to nothing.
+func TestActionsDeploymentsViewQueries(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+	ctx := audit_model.WithSystem(t.Context(), "test")
+	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+	token := getUserToken(t, "user2", auth_model.AccessTokenScopeWriteRepository)
+	MakeRequest(t, NewRequestWithJSON(t, "PUT", "/api/v1/repos/user2/repo1/collaborators/user4", &api.AddCollaboratorOption{Permission: new("read")}).AddTokenAuth(token), http.StatusNoContent)
+	env := &actions_model.ActionEnvironment{RepoID: repo.ID, Name: "prod"}
+	require.NoError(t, actions_model.CreateEnvironment(ctx, env, nil))
+	require.NoError(t, setEnvironmentReviewers(ctx, env, []int64{4}, nil))
+
+	t.Run("one or five waiting jobs", func(t *testing.T) {
+		one := insertWaitingRun(t, repo, env, 2, 9101, 1)
+		five := insertWaitingRun(t, repo, env, 2, 9102, 5)
+		for name, s := range map[string]*TestSession{"writer": loginUser(t, "user2"), "reviewer": loginUser(t, "user4"), "anonymous": emptyTestSession(t)} {
+			count := func(run *actions_model.ActionRun) int64 {
+				req := func() *RequestWrapper {
+					return NewRequestWithJSON(t, "POST", fmt.Sprintf("/user2/repo1/actions/runs/%d/jobs/0/attempt/1", run.Index), map[string]any{"logCursors": []any{}})
+				}
+				s.MakeRequest(t, req(), http.StatusOK)
+				return stableQueryCount(t, func() { s.MakeRequest(t, req(), http.StatusOK) })
+			}
+			assert.Equal(t, count(one), count(five), name)
+		}
+	})
+
+	t.Run("an actor the doer can't see filters to nothing", func(t *testing.T) {
+		hidden := &user_model.User{Name: "limited-deployer", Email: "limited-deployer@example.com", IsActive: true}
+		require.NoError(t, user_model.CreateUser(db.DefaultContext, hidden))
+		hidden.Visibility = api.VisibleTypeLimited
+		require.NoError(t, user_model.UpdateUserCols(db.DefaultContext, hidden, "visibility"))
+		insertWaitingRun(t, repo, env, hidden.ID, 9103, 1)
+		link := fmt.Sprintf("/user2/repo1/actions/deployments?environment=prod&actor=%d", hidden.ID)
+		doc := NewHTMLParser(t, emptyTestSession(t).MakeRequest(t, NewRequest(t, "GET", link), http.StatusOK).Body)
+		assert.Zero(t, doc.Find("#deployment-list .deployment-item").Length())
+		assert.Zero(t, doc.Find(fmt.Sprintf(`#deployment-actor option[value="%d"]`, hidden.ID)).Length())
+		doc = NewHTMLParser(t, loginUser(t, "user5").MakeRequest(t, NewRequest(t, "GET", link), http.StatusOK).Body)
+		assert.Equal(t, 1, doc.Find("#deployment-list .deployment-item").Length())
+		assert.Equal(t, 1, doc.Find(fmt.Sprintf(`#deployment-actor option[value="%d"]`, hidden.ID)).Length())
+	})
 }

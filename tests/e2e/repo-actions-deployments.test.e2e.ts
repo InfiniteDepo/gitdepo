@@ -45,9 +45,10 @@ test.describe('as the reviewer', () => {
     await page.goto(runLink);
     const panel = page.locator('.deployments-panel');
     await expect(panel).toHaveClass(/waiting/);
-    await expect(panel).toContainText('Deployments waiting for approval: 1');
+    await expect(panel).toContainText('1 deployment is waiting for approval');
     await expect(panel).toContainText('Waiting for approval');
     await expect(page.locator('.job-deployment-gate')).toContainText('Waiting for approval');
+    await expect(page.locator('.job-info-header-detail')).toHaveText('Waiting for approval to deploy to prod');
     await screenshot(page, panel, 8);
 
     // a rejection needs a comment
@@ -57,11 +58,14 @@ test.describe('as the reviewer', () => {
     await expect(dialog.locator('input[name="job_ids"]')).toBeChecked();
     await dialog.getByRole('button', {name: 'Reject', exact: true}).dispatchEvent('click');
     await expect(dialog).toContainText('A comment is required to reject.');
+    await expect(dialog.locator('#review-comment')).toBeFocused();
+    await expect(dialog.locator('#review-comment')).toHaveAttribute('aria-invalid', 'true');
+    await expect(page.getByRole('dialog', {name: 'Review pending deployments'})).toBeVisible();
     await screenshot(page, dialog);
     await dialog.locator('#review-comment').fill('Not <b>today</b>');
     await dialog.getByRole('button', {name: 'Reject', exact: true}).dispatchEvent('click');
 
-    await expect(page.getByText('The deployments were rejected.')).toBeVisible();
+    await expect(page.getByText('The deployment was rejected.')).toBeVisible();
     await expect(panel).toHaveClass(/failed/);
     await expect(panel).toContainText('Deployment rejected');
     await expect(panel).toContainText('Rejected by user2');
@@ -90,7 +94,7 @@ test.describe('as the reviewer', () => {
     await page.goto(runLink);
     await page.locator('#review-deployments').click();
     await page.locator('#review-deployments-modal').getByRole('button', {name: 'Approve and deploy', exact: true}).dispatchEvent('click');
-    await expect(page.getByText('The deployments were approved.')).toBeVisible();
+    await expect(page.getByText('The deployment was approved.')).toBeVisible();
     await expect(page.locator('.deployments-panel')).toContainText('Approved by user2');
     await expect(page.locator('#review-deployments')).toHaveCount(0);
   });
@@ -99,11 +103,12 @@ test.describe('as the reviewer', () => {
 test.describe('as another user', () => {
   test.use({user: 'user4'});
 
-  test('a user who may not review sees who it waits for and no button', async ({page, request}) => {
+  test('a user who may not review sees that it waits, no reviewer and no button', async ({page, request}) => {
     const {runLink} = await newDeployment(request);
     await page.goto(runLink);
     const panel = page.locator('.deployments-panel');
-    await expect(panel).toContainText('Waiting for a reviewer: user2');
+    await expect(panel).toContainText('Waiting for review');
+    await expect(panel).not.toContainText('Waiting for a reviewer');
     await expect(page.locator('#review-deployments')).toHaveCount(0);
     await expect(page.locator('#review-deployments-modal')).toHaveCount(0);
   });

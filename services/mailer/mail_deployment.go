@@ -81,7 +81,7 @@ func mailDeployment(ctx context.Context, users []*user_model.User, m *Deployment
 			"Commit":      base.ShortSha(m.Deployment.CommitSHA),
 			"TriggerUser": visibleName(ctx, m.TriggerUser, u),
 			"Reviewer":    visibleName(ctx, m.Reviewer, u),
-			"Expires":     m.Expires.Format("2006-01-02 15:04 -07:00"),
+			"Expires":     m.Expires.In(user_model.GetUserLocation(ctx, u.ID)).Format("2006-01-02 15:04 MST (-07:00)"),
 		}
 		var content bytes.Buffer
 		if err := bodyTemplates.ExecuteTemplate(&content, string(tpl), data); err != nil {
