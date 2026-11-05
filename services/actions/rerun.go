@@ -13,6 +13,7 @@ import (
 	"forgejo.org/models/db"
 	"forgejo.org/models/unit"
 	"forgejo.org/modules/container"
+	"forgejo.org/modules/log"
 	"forgejo.org/modules/timeutil"
 	"forgejo.org/modules/util"
 )
@@ -69,6 +70,7 @@ func RerunAllJobs(ctx context.Context, run *actions_model.ActionRun) ([]*actions
 	}
 
 	var rerunJobs []*actions_model.ActionRunJob
+	needsEmit := false // a job with an environment starts blocked and waits for the emitter and its gate
 	if err := db.WithTx(ctx, func(ctx context.Context) error {
 		if !run.Status.IsDone() {
 			return fmt.Errorf("cannot prepare next attempt because run %d is active: %s", run.ID, run.Status.String())
@@ -95,9 +97,14 @@ func RerunAllJobs(ctx context.Context, run *actions_model.ActionRun) ([]*actions
 
 		for _, job := range jobs {
 			initialStatus := actions_model.StatusWaiting
-			if len(job.Needs) > 0 {
+			hasEnvironment, err := jobHasEnvironment(job)
+			if err != nil {
+				return err
+			}
+			if len(job.Needs) > 0 || hasEnvironment {
 				initialStatus = actions_model.StatusBlocked
 			}
+			needsEmit = needsEmit || hasEnvironment
 
 			if err := InitiateNextJobAttempt(ctx, job, initialStatus); err != nil {
 				return fmt.Errorf("could not rerun job %d of run %d: %w", job.ID, run.ID, err)
@@ -109,6 +116,11 @@ func RerunAllJobs(ctx context.Context, run *actions_model.ActionRun) ([]*actions
 		return nil
 	}); err != nil {
 		return nil, err
+	}
+	if needsEmit {
+		if err := EmitJobsIfReady(run.ID); err != nil {
+			log.Error("EmitJobsIfReady for run %d after a rerun: %v", run.ID, err)
+		}
 	}
 	return rerunJobs, nil
 }
@@ -134,6 +146,7 @@ func RerunJob(ctx context.Context, job *actions_model.ActionRunJob) ([]*actions_
 	}
 
 	var rerunJobs []*actions_model.ActionRunJob
+	needsEmit := false
 	if err := db.WithTx(ctx, func(ctx context.Context) error {
 		if job.Run.Status.IsDone() {
 			if err := InitiateNextRunAttempt(ctx, job.Run); err != nil {
@@ -183,11 +196,17 @@ func RerunJob(ctx context.Context, job *actions_model.ActionRunJob) ([]*actions_
 				return fmt.Errorf("cannot rerun dependent job %d", jobToRerun.ID)
 			}
 
-			// The job that should be rerun cannot be blocked, even if it has needs.
+			// The job that should be rerun cannot be blocked, even if it has needs, but the gate of its environment
+			// decides about a new attempt again.
 			initialStatus := actions_model.StatusWaiting
-			if len(jobToRerun.Needs) > 0 && jobToRerun.ID != job.ID {
+			hasEnvironment, err := jobHasEnvironment(jobToRerun)
+			if err != nil {
+				return err
+			}
+			if (len(jobToRerun.Needs) > 0 && jobToRerun.ID != job.ID) || hasEnvironment {
 				initialStatus = actions_model.StatusBlocked
 			}
+			needsEmit = needsEmit || hasEnvironment
 
 			if err := InitiateNextJobAttempt(ctx, jobToRerun, initialStatus); err != nil {
 				return fmt.Errorf("cannot rerun job %d: %w", jobToRerun.ID, err)
@@ -203,7 +222,11 @@ func RerunJob(ctx context.Context, job *actions_model.ActionRunJob) ([]*actions_
 	}); err != nil {
 		return nil, err
 	}
-
+	if needsEmit {
+		if err := EmitJobsIfReady(job.RunID); err != nil {
+			log.Error("EmitJobsIfReady for run %d after a rerun: %v", job.RunID, err)
+		}
+	}
 	return rerunJobs, nil
 }
 
@@ -231,6 +254,10 @@ func cancelSingleJob(ctx context.Context, job *actions_model.ActionRunJob, outco
 
 		if err := PropagateJobStatus(ctx, job.ID, priorStatus); err != nil {
 			return fmt.Errorf("could not propagate the status of job %d: %w", job.ID, err)
+		}
+
+		if err := actions_model.CancelOpenDeployments(ctx, job.ID); err != nil {
+			return fmt.Errorf("could not cancel the deployments of job %d: %w", job.ID, err)
 		}
 
 		// A task might have been created while we're trying to cancel the job. Therefore, always try to stop the task.

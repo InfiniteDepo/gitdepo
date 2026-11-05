@@ -127,8 +127,17 @@ func ApproveRun(ctx context.Context, run *actions_model.ActionRun, doerID int64)
 		if err != nil {
 			return err
 		}
+		hasEnvironmentJob := false
 		for _, job := range jobs {
 			if len(job.Needs) == 0 && job.Status.IsBlocked() {
+				// A job with an environment is released by the gate of the environment, never here.
+				if has, err := jobHasEnvironment(job); err != nil {
+					return err
+				} else if has {
+					hasEnvironmentJob = true
+					continue
+				}
+
 				// Capture the current status because it is required for sending notifications.
 				priorStatus := job.Status
 
@@ -141,6 +150,11 @@ func ApproveRun(ctx context.Context, run *actions_model.ActionRun, doerID int64)
 				if err := PropagateJobStatus(ctx, job.ID, priorStatus); err != nil {
 					return fmt.Errorf("could not propagate the status of job %d: %w", job.ID, err)
 				}
+			}
+		}
+		if hasEnvironmentJob {
+			if err := checkJobsOfRun(ctx, run.ID, 0); err != nil {
+				return fmt.Errorf("check jobs of run: %w", err)
 			}
 		}
 		CreateCommitStatus(ctx, jobs...)

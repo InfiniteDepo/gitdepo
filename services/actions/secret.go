@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 
 	actions_model "forgejo.org/models/actions"
 	secret_model "forgejo.org/models/secret"
@@ -55,6 +56,14 @@ func getSecretsOfJob(ctx context.Context, job *actions_model.ActionRunJob) (map[
 		// Don't return error details, just in case they contain confidential details and error reaches a user;
 		// FetchActionSecrets logs all errors to the server log.
 		return nil, errors.New("failure to fetch secrets")
+	}
+	if job.EnvironmentName != "" {
+		// the secrets of the environment that released the job win over the others
+		environmentSecrets, err := getEnvironmentSecrets(ctx, job)
+		if err != nil {
+			return nil, err
+		}
+		maps.Copy(jobSecrets, environmentSecrets)
 	}
 	return jobSecrets, nil
 }

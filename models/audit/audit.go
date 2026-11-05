@@ -229,12 +229,15 @@ var Fields = map[string][]string{
 		"max_file_size_mb", "banned_file_patterns", "pr_title_regex", "pr_title_banned_regex", "pr_title_message",
 		"pr_title_branches", "pr_title_block_merge",
 	},
-	"actions_secret":   {"name", "value_changed"},
-	"actions_variable": {"name", "value_changed"},
-	"actions_run":      {"index", "workflow", "counts"},
-	"actions_runs":     {"older_than_days", "run_ids"},
-	"actions_artifact": {"name", "run_id"},
-	"actions_cleanup":  {},
+	"actions_secret":   {"name", "value_changed", "environment_id"},
+	"actions_variable": {"name", "value_changed", "environment_id"},
+	// actions_environment: the rules of an environment (no secret); actions_deployment: why a job was refused
+	"actions_environment": {"name", "ref_policy", "ref_patterns", "wait_timer_minutes", "prevent_self_review", "runner_labels", "auto", "counts"},
+	"actions_deployment":  {"environment_id", "ref", "run_id", "job_id"},
+	"actions_run":         {"index", "workflow", "counts"},
+	"actions_runs":        {"older_than_days", "run_ids"},
+	"actions_artifact":    {"name", "run_id"},
+	"actions_cleanup":     {},
 }
 
 // sharedKeys are the top-level data keys every target type may carry.

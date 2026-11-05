@@ -48,5 +48,8 @@ func JobParser(workflow []byte, options ...jobparser.ParseOption) ([]*jobparser.
 			}
 		}
 	}
+	if err := attachJobEnvironments(workflow, singleWorkflows); err != nil {
+		return nil, err
+	}
 	return singleWorkflows, nil
 }

@@ -12,6 +12,7 @@ import (
 
 	actions_model "forgejo.org/models/actions"
 	"forgejo.org/models/db"
+	actions_module "forgejo.org/modules/actions"
 	"forgejo.org/modules/container"
 	"forgejo.org/modules/graceful"
 	"forgejo.org/modules/json"
@@ -86,14 +87,17 @@ func checkJobsOfRun(ctx context.Context, runID int64, recursionCount int) error 
 				updateColumns := []string{"status"}
 
 				if status.IsWaiting() {
+					runsOnBefore := len(job.RunsOn)
 					behaviour, err := prepareJobForEmitting(ctx, job, jobs)
 					switch behaviour {
 					case behaviourError:
 						return fmt.Errorf("error in prepareJobForEmitting: %w", err)
 
 					case behaviourExecuteJob:
-						// Intentional blank case -- proceed with updating the status of the job to waiting.
-						break
+						// Proceed with updating the status of the job to waiting, with the runner labels its environment added.
+						if len(job.RunsOn) != runsOnBefore {
+							updateColumns = append(updateColumns, "runs_on")
+						}
 
 					case behaviourIgnoreJob:
 						// Skip updating this job's status to waiting, continue with other jobs in the run.
@@ -106,6 +110,16 @@ func checkJobsOfRun(ctx context.Context, runID int64, recursionCount int) error 
 					case behaviorSkipJob:
 						// "status" is already a column that we're updating, so we can just switch the target status to skipped.
 						job.Status = actions_model.StatusSkipped
+
+					case behaviourFailJob:
+						job.Status = actions_model.StatusFailure
+
+					case behaviourHoldJob:
+						// The job stays blocked, and a later pass of the emitter looks at it again. Don't let it count as
+						// updated, or the recursion below would never end.
+						job.Status = priorStatus
+						delete(updates, job.ID)
+						continue
 					}
 				} else if status.IsSuccess() || status.IsFailure() || status.IsSkipped() {
 					// Transition to these states can be triggered by workflow call outer jobs
@@ -264,13 +278,30 @@ const (
 
 	// behaviorSkipJob indicates that the job should be marked as skipped as the 'if' evaluation returned false.
 	behaviorSkipJob
+
+	// behaviourFailJob indicates that the job should be marked as failed because its environment refused it.
+	behaviourFailJob
+
+	// behaviourHoldJob indicates that the job stays blocked until a later pass of the emitter, for example because it
+	// waits for the wait timer of its environment.
+	behaviourHoldJob
 )
+
+// prepareJobForEmitting is evaluateJobForEmitting followed by the environment gate: a job that would run is only let
+// through when the environment it names releases it.
+func prepareJobForEmitting(ctx context.Context, blockedJob *actions_model.ActionRunJob, jobsInRun []*actions_model.ActionRunJob) (behaviour, error) {
+	b, err := evaluateJobForEmitting(ctx, blockedJob, jobsInRun)
+	if err != nil || b != behaviourExecuteJob {
+		return b, err
+	}
+	return gateEnvironment(ctx, blockedJob)
+}
 
 // Invoked once a job has all its `needs` parameters met and is ready to transition to waiting. May expand the job's
 // `strategy.matrix` into multiple new jobs, may compute a calculated `runs-on` field, may expand reusable workflows,
 // and may evaluate `if` to see if the job should be skipped -- all things that could change based upon `${{ needs...
 // }}` outputs and results, which are now available.
-func prepareJobForEmitting(ctx context.Context, blockedJob *actions_model.ActionRunJob, jobsInRun []*actions_model.ActionRunJob) (behaviour, error) {
+func evaluateJobForEmitting(ctx context.Context, blockedJob *actions_model.ActionRunJob, jobsInRun []*actions_model.ActionRunJob) (behaviour, error) {
 	incompleteMatrix, _, err := blockedJob.HasIncompleteMatrix()
 	if err != nil {
 		return behaviourError, fmt.Errorf("job HasIncompleteMatrix: %w", err)
@@ -461,6 +492,19 @@ func prepareJobForEmitting(ctx context.Context, blockedJob *actions_model.Action
 		err = swf.SetJob(jobID, job)
 		if err != nil {
 			return behaviourError, fmt.Errorf("failure to reencode updated job: %w", err)
+		}
+
+		// jobparser dropped the environment: the job that was expanded keeps its own
+		if actions_model.JobIdentifier(jobID) == blockedJob.JobID && swf.Metadata.WorkflowCallParent == "" {
+			environment, err := blockedJobEnvironment(blockedJob)
+			if err != nil {
+				return behaviourError, err
+			}
+			if environment != nil {
+				if err := actions_module.SetJobEnvironment(swf, environment); err != nil {
+					return behaviourError, fmt.Errorf("failure to restore the environment: %w", err)
+				}
+			}
 		}
 	}
 

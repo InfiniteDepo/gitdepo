@@ -61,6 +61,7 @@ type ActionRunJob struct {
 	JobNamespace      JobNamespace         `xorm:"VARCHAR(255) NULL"` // NULL is treated as an empty namespace ("")
 	Needs             []LocalJobIdentifier `xorm:"JSON TEXT"`
 	RunsOn            []string             `xorm:"JSON TEXT"`
+	EnvironmentName   string               `xorm:"VARCHAR(255) NOT NULL DEFAULT ''"` // `environment:` of the job as written (maybe an expression), cut to the column; not empty: the job passes the environment gate
 	TaskID            int64                // the latest task of the job
 	Status            Status               `xorm:"index"`
 	Started           timeutil.TimeStamp
