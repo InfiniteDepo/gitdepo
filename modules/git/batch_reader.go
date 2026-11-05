@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -37,9 +38,22 @@ func ensureValidGitRepository(ctx context.Context, repoPath string) error {
 	return nil
 }
 
+// batchStdin returns the stdin of a cat-file process: the reader to give the command, the writer for the caller and a
+// function that closes the reader side (with the error that ended the process). It is an OS pipe, not an io.Pipe: exec
+// copies any other reader to the process in a goroutine that Wait waits for, so a git that died on its input (a
+// `master@{99}` that is not in the reflog) never returned from Run, its output pipe was never closed and the caller
+// that waited for an answer hung. With a file, Wait returns when the process is gone and the caller gets the error.
+func batchStdin() (io.Reader, io.WriteCloser, func(error)) {
+	if r, w, err := os.Pipe(); err == nil {
+		return r, w, func(error) { _ = r.Close() }
+	}
+	r, w := io.Pipe()
+	return r, w, func(err error) { _ = r.CloseWithError(err) }
+}
+
 // catFileBatchCheck opens git cat-file --batch-check in the provided repo and returns a stdin pipe, a stdout reader and cancel function
 func catFileBatchCheck(ctx context.Context, repoPath string) (io.Writer, *bufio.Reader, func()) {
-	batchStdinReader, batchStdinWriter := io.Pipe()
+	batchStdinReader, batchStdinWriter, releaseStdin := batchStdin()
 	batchStdoutReader, batchStdoutWriter := io.Pipe()
 	ctx, ctxCancel := context.WithCancel(ctx)
 	closed := make(chan struct{})
@@ -73,10 +87,10 @@ func catFileBatchCheck(ctx context.Context, repoPath string) (io.Writer, *bufio.
 			})
 		if err != nil {
 			_ = batchStdoutWriter.CloseWithError(ConcatenateError(err, (&stderr).String()))
-			_ = batchStdinReader.CloseWithError(ConcatenateError(err, (&stderr).String()))
+			releaseStdin(ConcatenateError(err, (&stderr).String()))
 		} else {
 			_ = batchStdoutWriter.Close()
-			_ = batchStdinReader.Close()
+			releaseStdin(nil)
 		}
 		close(closed)
 	}()
@@ -91,7 +105,7 @@ func catFileBatchCheck(ctx context.Context, repoPath string) (io.Writer, *bufio.
 func catFileBatch(ctx context.Context, repoPath string) (io.Writer, *bufio.Reader, func()) {
 	// We often want to feed the commits in order into cat-file --batch, followed by their trees and sub trees as necessary.
 	// so let's create a batch stdin and stdout
-	batchStdinReader, batchStdinWriter := io.Pipe()
+	batchStdinReader, batchStdinWriter, releaseStdin := batchStdin()
 	batchStdoutReader, batchStdoutWriter := nio.Pipe(buffer.New(32 * 1024))
 	ctx, ctxCancel := context.WithCancel(ctx)
 	closed := make(chan struct{})
@@ -125,10 +139,10 @@ func catFileBatch(ctx context.Context, repoPath string) (io.Writer, *bufio.Reade
 			})
 		if err != nil {
 			_ = batchStdoutWriter.CloseWithError(ConcatenateError(err, (&stderr).String()))
-			_ = batchStdinReader.CloseWithError(ConcatenateError(err, (&stderr).String()))
+			releaseStdin(ConcatenateError(err, (&stderr).String()))
 		} else {
 			_ = batchStdoutWriter.Close()
-			_ = batchStdinReader.Close()
+			releaseStdin(nil)
 		}
 		close(closed)
 	}()
