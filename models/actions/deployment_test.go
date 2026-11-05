@@ -320,3 +320,35 @@ func TestStuckDeploymentsDontStarveOthers(t *testing.T) {
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []int64{5001, 5002, 5003, 5100}, runs)
 }
+
+// One repository with many due runs (an edit of its rules makes all its waiting ones stale) takes at most
+// MaxDueRunsPerRepo of a tick: another repository's due timer is taken in the same tick.
+func TestDueDeploymentsPerRepository(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := auditCtx()
+	now := timeutil.TimeStampNow()
+	flood := &ActionEnvironment{RepoID: 4, Name: "flood"}
+	require.NoError(t, CreateEnvironment(ctx, flood, nil))
+	for i := range int64(150) {
+		job := &ActionRunJob{RunID: 6000 + i, RepoID: 4, OwnerID: 1, Attempt: 1, JobID: "deploy", Status: StatusBlocked, Handle: fmt.Sprintf("flood-%d", i)}
+		require.NoError(t, db.Insert(ctx, job))
+		require.NoError(t, db.Insert(ctx, &ActionDeployment{RepoID: 4, EnvironmentID: flood.ID, RunID: job.RunID, JobID: job.ID, Attempt: 1, Status: DeploymentWaitingReview}))
+	}
+	_, err := db.GetEngine(ctx).Exec("UPDATE action_deployment SET updated = ? WHERE environment_id = ?", now-7200, flood.ID)
+	require.NoError(t, err)
+	_, err = db.GetEngine(ctx).Exec("UPDATE action_environment SET updated = ? WHERE id = ?", now-1, flood.ID) // the rules were just edited
+	require.NoError(t, err)
+	victim := &ActionRunJob{RunID: 6999, RepoID: 1, OwnerID: 2, Attempt: 1, JobID: "deploy", Status: StatusBlocked, Handle: "victim"}
+	require.NoError(t, db.Insert(ctx, victim))
+	require.NoError(t, db.Insert(ctx, &ActionDeployment{RepoID: 1, RunID: 6999, JobID: victim.ID, Attempt: 1, Status: DeploymentWaitingTimer, ReleaseAfterUnix: now - 60}))
+	_, err = db.GetEngine(ctx).Exec("UPDATE action_deployment SET updated = ? WHERE job_id = ?", now-120, victim.ID)
+	require.NoError(t, err)
+
+	runs, err := FindDueDeploymentRunIDs(ctx, now, 100)
+	require.NoError(t, err)
+	assert.Len(t, runs, MaxDueRunsPerRepo+1)
+	assert.Contains(t, runs, int64(6999), "the other repository's due timer is in the same tick")
+	runs, err = FindDueDeploymentRunIDs(ctx, now, 5)
+	require.NoError(t, err)
+	assert.Len(t, runs, 5, "bounded")
+}

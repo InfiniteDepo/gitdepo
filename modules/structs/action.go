@@ -362,18 +362,26 @@ type ActionEnvironment struct {
 	Updated time.Time `json:"updated_at"`
 }
 
-// CreateOrUpdateEnvironmentOption is the whole set of rules of an environment; a field left out is reset to no rule
+// CreateOrUpdateEnvironmentOption is the whole set of rules of an environment. Every field is required, so a client
+// that doesn't know a rule can't remove it by leaving it out: an empty list, 0 or false sets no rule explicitly.
 // swagger:model
 type CreateOrUpdateEnvironmentOption struct {
-	// any (default), protected_branches or patterns
+	// any, protected_branches or patterns
 	// enum: any,protected_branches,patterns
-	RefPolicy   string                         `json:"ref_policy"`
+	// required: true
+	RefPolicy string `json:"ref_policy"`
+	// required: true
 	RefPatterns []*ActionEnvironmentRefPattern `json:"ref_patterns"`
 	// minutes, at most 43200
-	WaitTimer         int  `json:"wait_timer"`
-	PreventSelfReview bool `json:"prevent_self_review"`
+	// required: true
+	WaitTimer *int `json:"wait_timer"`
+	// required: true
+	PreventSelfReview *bool `json:"prevent_self_review"`
 	// at most 6 users and teams together, each named by type and id; an empty list means no review is required
-	Reviewers        []*ActionEnvironmentReviewer `json:"reviewers"`
-	RunnerLabels     []string                     `json:"runner_labels"`
-	AllowedWorkflows []string                     `json:"allowed_workflows"`
+	// required: true
+	Reviewers []*ActionEnvironmentReviewer `json:"reviewers"`
+	// required: true
+	RunnerLabels []string `json:"runner_labels"`
+	// required: true
+	AllowedWorkflows []string `json:"allowed_workflows"`
 }

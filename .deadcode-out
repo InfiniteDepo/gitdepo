@@ -114,7 +114,6 @@ forgejo.org/modules/git
 	ToEntryMode
 
 forgejo.org/modules/gitrepo
-	GetBranchCommitID
 	GetWikiDefaultBranch
 
 forgejo.org/modules/graceful

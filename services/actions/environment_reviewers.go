@@ -6,9 +6,9 @@ package actions
 import (
 	"context"
 	"errors"
+	"slices"
 
 	actions_model "forgejo.org/models/actions"
-	audit_model "forgejo.org/models/audit"
 	org_model "forgejo.org/models/organization"
 	repo_model "forgejo.org/models/repo"
 	user_model "forgejo.org/models/user"
@@ -28,8 +28,14 @@ var errUnknownReviewer = util.NewInvalidArgumentErrorf("unknown reviewer")
 // (audit_model.ErrNotOwnAct otherwise). After an update the jobs that wait for the environment are decided again by
 // the new rules.
 func SaveEnvironment(ctx context.Context, doer *user_model.User, e *actions_model.ActionEnvironment, userIDs, teamIDs []int64) (bool, error) {
-	if err := audit_model.CheckOwnAct(ctx); err != nil {
-		return false, err
+	// the size of the list and duplicates are checked before any lookup, so a long list costs nothing
+	if len(userIDs)+len(teamIDs) > actions_model.MaxEnvironmentReviewers {
+		return false, util.NewInvalidArgumentErrorf("too many reviewers")
+	}
+	for _, ids := range [][]int64{userIDs, teamIDs} {
+		if len(slices.Compact(slices.Sorted(slices.Values(ids)))) != len(ids) {
+			return false, util.NewInvalidArgumentErrorf("a reviewer is listed once")
+		}
 	}
 	repo, err := repo_model.GetRepositoryByID(ctx, e.RepoID)
 	if err != nil {

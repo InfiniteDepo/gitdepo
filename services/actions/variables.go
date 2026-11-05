@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	actions_model "forgejo.org/models/actions"
-	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/secret"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/util"
@@ -17,13 +16,8 @@ import (
 
 // CreateVariable creates a variable of the instance, an owner, a project, a repository, or (environmentID not 0) an
 // environment of the repository; a variable of an environment, like every write of one, only by the doer's own act
-// (audit_model.CheckOwnAct): an environment's variables are part of its deployment protection, like its rules.
+// (checked by secret_model.LockLevel): an environment's variables are part of its deployment protection, like its rules.
 func CreateVariable(ctx context.Context, ownerID, groupID, repoID, environmentID int64, name, data string) (*actions_model.ActionVariable, error) {
-	if environmentID != 0 {
-		if err := audit_model.CheckOwnAct(ctx); err != nil {
-			return nil, err
-		}
-	}
 	if err := secret.ValidateName(name); err != nil {
 		return nil, err
 	}
@@ -39,11 +33,6 @@ func CreateVariable(ctx context.Context, ownerID, groupID, repoID, environmentID
 }
 
 func UpdateVariable(ctx context.Context, variableID, ownerID, groupID, repoID, environmentID int64, name, data string) (bool, error) {
-	if environmentID != 0 {
-		if err := audit_model.CheckOwnAct(ctx); err != nil {
-			return false, err
-		}
-	}
 	if err := secret.ValidateName(name); err != nil {
 		return false, err
 	}
@@ -64,11 +53,6 @@ func UpdateVariable(ctx context.Context, variableID, ownerID, groupID, repoID, e
 }
 
 func DeleteVariableByName(ctx context.Context, ownerID, groupID, repoID, environmentID int64, name string) error {
-	if environmentID != 0 {
-		if err := audit_model.CheckOwnAct(ctx); err != nil {
-			return err
-		}
-	}
 	v, err := GetVariable(ctx, actions_model.FindVariablesOpts{
 		OwnerID:       ownerID,
 		GroupID:       groupID,

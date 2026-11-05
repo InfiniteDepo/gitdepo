@@ -121,8 +121,9 @@ func (e *ActionEnvironment) Normalize() error {
 	e.Name = strings.Trim(e.Name, " ")
 	lower, ok := lowerName(e.Name)
 	e.LowerName = lower
-	// ":" delimits the environment in the subject of an ID token (`...:environment:<name>`), so neither it nor a space is allowed
-	if !ok || len(e.Name) > MaxEnvironmentName || strings.ContainsAny(e.Name, ": ") {
+	// ":" delimits the environment in the subject of an ID token (`...:environment:<name>`), so neither it nor a space is
+	// allowed; the name is a path segment of the API and the web, so it is never "." or "..", nor holds "/?#%\"
+	if !ok || len(e.Name) > MaxEnvironmentName || strings.ContainsAny(e.Name, ": /?#%\\") || strings.Trim(e.Name, ".") == "" {
 		return util.NewInvalidArgumentErrorf("invalid environment name")
 	}
 	if e.RefPolicy < EnvironmentRefAny || e.RefPolicy > EnvironmentRefPatterns {
@@ -274,6 +275,9 @@ func insertEnvironmentIfAbsent(ctx context.Context, e *ActionEnvironment) (bool,
 // records its creation. It returns ErrEnvironmentExists when the name (ignoring case) is taken and ErrEnvironmentLimit
 // past MaxEnvironmentsPerRepo.
 func CreateEnvironment(ctx context.Context, e *ActionEnvironment, reviewers []ActionEnvironmentReviewer) error {
+	if err := audit_model.CheckOwnAct(ctx); err != nil {
+		return err
+	}
 	return createEnvironment(ctx, e, false, reviewers)
 }
 
@@ -389,6 +393,9 @@ func FindRepoEnvironments(ctx context.Context, repoID int64, opts db.ListOptions
 // is checked here (at most MaxEnvironmentReviewers, each a user or a team, none twice); the caller checks that they
 // exist and that a team belongs to the owner of the repository.
 func UpdateEnvironment(ctx context.Context, e *ActionEnvironment, reviewers []ActionEnvironmentReviewer) error {
+	if err := audit_model.CheckOwnAct(ctx); err != nil {
+		return err
+	}
 	if err := e.Normalize(); err != nil {
 		return err
 	}
@@ -448,6 +455,9 @@ func LockEnvironment(ctx context.Context, repoID, id int64) error {
 func DeleteEnvironment(ctx context.Context, e *ActionEnvironment, failUnpickedJobs func(context.Context) error) error {
 	if failUnpickedJobs == nil {
 		return errors.New("DeleteEnvironment needs a function that fails the jobs waiting for the environment")
+	}
+	if err := audit_model.CheckOwnAct(ctx); err != nil {
+		return err
 	}
 	return db.WithTx(ctx, func(ctx context.Context) error {
 		if err := LockEnvironment(ctx, e.RepoID, e.ID); err != nil {

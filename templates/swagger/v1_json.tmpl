@@ -5228,6 +5228,9 @@
           },
           "404": {
             "$ref": "#/responses/notFound"
+          },
+          "409": {
+            "description": "a variable of the new name exists"
           }
         }
       },
@@ -10794,7 +10797,7 @@
         }
       },
       "put": {
-        "description": "The body is the whole set of rules: a field left out is reset to no rule, so a body without reviewers removes them and the jobs that wait for a review are released. An environment whose name differs only in case is the same environment and keeps its name. Every change is recorded in the audit log. Only a person's own credential changes the rules: a request under sudo, with an OAuth2 grant or with an authorized integration is a 403. An unknown reviewer, or one the caller can't see, is a 422; so is an invalid rule.\n",
+        "description": "The body is the whole set of rules and every field is required (a field left out is a 422): an empty list, 0 or false sets no rule, so an empty reviewers list removes them and the jobs that wait for a review are released. An environment whose name differs only in case is the same environment and keeps its name. Every change is recorded in the audit log. Only a person's own credential changes the rules: a request under sudo, with an OAuth2 grant or with an authorized integration is a 403. An unknown reviewer, or one the caller can't see, is a 422; so is an invalid rule.\n",
         "consumes": [
           "application/json"
         ],
@@ -11261,6 +11264,9 @@
           },
           "404": {
             "$ref": "#/responses/notFound"
+          },
+          "409": {
+            "description": "a variable of the new name exists"
           },
           "423": {
             "$ref": "#/responses/repoArchivedError"
@@ -13073,6 +13079,9 @@
           },
           "404": {
             "$ref": "#/responses/notFound"
+          },
+          "409": {
+            "description": "a variable of the new name exists"
           }
         }
       },
@@ -28472,6 +28481,9 @@
           },
           "404": {
             "$ref": "#/responses/notFound"
+          },
+          "409": {
+            "description": "a variable of the new name exists"
           }
         }
       },
@@ -35157,8 +35169,17 @@
       "x-go-package": "forgejo.org/modules/structs"
     },
     "CreateOrUpdateEnvironmentOption": {
-      "description": "CreateOrUpdateEnvironmentOption is the whole set of rules of an environment; a field left out is reset to no rule",
+      "description": "CreateOrUpdateEnvironmentOption is the whole set of rules of an environment. Every field is required, so a client\nthat doesn't know a rule can't remove it by leaving it out: an empty list, 0 or false sets no rule explicitly.",
       "type": "object",
+      "required": [
+        "ref_policy",
+        "ref_patterns",
+        "wait_timer",
+        "prevent_self_review",
+        "reviewers",
+        "runner_labels",
+        "allowed_workflows"
+      ],
       "properties": {
         "allowed_workflows": {
           "type": "array",
@@ -35179,7 +35200,7 @@
           "x-go-name": "RefPatterns"
         },
         "ref_policy": {
-          "description": "any (default), protected_branches or patterns",
+          "description": "any, protected_branches or patterns",
           "type": "string",
           "enum": [
             "any",

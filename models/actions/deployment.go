@@ -169,22 +169,32 @@ const staleDeployment = "(action_deployment.status IN (?, ?) AND EXISTS (SELECT 
 	"WHERE action_environment.id = action_deployment.environment_id AND action_environment.repo_id = action_deployment.repo_id " +
 	"AND action_environment.updated > action_deployment.updated))"
 
-// FindDueDeploymentRunIDs returns the runs, at most limit, with a blocked job whose deployment waits for a wait timer
-// that ended, was rejected or expired and whose job the gate has not failed yet, or waits under rules that changed
-// since (staleDeployment). The runs the task looked at least recently come first (TouchDueDeployments), then the ones
-// that wait longest, so runs whose pass always fails, however many, can't starve the others.
+// MaxDueRunsPerRepo is how many runs of one repository one tick of the due-deployments task takes, so that one
+// repository with many runs (an edit of its rules makes every waiting one stale) can't hold back the others.
+const MaxDueRunsPerRepo = 10
+
+// FindDueDeploymentRunIDs returns the runs, at most limit and MaxDueRunsPerRepo of each repository, with a blocked job
+// whose deployment waits for a wait timer that ended, was rejected or expired and whose job the gate has not failed
+// yet, or waits under rules that changed since (staleDeployment). The runs the task looked at least recently come
+// first (TouchDueDeployments), then the ones that wait longest, so runs whose pass always fails, however many, can't
+// starve the others.
 func FindDueDeploymentRunIDs(ctx context.Context, now timeutil.TimeStamp, limit int) ([]int64, error) {
+	cond, args, err := builder.ToSQL(builder.And(builder.Eq{"action_run_job.status": StatusBlocked}, builder.Or(
+		builder.And(builder.Eq{"action_deployment.status": DeploymentWaitingTimer}, builder.Lte{"action_deployment.release_after_unix": now}),
+		builder.In("action_deployment.status", DeploymentRejected, DeploymentExpired),
+		builder.Expr(staleDeployment, DeploymentWaitingTimer, DeploymentWaitingReview),
+	)))
+	if err != nil {
+		return nil, err
+	}
+	order := "MAX(action_deployment.checked_unix), MIN(action_deployment.updated), action_deployment.run_id"
 	var ids []int64
-	return ids, db.GetEngine(ctx).Table("action_deployment").
-		Join("INNER", "action_run_job", "action_run_job.id = action_deployment.job_id AND action_run_job.attempt = action_deployment.attempt").
-		Where("action_run_job.status = ?", StatusBlocked).
-		And(builder.Or(
-			builder.And(builder.Eq{"action_deployment.status": DeploymentWaitingTimer}, builder.Lte{"action_deployment.release_after_unix": now}),
-			builder.In("action_deployment.status", DeploymentRejected, DeploymentExpired),
-			builder.Expr(staleDeployment, DeploymentWaitingTimer, DeploymentWaitingReview),
-		)).
-		Select("action_deployment.run_id").GroupBy("action_deployment.run_id").
-		OrderBy("MAX(action_deployment.checked_unix), MIN(action_deployment.updated), action_deployment.run_id").Limit(limit).Find(&ids)
+	return ids, db.GetEngine(ctx).SQL("SELECT run_id FROM (SELECT action_deployment.run_id AS run_id, "+
+		"MAX(action_deployment.checked_unix) AS checked, MIN(action_deployment.updated) AS waited, "+
+		"ROW_NUMBER() OVER (PARTITION BY action_deployment.repo_id ORDER BY "+order+") AS n "+
+		"FROM action_deployment INNER JOIN action_run_job ON action_run_job.id = action_deployment.job_id AND action_run_job.attempt = action_deployment.attempt "+
+		"WHERE "+cond+" GROUP BY action_deployment.repo_id, action_deployment.run_id) due "+
+		"WHERE n <= ? ORDER BY checked, waited, run_id LIMIT ?", append(args, MaxDueRunsPerRepo, limit)...).Find(&ids)
 }
 
 // TouchDueDeployments records that the task looked at the run now, whether its pass was queued or not: the run goes

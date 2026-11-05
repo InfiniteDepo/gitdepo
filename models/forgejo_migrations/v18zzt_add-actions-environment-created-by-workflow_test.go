@@ -17,10 +17,16 @@ func Test_addActionsEnvironmentCreatedByWorkflow(t *testing.T) {
 		ID   int64  `xorm:"pk autoincr"`
 		Name string `xorm:"VARCHAR(255) NOT NULL"`
 	}
-	x, deferable := migration_tests.PrepareTestEnv(t, 0, new(ActionEnvironment))
+	type ActionDeployment struct {
+		ID    int64 `xorm:"pk autoincr"`
+		JobID int64 `xorm:"NOT NULL DEFAULT 0"`
+	}
+	x, deferable := migration_tests.PrepareTestEnv(t, 0, new(ActionEnvironment), new(ActionDeployment))
 	defer deferable()
 	require.NotNil(t, x)
 	_, err := x.Exec("INSERT INTO action_environment (name) VALUES ('production')")
+	require.NoError(t, err)
+	_, err = x.Exec("INSERT INTO action_deployment (job_id) VALUES (1)")
 	require.NoError(t, err)
 
 	require.NoError(t, addActionsEnvironmentCreatedByWorkflow(x))
@@ -29,4 +35,7 @@ func Test_addActionsEnvironmentCreatedByWorkflow(t *testing.T) {
 	count, err := x.Table("action_environment").Where("created_by_workflow = ?", false).Count()
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, count, "an existing environment is not marked")
+	count, err = x.Table("action_deployment").Where("checked_unix = 0").Count()
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, count, "an existing deployment was never looked at")
 }

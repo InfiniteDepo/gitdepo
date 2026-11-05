@@ -29,7 +29,7 @@ import (
 )
 
 // maxDueDeploymentRuns is how many runs one tick of the wait timer task looks at.
-const maxDueDeploymentRuns = 100
+var maxDueDeploymentRuns = 100
 
 // errEnvironmentNotReleased is what a job gets when no released deployment of an existing environment stands behind it, for
 // example because the environment was deleted after its release: such a job fails, it is never retried.
@@ -202,6 +202,11 @@ func nextDeploymentStatus(d *actions_model.ActionDeployment, env *actions_model.
 		return
 	}
 	timer := now + timeutil.TimeStamp(env.WaitTimerMinutes)*60
+	if d.Status.IsWaiting() && env.WaitTimerMinutes > 0 {
+		// a timer raised meanwhile holds a waiting job too, counted from when it became ready; a lowered one never
+		// releases it before the time it was given
+		d.ReleaseAfterUnix = max(d.ReleaseAfterUnix, d.Created+timeutil.TimeStamp(env.WaitTimerMinutes)*60)
+	}
 	timerRuns := d.ReleaseAfterUnix > now
 	switch prior := d.Status; {
 	case prior == 0 && env.ReviewsRequired:
@@ -299,8 +304,9 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 			return behaviourHoldJob, nil
 		}
 	}
+	priorRelease := d.ReleaseAfterUnix
 	nextDeploymentStatus(d, env, reason, now)
-	if err := saveDeployment(ctx, d, isNew, prior); err != nil {
+	if err := saveDeployment(ctx, d, isNew, prior, priorRelease); err != nil {
 		return behaviourError, err
 	}
 
@@ -360,13 +366,13 @@ func revokeApprovalIfIneligible(ctx context.Context, run *actions_model.ActionRu
 	}, 0)
 }
 
-// saveDeployment inserts a new deployment, or moves an existing one from prior to its status; a deployment that
+// saveDeployment inserts a new deployment, or moves an existing one from prior to its status and release time; one that
 // another server moved meanwhile is an error, so that the pass of the emitter is repeated.
-func saveDeployment(ctx context.Context, d *actions_model.ActionDeployment, isNew bool, prior actions_model.DeploymentStatus) error {
+func saveDeployment(ctx context.Context, d *actions_model.ActionDeployment, isNew bool, prior actions_model.DeploymentStatus, priorRelease timeutil.TimeStamp) error {
 	if isNew {
 		return db.Insert(ctx, d)
 	}
-	if d.Status == prior {
+	if d.Status == prior && d.ReleaseAfterUnix == priorRelease {
 		return nil
 	}
 	if moved, err := actions_model.SetDeploymentStatus(ctx, d, prior); err != nil {
@@ -561,9 +567,6 @@ func notifyFailedJobs(ctx context.Context, failures []*jobFailure) {
 // release them any more, and a job never runs without its gate. Like a change of its rules, only the doer's own act
 // deletes it (audit_model.ErrNotOwnAct otherwise).
 func DeleteEnvironment(ctx context.Context, e *actions_model.ActionEnvironment) error {
-	if err := audit_model.CheckOwnAct(ctx); err != nil {
-		return err
-	}
 	var failures []*jobFailure
 	if err := actions_model.DeleteEnvironment(ctx, e, func(ctx context.Context) error {
 		failures = failures[:0]

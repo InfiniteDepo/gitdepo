@@ -257,6 +257,8 @@ func (Action) UpdateVariable(ctx *context.APIContext) {
 	//     "$ref": "#/responses/forbidden"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
+	//   "409":
+	//     description: a variable of the new name exists
 
 	opt := web.GetForm(ctx).(*api.UpdateVariableOption)
 
@@ -279,6 +281,8 @@ func (Action) UpdateVariable(ctx *context.APIContext) {
 	if _, err := actions_service.UpdateVariable(ctx, v.ID, ctx.Doer().ID, 0, 0, 0, opt.Name, opt.Value); err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusBadRequest, "UpdateVariable", err)
+		} else if errors.Is(err, util.ErrAlreadyExist) {
+			ctx.Error(http.StatusConflict, "UpdateVariable", err)
 		} else {
 			ctx.Error(http.StatusInternalServerError, "UpdateVariable", err)
 		}

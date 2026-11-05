@@ -5,6 +5,7 @@ package integration
 
 import (
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -44,6 +45,32 @@ func entryData(t *testing.T, e *audit_model.Entry) map[string]any {
 
 // The environments API (CRUD, secrets, variables) and the deployments list, through real requests, with the rows and
 // audit entries they leave.
+// envRules fills every rule the body leaves out with its explicit "no rule" value: the API requires them all.
+func envRules(o api.CreateOrUpdateEnvironmentOption) api.CreateOrUpdateEnvironmentOption {
+	if o.RefPolicy == "" {
+		o.RefPolicy = "any"
+	}
+	if o.RefPatterns == nil {
+		o.RefPatterns = []*api.ActionEnvironmentRefPattern{}
+	}
+	if o.WaitTimer == nil {
+		o.WaitTimer = new(0)
+	}
+	if o.PreventSelfReview == nil {
+		o.PreventSelfReview = new(false)
+	}
+	if o.Reviewers == nil {
+		o.Reviewers = []*api.ActionEnvironmentReviewer{}
+	}
+	if o.RunnerLabels == nil {
+		o.RunnerLabels = []string{}
+	}
+	if o.AllowedWorkflows == nil {
+		o.AllowedWorkflows = []string{}
+	}
+	return o
+}
+
 func TestAPIActionsEnvironments(t *testing.T) {
 	if !setting.Database.Type.IsSQLite3() {
 		t.Skip()
@@ -70,7 +97,7 @@ func TestAPIActionsEnvironments(t *testing.T) {
 
 		put := func(token, name string, opts api.CreateOrUpdateEnvironmentOption, status int) *api.ActionEnvironment {
 			t.Helper()
-			resp := MakeRequest(t, NewRequestWithJSON(t, "PUT", base+"/"+url.PathEscape(name), opts).AddTokenAuth(token), status)
+			resp := MakeRequest(t, NewRequestWithJSON(t, "PUT", base+"/"+url.PathEscape(name), envRules(opts)).AddTokenAuth(token), status)
 			if status != http.StatusOK && status != http.StatusCreated {
 				return nil
 			}
@@ -94,7 +121,7 @@ func TestAPIActionsEnvironments(t *testing.T) {
 			since := auditNow()
 			env := put(ownerToken, "Production", api.CreateOrUpdateEnvironmentOption{
 				RefPolicy: "patterns", RefPatterns: []*api.ActionEnvironmentRefPattern{{Type: "branch", Pattern: "release/*"}, {Type: "tag", Pattern: "v*"}},
-				WaitTimer: 5, PreventSelfReview: true, RunnerLabels: []string{"deploy"}, AllowedWorkflows: []string{"deploy-*.yml"},
+				WaitTimer: new(5), PreventSelfReview: new(true), RunnerLabels: []string{"deploy"}, AllowedWorkflows: []string{"deploy-*.yml"},
 				// a user without access is accepted: who may approve is decided at review time
 				Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 4}, {Type: "user", ID: 10}},
 			}, http.StatusCreated)
@@ -118,7 +145,7 @@ func TestAPIActionsEnvironments(t *testing.T) {
 			since = auditNow()
 			again := put(ownerToken, "PRODUCTION", api.CreateOrUpdateEnvironmentOption{
 				RefPolicy: "patterns", RefPatterns: []*api.ActionEnvironmentRefPattern{{Type: "branch", Pattern: "release/*"}, {Type: "tag", Pattern: "v*"}},
-				WaitTimer: 5, PreventSelfReview: true, RunnerLabels: []string{"deploy"}, AllowedWorkflows: []string{"deploy-*.yml"},
+				WaitTimer: new(5), PreventSelfReview: new(true), RunnerLabels: []string{"deploy"}, AllowedWorkflows: []string{"deploy-*.yml"},
 				Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 10}, {Type: "user", ID: 4}},
 			}, http.StatusOK)
 			assert.Equal(t, env.ID, again.ID)
@@ -126,7 +153,7 @@ func TestAPIActionsEnvironments(t *testing.T) {
 			assert.Empty(t, auditSince(since, "repo.actions_env"), "an unchanged PUT records nothing")
 
 			// a PUT that leaves the reviewers out removes them: one entry with what changed
-			changed := put(ownerToken, "production", api.CreateOrUpdateEnvironmentOption{WaitTimer: 1}, http.StatusOK)
+			changed := put(ownerToken, "production", api.CreateOrUpdateEnvironmentOption{WaitTimer: new(1)}, http.StatusOK)
 			assert.False(t, changed.ReviewsRequired)
 			assert.Empty(t, changed.Reviewers)
 			assert.Equal(t, "any", changed.RefPolicy)
@@ -202,29 +229,58 @@ func TestAPIActionsEnvironments(t *testing.T) {
 				"patterns without one":    {"x", api.CreateOrUpdateEnvironmentOption{RefPolicy: "patterns"}},
 				"invalid pattern":         {"x", api.CreateOrUpdateEnvironmentOption{RefPolicy: "patterns", RefPatterns: []*api.ActionEnvironmentRefPattern{{Type: "branch", Pattern: "release/["}}}},
 				"pattern of another type": {"x", api.CreateOrUpdateEnvironmentOption{RefPolicy: "patterns", RefPatterns: []*api.ActionEnvironmentRefPattern{{Type: "commit", Pattern: "x"}}}},
-				"negative wait timer":     {"x", api.CreateOrUpdateEnvironmentOption{WaitTimer: -1}},
+				"negative wait timer":     {"x", api.CreateOrUpdateEnvironmentOption{WaitTimer: new(-1)}},
 				"21 allowed workflows":    {"x", api.CreateOrUpdateEnvironmentOption{AllowedWorkflows: strings.Split(strings.Repeat("w.yml,", 20)+"last.yml", ",")}},
 				"7 reviewers": {"x", api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{
 					{Type: "user", ID: 1}, {Type: "user", ID: 4}, {Type: "user", ID: 5}, {Type: "user", ID: 8}, {Type: "user", ID: 10}, {Type: "user", ID: 11}, {Type: "user", ID: 12},
 				}}},
-				"reviewer of no type":      {"x", api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{{ID: 4}}}},
-				"unknown user":             {"x", api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 99999}}}},
-				"an organization":          {"x", api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 3}}}},
-				"the Actions user":         {"x", api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: -2}}}},
-				"a team of another owner":  {"x", api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{{Type: "team", ID: 2}}}},
-				"a reviewer listed twice":  {"x", api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 4}, {Type: "user", ID: 4}}}},
-				"a duplicate runner label": {"x", api.CreateOrUpdateEnvironmentOption{RunnerLabels: []string{"a", "a"}}},
+				"reviewer of no type":       {"x", api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{{ID: 4}}}},
+				"unknown user":              {"x", api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 99999}}}},
+				"an organization":           {"x", api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 3}}}},
+				"the Actions user":          {"x", api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: -2}}}},
+				"a team of another owner":   {"x", api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{{Type: "team", ID: 2}}}},
+				"a reviewer listed twice":   {"x", api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 4}, {Type: "user", ID: 4}}}},
+				"a duplicate runner label":  {"x", api.CreateOrUpdateEnvironmentOption{RunnerLabels: []string{"a", "a"}}},
+				"a name of dots":            {"...", api.CreateOrUpdateEnvironmentOption{}},
+				"question mark in the name": {"a?b", api.CreateOrUpdateEnvironmentOption{}},
+				"hash in the name":          {"a#b", api.CreateOrUpdateEnvironmentOption{}},
+				"percent in the name":       {"a%b", api.CreateOrUpdateEnvironmentOption{}},
+				"backslash in the name":     {"a\\b", api.CreateOrUpdateEnvironmentOption{}},
 			} {
 				put(ownerToken, tc.env, tc.opts, http.StatusUnprocessableEntity)
 				assert.False(t, unittest.BeanExists(t, &actions_model.ActionEnvironment{RepoID: repo.ID, LowerName: strings.ToLower(tc.env)}), name)
 			}
+
+			// every rule is required: a body that leaves one out changes nothing, explicit "no rule" values are accepted
+			put(ownerToken, "complete", api.CreateOrUpdateEnvironmentOption{WaitTimer: new(5), Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 4}}}, http.StatusCreated)
+			full := map[string]any{
+				"ref_policy": "any", "ref_patterns": []any{}, "wait_timer": 0, "prevent_self_review": false,
+				"reviewers": []any{}, "runner_labels": []any{}, "allowed_workflows": []any{},
+			}
+			for field := range full {
+				body := maps.Clone(full)
+				delete(body, field)
+				MakeRequest(t, NewRequestWithJSON(t, "PUT", base+"/complete", body).AddTokenAuth(ownerToken), http.StatusUnprocessableEntity)
+				body[field] = nil
+				MakeRequest(t, NewRequestWithJSON(t, "PUT", base+"/complete", body).AddTokenAuth(ownerToken), http.StatusUnprocessableEntity)
+				MakeRequest(t, NewRequestWithJSON(t, "PUT", base+"/never-made", body).AddTokenAuth(ownerToken), http.StatusUnprocessableEntity)
+			}
+			kept := unittest.AssertExistsAndLoadBean(t, &actions_model.ActionEnvironment{RepoID: repo.ID, LowerName: "complete"})
+			assert.Equal(t, 5, kept.WaitTimerMinutes, "a refused body changes nothing")
+			assert.True(t, kept.ReviewsRequired)
+			assert.False(t, unittest.BeanExists(t, &actions_model.ActionEnvironment{RepoID: repo.ID, LowerName: "never-made"}))
+			MakeRequest(t, NewRequestWithJSON(t, "PUT", base+"/complete", full).AddTokenAuth(ownerToken), http.StatusOK)
+			kept = unittest.AssertExistsAndLoadBean(t, &actions_model.ActionEnvironment{RepoID: repo.ID, LowerName: "complete"})
+			assert.Equal(t, 0, kept.WaitTimerMinutes)
+			assert.False(t, kept.ReviewsRequired, "an explicit empty list clears the reviewers")
+			require.NoError(t, actions_service.DeleteEnvironment(ctx, kept))
 
 			// the 101st environment
 			for i := range actions_model.MaxEnvironmentsPerRepo - 1 { // "listed" exists
 				require.NoError(t, actions_model.CreateEnvironment(ctx, &actions_model.ActionEnvironment{RepoID: repo.ID, Name: fmt.Sprintf("cap-%d", i)}, nil))
 			}
 			put(ownerToken, "one-too-many", api.CreateOrUpdateEnvironmentOption{}, http.StatusUnprocessableEntity)
-			put(ownerToken, "cap-1", api.CreateOrUpdateEnvironmentOption{WaitTimer: 2}, http.StatusOK) // an update at the cap
+			put(ownerToken, "cap-1", api.CreateOrUpdateEnvironmentOption{WaitTimer: new(2)}, http.StatusOK) // an update at the cap
 			_, err := db.GetEngine(ctx).Where("repo_id = ? AND name LIKE 'cap-%'", repo.ID).Delete(new(actions_model.ActionEnvironment))
 			require.NoError(t, err)
 		})
@@ -234,16 +290,16 @@ func TestAPIActionsEnvironments(t *testing.T) {
 			for _, token := range []string{writerToken, adminCollabToken, readerToken} {
 				MakeRequest(t, NewRequest(t, "GET", base).AddTokenAuth(token), http.StatusForbidden)
 				MakeRequest(t, NewRequest(t, "GET", base+"/guarded").AddTokenAuth(token), http.StatusForbidden)
-				put(token, "guarded", api.CreateOrUpdateEnvironmentOption{WaitTimer: 3}, http.StatusForbidden)
+				put(token, "guarded", api.CreateOrUpdateEnvironmentOption{WaitTimer: new(3)}, http.StatusForbidden)
 				MakeRequest(t, NewRequest(t, "DELETE", base+"/guarded").AddTokenAuth(token), http.StatusForbidden)
 				MakeRequest(t, NewRequest(t, "GET", base+"/guarded/secrets").AddTokenAuth(token), http.StatusForbidden)
 				MakeRequest(t, NewRequestWithJSON(t, "PUT", base+"/guarded/secrets/S", api.CreateOrUpdateSecretOption{Data: "x"}).AddTokenAuth(token), http.StatusForbidden)
 			}
 			MakeRequest(t, NewRequest(t, "GET", base).AddTokenAuth(strangerToken), http.StatusNotFound)
 			MakeRequest(t, NewRequest(t, "GET", base).AddTokenAuth(publicOnlyToken), http.StatusNotFound)
-			put(readOnlyToken, "guarded", api.CreateOrUpdateEnvironmentOption{WaitTimer: 3}, http.StatusForbidden)
+			put(readOnlyToken, "guarded", api.CreateOrUpdateEnvironmentOption{WaitTimer: new(3)}, http.StatusForbidden)
 			MakeRequest(t, NewRequest(t, "DELETE", base+"/guarded").AddTokenAuth(readOnlyToken), http.StatusForbidden)
-			put(siteAdminToken, "guarded", api.CreateOrUpdateEnvironmentOption{WaitTimer: 3}, http.StatusOK)
+			put(siteAdminToken, "guarded", api.CreateOrUpdateEnvironmentOption{WaitTimer: new(3)}, http.StatusOK)
 
 			// an owned access token of the repository, even with admin permission, is never its owner
 			resp := MakeRequest(t, NewRequestWithJSON(t, "POST", fmt.Sprintf("/api/v1/repos/%s/%s/tokens", user2.Name, repo.Name),
@@ -277,8 +333,8 @@ func TestAPIActionsEnvironments(t *testing.T) {
 				// the credential reaches the owner's environments: reads work
 				MakeRequest(t, auth(NewRequest(t, "GET", base+"/shielded")), http.StatusOK)
 				for _, req := range []*RequestWrapper{
-					NewRequestWithJSON(t, "PUT", base+"/shielded", api.CreateOrUpdateEnvironmentOption{}),
-					NewRequestWithJSON(t, "PUT", base+"/unshielded", api.CreateOrUpdateEnvironmentOption{}),
+					NewRequestWithJSON(t, "PUT", base+"/shielded", envRules(api.CreateOrUpdateEnvironmentOption{})),
+					NewRequestWithJSON(t, "PUT", base+"/unshielded", envRules(api.CreateOrUpdateEnvironmentOption{})),
 					NewRequest(t, "DELETE", base+"/shielded"),
 					NewRequestWithJSON(t, "PUT", base+"/shielded/secrets/DEPLOY", api.CreateOrUpdateSecretOption{Data: "replaced"}),
 					NewRequestWithJSON(t, "PUT", base+"/shielded/secrets/OTHER", api.CreateOrUpdateSecretOption{Data: "added"}),
@@ -321,7 +377,7 @@ func TestAPIActionsEnvironments(t *testing.T) {
 			// team 2 belongs to another owner
 			messages := map[string]bool{}
 			for _, r := range []*api.ActionEnvironmentReviewer{{Type: "user", ID: 31}, {Type: "user", ID: 99999}, {Type: "user", ID: 3}, {Type: "user", ID: -2}, {Type: "team", ID: 2}, {Type: "team", ID: 99999}} {
-				resp := MakeRequest(t, NewRequestWithJSON(t, "PUT", base+"/hidden-reviewer", api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{r}}).AddTokenAuth(ownerToken), http.StatusUnprocessableEntity)
+				resp := MakeRequest(t, NewRequestWithJSON(t, "PUT", base+"/hidden-reviewer", envRules(api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{r}})).AddTokenAuth(ownerToken), http.StatusUnprocessableEntity)
 				messages[resp.Body.String()] = true
 			}
 			assert.Len(t, messages, 1, "one answer for unknown, hidden and wrong-type reviewers")
@@ -337,9 +393,9 @@ func TestAPIActionsEnvironments(t *testing.T) {
 			codes := make([]int, 8)
 			for i := range codes {
 				wg.Go(func() {
-					codes[i] = MakeRequest(t, NewRequestWithJSON(t, "PUT", base+"/race", api.CreateOrUpdateEnvironmentOption{
+					codes[i] = MakeRequest(t, NewRequestWithJSON(t, "PUT", base+"/race", envRules(api.CreateOrUpdateEnvironmentOption{
 						Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 4}},
-					}).AddTokenAuth(ownerToken), NoExpectedStatus).Code
+					})).AddTokenAuth(ownerToken), NoExpectedStatus).Code
 				})
 			}
 			wg.Wait()
@@ -491,7 +547,7 @@ func TestAPIActionsEnvironments(t *testing.T) {
 			assert.Nil(t, runner.maybeFetchTask(t))
 
 			// a stricter PUT keeps it waiting, a PUT without reviewers releases it (the break-glass), audited
-			put(ownerToken, "gated", api.CreateOrUpdateEnvironmentOption{WaitTimer: 1, Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 4}}}, http.StatusOK)
+			put(ownerToken, "gated", api.CreateOrUpdateEnvironmentOption{PreventSelfReview: new(true), Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 4}}}, http.StatusOK)
 			assert.Equal(t, actions_model.StatusBlocked, jobStatus(job))
 			since := auditNow()
 			put(ownerToken, "gated", api.CreateOrUpdateEnvironmentOption{}, http.StatusOK)
@@ -554,6 +610,33 @@ func TestAPIActionsEnvironments(t *testing.T) {
 			assert.Empty(t, out)
 			MakeRequest(t, NewRequest(t, "GET", deployments).AddTokenAuth(strangerToken), http.StatusNotFound)
 		})
+
+		t.Run("a user the reader can't see is the ghost", func(t *testing.T) {
+			deployments := fmt.Sprintf("/api/v1/repos/%s/%s/actions/deployments", user2.Name, repo.Name)
+			private := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 31})
+			require.Equal(t, api.VisibleTypePrivate, private.Visibility)
+			_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET reviewed_by = ?, trigger_user_id = ? WHERE repo_id = ?", private.ID, private.ID, repo.ID)
+			require.NoError(t, err)
+			_, err = db.GetEngine(t.Context()).Exec("UPDATE repository SET is_private = ? WHERE id = ?", false, repo.ID)
+			require.NoError(t, err)
+			defer func() {
+				_, err := db.GetEngine(db.DefaultContext).Exec("UPDATE repository SET is_private = ? WHERE id = ?", true, repo.ID)
+				require.NoError(t, err)
+			}()
+
+			var out []*api.ActionDeployment
+			DecodeJSON(t, MakeRequest(t, NewRequest(t, "GET", deployments), http.StatusOK), &out)
+			require.NotEmpty(t, out)
+			for _, d := range out {
+				require.NotNil(t, d.TriggeredBy)
+				require.NotNil(t, d.ReviewedBy)
+				assert.Equal(t, user_model.GhostUserName, d.TriggeredBy.UserName, "anonymous")
+				assert.Equal(t, user_model.GhostUserName, d.ReviewedBy.UserName, "anonymous")
+			}
+			DecodeJSON(t, MakeRequest(t, NewRequest(t, "GET", deployments).AddTokenAuth(siteAdminToken), http.StatusOK), &out)
+			require.NotEmpty(t, out)
+			assert.Equal(t, private.Name, out[0].ReviewedBy.UserName, "a site admin sees the user")
+		})
 	})
 }
 
@@ -573,7 +656,7 @@ func TestAPIActionsEnvironmentsInProject(t *testing.T) {
 	} {
 		name := fmt.Sprintf("proj-%d", i)
 		MakeRequest(t, NewRequestWithJSON(t, "PUT", base+"/environments/"+name,
-			api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{{Type: "team", ID: 1}}}).AddTokenAuth(owner), http.StatusCreated)
+			envRules(api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{{Type: "team", ID: 1}}})).AddTokenAuth(owner), http.StatusCreated)
 		env := unittest.AssertExistsAndLoadBean(t, &actions_model.ActionEnvironment{RepoID: 3, LowerName: name})
 		assert.True(t, env.ReviewsRequired, "a team of the owning organization")
 		MakeRequest(t, NewRequestWithJSON(t, "PUT", base+"/environments/"+name+"/secrets/S", api.CreateOrUpdateSecretOption{Data: "x"}).AddTokenAuth(owner), http.StatusCreated)
@@ -586,7 +669,7 @@ func TestAPIActionsEnvironmentsInProject(t *testing.T) {
 		assert.EqualValues(t, 1, envs[i].SecretsCount)
 
 		MakeRequest(t, NewRequest(t, "GET", base+"/environments").AddTokenAuth(stranger), http.StatusNotFound)
-		MakeRequest(t, NewRequestWithJSON(t, "PUT", base+"/environments/"+name, api.CreateOrUpdateEnvironmentOption{}).AddTokenAuth(stranger), http.StatusNotFound)
+		MakeRequest(t, NewRequestWithJSON(t, "PUT", base+"/environments/"+name, envRules(api.CreateOrUpdateEnvironmentOption{})).AddTokenAuth(stranger), http.StatusNotFound)
 		MakeRequest(t, NewRequest(t, "GET", base+"/deployments").AddTokenAuth(owner), http.StatusOK)
 		MakeRequest(t, NewRequest(t, "GET", base+"/deployments").AddTokenAuth(stranger), http.StatusNotFound)
 	}

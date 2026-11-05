@@ -204,9 +204,9 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 		assert.False(t, check(audit_model.WithActor(t.Context(), actor)))
 	})
 
-	t.Run("an environment name has no colon or whitespace", func(t *testing.T) {
+	t.Run("an environment name has no colon, whitespace or path character and is not only dots", func(t *testing.T) {
 		require.NoError(t, unittest.PrepareTestDatabase())
-		for _, name := range []string{"a:b", "a b", "a\tb", "a\u00a0b", "a\u2003b"} {
+		for _, name := range []string{"a:b", "a b", "a\tb", "a\u00a0b", "a\u2003b", ".", "..", "a/b", "a?b", "a#b", "a%b", "a\\b"} {
 			require.Error(t, actions_model.CreateEnvironment(audit_model.WithSystem(t.Context(), "test"),
 				&actions_model.ActionEnvironment{RepoID: 63, Name: name}, nil), name)
 		}
@@ -350,7 +350,7 @@ func TestApprovalRevokedWhenApproverIsNoLongerEligible(t *testing.T) {
 		return f
 	}
 	timerEnds := func(t *testing.T, f *reviewFixture) {
-		_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET release_after_unix = ? WHERE job_id = ?", time.Now().Add(-time.Minute).Unix(), f.job.ID)
+		_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET release_after_unix = ?, created = created - 86400 WHERE job_id = ?", time.Now().Add(-time.Minute).Unix(), f.job.ID) // the timer counts from the creation
 		require.NoError(t, err)
 	}
 
@@ -499,4 +499,24 @@ func TestReviewerTeamsCheckedInTransaction(t *testing.T) {
 	require.Len(t, rs, 1, "a refused list changes nothing")
 	assert.EqualValues(t, 1, rs[0].TeamID)
 	unittest.AssertNotExistsBean(t, &actions_model.ActionEnvironment{RepoID: 3, LowerName: "other"})
+}
+
+// The size of a reviewer list and its duplicates are refused before any account is looked up.
+func TestSaveEnvironmentChecksTheListFirst(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := audit_model.WithActor(t.Context(), &audit_model.Actor{Type: audit_model.ActorUser, ID: 2, Credential: audit_model.Credential{Type: audit_model.CredentialAccessToken, ID: 1}})
+	doer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	e := func() *actions_model.ActionEnvironment {
+		return &actions_model.ActionEnvironment{RepoID: 1, Name: "prod"}
+	}
+	_, err := SaveEnvironment(ctx, doer, e(), []int64{90001, 90002, 90003, 90004, 90005, 90006, 90007}, nil)
+	require.ErrorIs(t, err, util.ErrInvalidArgument)
+	assert.Contains(t, err.Error(), "too many reviewers", "not an unknown reviewer: nothing was looked up")
+	_, err = SaveEnvironment(ctx, doer, e(), []int64{90001, 90001}, nil)
+	require.ErrorIs(t, err, util.ErrInvalidArgument)
+	assert.Contains(t, err.Error(), "listed once")
+	_, err = SaveEnvironment(ctx, doer, e(), nil, []int64{90001, 90001})
+	assert.Contains(t, err.Error(), "listed once")
+	_, err = SaveEnvironment(ctx, doer, e(), []int64{90001}, nil)
+	assert.Contains(t, err.Error(), "unknown reviewer")
 }

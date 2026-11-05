@@ -235,6 +235,10 @@ func TestGateEnvironment(t *testing.T) {
 			"control characters": "    environment: \"a\\nb\"\n",
 			"too long":           fmt.Sprintf("    environment: %s\n", string(make([]byte, 0))+fmt.Sprintf("%0256d", 1)),
 			"unknown context":    "    environment: ${{ matrix.x }}\n",
+			"only dots":          "    environment: \"...\"\n",
+			"a slash":            "    environment: a/b\n",
+			"a percent sign":     "    environment: a%2e\n",
+			"a backslash":        "    environment: \"a\\\\b\"\n",
 		} {
 			require.NoError(t, unittest.PrepareTestDatabase())
 			job := gateJob(t, envWorkflow(env), "refs/heads/main")
@@ -384,6 +388,43 @@ func TestGateEnvironment(t *testing.T) {
 		due, err = actions_model.FindDueDeploymentRunIDs(t.Context(), timeutil.TimeStampNow(), 10)
 		require.NoError(t, err)
 		assert.Equal(t, []int64{900}, due)
+		b, err = gateEnvironment(t.Context(), job)
+		require.NoError(t, err)
+		assert.Equal(t, behaviourExecuteJob, b)
+		assert.Equal(t, actions_model.DeploymentReleased, deploymentOf(t, job).Status)
+	})
+
+	t.Run("a timer raised meanwhile holds a waiting job, a lowered one never releases it earlier", func(t *testing.T) {
+		require.NoError(t, unittest.PrepareTestDatabase())
+		start := time.Now().Truncate(time.Second)
+		timeutil.MockSet(start)
+		defer timeutil.MockUnset()
+		env := newEnvironment(t, &actions_model.ActionEnvironment{Name: "slow", WaitTimerMinutes: 1})
+		job := gateJob(t, envWorkflow("    environment: slow\n"), "refs/heads/main")
+		b, err := gateEnvironment(t.Context(), job)
+		require.NoError(t, err)
+		require.Equal(t, behaviourHoldJob, b)
+		ready := deploymentOf(t, job).Created // the timer counts from when the job became ready
+
+		env.WaitTimerMinutes = 10
+		require.NoError(t, actions_model.UpdateEnvironment(audit_model.WithSystem(t.Context(), "test"), env, nil))
+		timeutil.MockSet(ready.AsTime().Add(2 * time.Minute)) // the first timer ended
+		b, err = gateEnvironment(t.Context(), job)
+		require.NoError(t, err)
+		assert.Equal(t, behaviourHoldJob, b, "held by the raised timer")
+		d := deploymentOf(t, job)
+		assert.Equal(t, actions_model.DeploymentWaitingTimer, d.Status)
+		assert.Equal(t, ready+600, d.ReleaseAfterUnix, "stored")
+
+		env.WaitTimerMinutes = 5 // lowered again: the job keeps the time it was given
+		require.NoError(t, actions_model.UpdateEnvironment(audit_model.WithSystem(t.Context(), "test"), env, nil))
+		timeutil.MockSet(ready.AsTime().Add(6 * time.Minute))
+		b, err = gateEnvironment(t.Context(), job)
+		require.NoError(t, err)
+		assert.Equal(t, behaviourHoldJob, b)
+		assert.Equal(t, ready+600, deploymentOf(t, job).ReleaseAfterUnix)
+
+		timeutil.MockSet(ready.AsTime().Add(10 * time.Minute))
 		b, err = gateEnvironment(t.Context(), job)
 		require.NoError(t, err)
 		assert.Equal(t, behaviourExecuteJob, b)
@@ -876,7 +917,7 @@ func TestGateAllowedWorkflows(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			require.NoError(t, unittest.PrepareTestDatabase())
 			env := newEnvironment(t, &actions_model.ActionEnvironment{Name: "prod", AllowedWorkflows: tc.allowed})
-			_, err := secret_model.InsertEncryptedEnvironmentSecret(t.Context(), 63, env.ID, "ENV_SECRET", "x")
+			_, err := secret_model.InsertEncryptedEnvironmentSecret(audit_model.WithSystem(t.Context(), "test"), 63, env.ID, "ENV_SECRET", "x")
 			require.NoError(t, err)
 			job := gateJob(t, envWorkflow("    environment: prod\n"), "refs/heads/main")
 			setWorkflow(t, tc.workflow)
@@ -1091,4 +1132,57 @@ func TestEvaluateEnvironmentTextErrors(t *testing.T) {
 	_, err = evaluateEnvironmentText(t.Context(), &broken, nil, "${{ vars.X }}")
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, errInvalidEnvironmentText)
+}
+
+// Runs whose pass of the gate fails every tick, more of them than one tick takes, don't hold back a due deployment of
+// another repository: each tick moves the runs it looked at to the back of the line, whatever their pass did.
+func TestStuckRunsDontStarveTheDueTask(t *testing.T) {
+	defer unittest.OverrideFixtures("services/actions/TestGetSecretsOfJob")()
+	require.NoError(t, unittest.PrepareTestDatabase())
+	defer test.MockVariableValue(&maxDueDeploymentRuns, 2)()
+	ctx := audit_model.WithSystem(t.Context(), "test")
+
+	// the other repository: a job of run 900 whose wait timer ended
+	newEnvironment(t, &actions_model.ActionEnvironment{Name: "prod", WaitTimerMinutes: 1})
+	job := gateJob(t, envWorkflow("    environment: prod\n"), "refs/heads/main")
+	b, err := gateEnvironment(ctx, job)
+	require.NoError(t, err)
+	require.Equal(t, behaviourHoldJob, b)
+	_, err = db.GetEngine(ctx).Exec("UPDATE action_deployment SET release_after_unix = 1, created = created - 86400, updated = ? WHERE job_id = ?", timeutil.TimeStampNow()-60, job.ID)
+	require.NoError(t, err)
+	// three stuck runs of repository 4 that wait longer: their pass never moves them (a job whose `if:` errors)
+	for i := range int64(3) {
+		stuck := &actions_model.ActionRunJob{RunID: 7001 + i, RepoID: 4, OwnerID: 1, Attempt: 1, JobID: "deploy", Status: actions_model.StatusBlocked, Handle: fmt.Sprintf("stuck-%d", i)}
+		require.NoError(t, db.Insert(ctx, stuck))
+		d := &actions_model.ActionDeployment{RepoID: 4, RunID: stuck.RunID, JobID: stuck.ID, Attempt: 1, Status: actions_model.DeploymentWaitingTimer, ReleaseAfterUnix: 1}
+		require.NoError(t, db.Insert(ctx, d))
+		_, err = db.GetEngine(ctx).Exec("UPDATE action_deployment SET updated = ? WHERE id = ?", timeutil.TimeStampNow()-3600+timeutil.TimeStamp(i), d.ID)
+		require.NoError(t, err)
+	}
+
+	// the queue's pass: it fails for the stuck runs and gates the other one
+	cfg, err := setting.NewConfigProviderFromData("[queue.actions_ready_job]\nTYPE = immediate\n")
+	require.NoError(t, err)
+	defer test.MockVariableValue(&setting.CfgProvider, cfg)()
+	var passes []int64
+	q := queue.CreateUniqueQueue(t.Context(), "actions_ready_job", func(items ...*jobUpdate) []*jobUpdate {
+		for _, item := range items {
+			passes = append(passes, item.RunID)
+			if item.RunID == job.RunID {
+				_, err := gateEnvironment(ctx, job)
+				assert.NoError(t, err)
+			}
+		}
+		return nil
+	})
+	require.NotNil(t, q)
+	defer test.MockVariableValue(&jobEmitterQueue, q)()
+
+	for tick := 0; tick < 2 && deploymentOf(t, job).Status != actions_model.DeploymentReleased; tick++ {
+		timeutil.MockSet(time.Now().Add(time.Duration(tick) * time.Minute))
+		require.NoError(t, StartDueDeployments(ctx))
+	}
+	timeutil.MockUnset()
+	assert.Equal(t, []int64{7001, 7002, 7003, job.RunID}, passes, "each in turn")
+	assert.Equal(t, actions_model.DeploymentReleased, deploymentOf(t, job).Status)
 }

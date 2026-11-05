@@ -616,6 +616,8 @@ func (Action) UpdateVariable(ctx *context.APIContext) {
 	//     "$ref": "#/responses/error"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
+	//   "409":
+	//     description: a variable of the new name exists
 
 	updateVariable(ctx, 0)
 }
@@ -643,6 +645,8 @@ func updateVariable(ctx *context.APIContext, groupID int64) {
 	if _, err := actions_service.UpdateVariable(ctx, v.ID, ctx.Org().Organization.ID, groupID, 0, 0, opt.Name, opt.Value); err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusBadRequest, "UpdateVariable", err)
+		} else if errors.Is(err, util.ErrAlreadyExist) {
+			ctx.Error(http.StatusConflict, "UpdateVariable", err)
 		} else {
 			ctx.Error(http.StatusInternalServerError, "UpdateVariable", err)
 		}

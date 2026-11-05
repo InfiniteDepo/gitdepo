@@ -9,7 +9,7 @@ import (
 
 func init() {
 	registerMigration(&Migration{
-		Description: "mark the Actions environments that a workflow created",
+		Description: "mark the Actions environments that a workflow created, and record when the due-deployments task last looked at a deployment",
 		Upgrade:     addActionsEnvironmentCreatedByWorkflow,
 	})
 }
@@ -23,7 +23,16 @@ func (v18zztActionEnvironment) TableName() string {
 	return "action_environment"
 }
 
+type v18zztActionDeployment struct {
+	ID          int64 `xorm:"pk autoincr"`
+	CheckedUnix int64 `xorm:"NOT NULL DEFAULT 0"`
+}
+
+func (v18zztActionDeployment) TableName() string {
+	return "action_deployment"
+}
+
 func addActionsEnvironmentCreatedByWorkflow(x *xorm.Engine) error {
-	_, err := x.SyncWithOptions(xorm.SyncOptions{IgnoreDropIndices: true}, new(v18zztActionEnvironment))
+	_, err := x.SyncWithOptions(xorm.SyncOptions{IgnoreDropIndices: true}, new(v18zztActionEnvironment), new(v18zztActionDeployment))
 	return err
 }

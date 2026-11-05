@@ -278,6 +278,8 @@ func (Action) UpdateVariable(ctx *context.APIContext) {
 	//     "$ref": "#/responses/error"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
+	//   "409":
+	//     description: a variable of the new name exists
 	updateRepoVariable(ctx, 0)
 }
 
@@ -495,6 +497,8 @@ func updateRepoVariable(ctx *context.APIContext, environmentID int64) {
 			ctx.Error(http.StatusBadRequest, "UpdateVariable", err)
 		} else if errors.Is(err, util.ErrPermissionDenied) {
 			ctx.Error(http.StatusForbidden, "UpdateVariable", err)
+		} else if errors.Is(err, util.ErrAlreadyExist) {
+			ctx.Error(http.StatusConflict, "UpdateVariable", err)
 		} else if errors.Is(err, util.ErrNotExist) { // an environment deleted meanwhile
 			ctx.Error(http.StatusNotFound, "UpdateVariable", err)
 		} else {
