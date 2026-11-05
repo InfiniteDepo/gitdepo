@@ -16,8 +16,8 @@ func init() {
 	})
 }
 
-// v18zzrApprovalRule is the whole table, so that Sync keeps its unique key; the new columns are the last two.
-type v18zzrApprovalRule struct {
+// v18zzsApprovalRule is the whole table, so that Sync keeps its unique key; the new columns are the last two.
+type v18zzsApprovalRule struct {
 	ID                  int64              `xorm:"pk autoincr"`
 	ProtectedBranchID   int64              `xorm:"INDEX UNIQUE(s) NOT NULL"`
 	Name                string             `xorm:"VARCHAR(255) UNIQUE(s) NOT NULL"`
@@ -32,7 +32,7 @@ type v18zzrApprovalRule struct {
 	SourceBranchPattern string             `xorm:"VARCHAR(255) NOT NULL DEFAULT ''"`
 }
 
-func (v18zzrApprovalRule) TableName() string {
+func (v18zzsApprovalRule) TableName() string {
 	return "approval_rule" // what xorm names git_model.ApprovalRule
 }
 
@@ -40,6 +40,6 @@ func addApprovalRuleDefaultReviewers(x *xorm.Engine) error {
 	type Review struct {
 		Advisory bool `xorm:"NOT NULL DEFAULT false"`
 	}
-	_, err := x.SyncWithOptions(xorm.SyncOptions{IgnoreDropIndices: true}, new(v18zzrApprovalRule), new(Review))
+	_, err := x.SyncWithOptions(xorm.SyncOptions{IgnoreDropIndices: true}, new(v18zzsApprovalRule), new(Review))
 	return err
 }

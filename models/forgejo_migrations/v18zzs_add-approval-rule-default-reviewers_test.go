@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// v18zzrApprovalRuleBefore is the table before the migration.
-type v18zzrApprovalRuleBefore struct {
+// v18zzsApprovalRuleBefore is the table before the migration.
+type v18zzsApprovalRuleBefore struct {
 	ID                int64   `xorm:"pk autoincr"`
 	ProtectedBranchID int64   `xorm:"INDEX UNIQUE(s) NOT NULL"`
 	Name              string  `xorm:"VARCHAR(255) UNIQUE(s) NOT NULL"`
@@ -24,23 +24,23 @@ type v18zzrApprovalRuleBefore struct {
 	RequireCodeOwners bool    `xorm:"NOT NULL DEFAULT false"`
 }
 
-func (v18zzrApprovalRuleBefore) TableName() string {
+func (v18zzsApprovalRuleBefore) TableName() string {
 	return "approval_rule"
 }
 
-// v18zzrReviewBefore is the part of the review table the test uses.
-type v18zzrReviewBefore struct {
+// v18zzsReviewBefore is the part of the review table the test uses.
+type v18zzsReviewBefore struct {
 	ID       int64 `xorm:"pk autoincr"`
 	Type     int
 	Official bool `xorm:"NOT NULL DEFAULT false"`
 }
 
-func (v18zzrReviewBefore) TableName() string {
+func (v18zzsReviewBefore) TableName() string {
 	return "review"
 }
 
 func Test_addApprovalRuleDefaultReviewers(t *testing.T) {
-	x, deferable := migration_tests.PrepareTestEnv(t, 0, new(v18zzrApprovalRuleBefore), new(v18zzrReviewBefore))
+	x, deferable := migration_tests.PrepareTestEnv(t, 0, new(v18zzsApprovalRuleBefore), new(v18zzsReviewBefore))
 	defer deferable()
 	require.NotNil(t, x)
 	_, err := x.Exec("INSERT INTO approval_rule (protected_branch_id, name, required_count, user_i_ds, team_i_ds, path_patterns) VALUES (1, 'Security', 2, '[2]', '[]', 'docs/**')")
