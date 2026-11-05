@@ -62,8 +62,9 @@ func DefaultReviewerRequests(ctx context.Context, issue *issues_model.Issue, pr 
 	}
 	// the value says whether a rule with a count asks: only then the request is official and can block
 	userIDs, teamIDs := map[int64]bool{}, map[int64]bool{}
+	budget := git_model.NewPathMatchBudget() // one for all rules, see git_model.PathMatchBudget
 	for _, r := range rules {
-		if !newlyApplies(r, files, oldFiles, oldHead != "") {
+		if !newlyApplies(r, budget, files, oldFiles, oldHead != "") {
 			continue
 		}
 		for _, id := range r.UserIDs {
@@ -163,15 +164,15 @@ func DefaultReviewerRequests(ctx context.Context, issue *issues_model.Issue, pr 
 //
 //	rule with paths:    matches files && !matches oldFiles
 //	rule without paths: files changed now && no files changed at the old head (a pull request that opened empty)
-func newlyApplies(r *git_model.ApprovalRule, files, oldFiles []string, push bool) bool {
+func newlyApplies(r *git_model.ApprovalRule, budget *git_model.PathMatchBudget, files, oldFiles []string, push bool) bool {
 	if push && r.PathPatterns == "" {
 		return len(files) > 0 && len(oldFiles) == 0
 	}
-	matches, decided := r.MatchesPaths(files)
+	matches, decided := r.MatchesPaths(budget, files)
 	if !matches || !decided || !push {
 		return matches && decided
 	}
-	oldMatches, oldDecided := r.MatchesPaths(oldFiles)
+	oldMatches, oldDecided := r.MatchesPaths(budget, oldFiles)
 	return oldDecided && !oldMatches
 }
 

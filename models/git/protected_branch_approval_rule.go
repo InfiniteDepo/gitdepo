@@ -144,44 +144,76 @@ func (r *ApprovalRule) IsApprover(ctx context.Context, userID int64) (bool, erro
 }
 
 // Bounds of approval-rule path matching. A rule holds at most maxPathPatterns patterns of maxPathPatternBytes in
-// total, and matching a rule against the changed files of a pull request may take at most maxPathMatchWork path
-// bytes times patterns (10,000 files of 100 bytes against 8 patterns, under 0.4 s for the slowest patterns); beyond
-// it the files are not matched.
+// total, and one evaluation of the rules of a pull request (every rule of every level, see PathMatchBudget) may take
+// at most maxPathMatchWork path bytes times patterns (10,000 files of 100 bytes against 8 patterns, under 0.4 s for the
+// slowest patterns); beyond it the files are not matched.
 const (
 	maxPathPatterns     = 100
 	maxPathPatternBytes = 8 << 10
 	maxPathMatchWork    = 8 << 20
 )
 
+// PathMatchBudget is the work left for matching the path patterns of approval rules in one evaluation of a pull
+// request. Share one budget between all rules and levels the evaluation looks at, so the work doesn't grow with the
+// number of rules.
+type PathMatchBudget struct {
+	left int
+}
+
+// NewPathMatchBudget returns the budget of one evaluation.
+func NewPathMatchBudget() *PathMatchBudget {
+	return &PathMatchBudget{left: maxPathMatchWork}
+}
+
+// take takes work from the budget, false (and nothing taken) if less is left.
+func (b *PathMatchBudget) take(work int) bool {
+	if work > b.left {
+		return false
+	}
+	b.left -= work
+	return true
+}
+
 // AppliesTo returns true if the rule has no path patterns or one of the changed files matches. If the paths can't be
-// matched (MatchesPaths), the rule applies: it fails closed.
-func (r *ApprovalRule) AppliesTo(changedFiles []string) bool {
-	matches, decided := r.MatchesPaths(changedFiles)
+// matched (FilesInScope), the rule applies: it fails closed.
+func (r *ApprovalRule) AppliesTo(budget *PathMatchBudget, changedFiles []string) bool {
+	matches, decided := r.MatchesPaths(budget, changedFiles)
 	return matches || !decided
 }
 
 // MatchesPaths returns whether the rule has no path patterns or one of the changed files matches, and whether that
-// could be decided: not when a stored pattern is beyond the limits, or when matching the files would take more than
-// the bound of approval-rule path matching.
-func (r *ApprovalRule) MatchesPaths(changedFiles []string) (matches, decided bool) {
+// could be decided (see FilesInScope).
+func (r *ApprovalRule) MatchesPaths(budget *PathMatchBudget, changedFiles []string) (matches, decided bool) {
+	inScope, decided := r.FilesInScope(budget, changedFiles)
+	return decided && (inScope == nil || slices.Contains(inScope, true)), decided
+}
+
+// FilesInScope returns for each changed file whether a path pattern of the rule matches it (nil: the rule has no
+// path patterns, every file is in its scope), and whether that could be decided: not when a stored pattern is beyond
+// the limits, or when matching the files would take more than is left in the budget.
+func (r *ApprovalRule) FilesInScope(budget *PathMatchBudget, changedFiles []string) (inScope []bool, decided bool) {
 	m := r.pathMatcher()
 	if m.invalid {
-		return false, false
+		return nil, false
 	}
 	// patterns that don't compile to any glob must not switch the rule off
 	if len(m.patterns) == 0 {
-		return true, true
+		return nil, true
 	}
 	work := 0
 	for _, f := range changedFiles {
-		if work += len(f) * len(m.patterns); work > maxPathMatchWork {
-			return false, false
-		}
+		// a sum over the files can't overflow: they are bounded by the size of a diff
+		work += len(f) * len(m.patterns)
 	}
-	return slices.ContainsFunc(changedFiles, func(f string) bool {
+	if !budget.take(work) {
+		return nil, false
+	}
+	inScope = make([]bool, len(changedFiles))
+	for i, f := range changedFiles {
 		f = strings.ToLower(strings.TrimSpace(f))
-		return slices.ContainsFunc(m.patterns, func(g *regexp.Regexp) bool { return g.MatchString(f) })
-	}), true
+		inScope[i] = slices.ContainsFunc(m.patterns, func(g *regexp.Regexp) bool { return g.MatchString(f) })
+	}
+	return inScope, true
 }
 
 // pathMatcher compiles the path patterns of the rule once.

@@ -42,7 +42,7 @@ func TestApprovalRuleAppliesTo(t *testing.T) {
 		{"src/**/*.go", []string{"src/x.go"}, true},
 	} {
 		r := &git_model.ApprovalRule{PathPatterns: c.patterns}
-		assert.Equal(t, c.applies, r.AppliesTo(c.files), "%q %v", c.patterns, c.files)
+		assert.Equal(t, c.applies, r.AppliesTo(git_model.NewPathMatchBudget(), c.files), "%q %v", c.patterns, c.files)
 	}
 }
 
@@ -158,18 +158,18 @@ func TestValidateGlobPattern(t *testing.T) {
 func TestGlobPatternLinearTime(t *testing.T) {
 	for _, p := range []string{"*/*/*/*/*/*x", "**/*/*/*/*x", "*/*/*/*x"} {
 		require.NoError(t, git_model.ValidateGlobPattern(p, '.', '/'))
-		assert.True(t, (&git_model.ApprovalRule{PathPatterns: p}).AppliesTo([]string{strings.ReplaceAll(p, "*", "a")}))
+		assert.True(t, (&git_model.ApprovalRule{PathPatterns: p}).AppliesTo(git_model.NewPathMatchBudget(), []string{strings.ReplaceAll(p, "*", "a")}))
 		assert.True(t, (&git_model.ApprovalRule{SourceBranchPattern: p}).MatchesSourceBranch(strings.ReplaceAll(p, "*", "a")))
 		name := strings.Repeat("a/", 600) + "x"
 		start := time.Now()
-		(&git_model.ApprovalRule{PathPatterns: p}).AppliesTo([]string{name})
+		(&git_model.ApprovalRule{PathPatterns: p}).AppliesTo(git_model.NewPathMatchBudget(), []string{name})
 		(&git_model.ApprovalRule{SourceBranchPattern: p}).MatchesSourceBranch(name)
 		assert.Less(t, time.Since(start), 5*slowdown*time.Millisecond, "%q against %d bytes", p, len(name))
 	}
 
 	slow := strings.Repeat("*aa", 14) + "*c"
 	require.Error(t, git_model.ValidateGlobPattern(slow, '/'), "refused when saved")
-	assert.True(t, (&git_model.ApprovalRule{PathPatterns: slow}).AppliesTo([]string{"unrelated.txt"}))
+	assert.True(t, (&git_model.ApprovalRule{PathPatterns: slow}).AppliesTo(git_model.NewPathMatchBudget(), []string{"unrelated.txt"}))
 	assert.False(t, (&git_model.ApprovalRule{SourceBranchPattern: slow}).MatchesSourceBranch(strings.Repeat("a", 250)+"c"))
 }
 
@@ -187,22 +187,54 @@ func TestApprovalRulePathMatchingBound(t *testing.T) {
 	}
 	r := &git_model.ApprovalRule{PathPatterns: strings.Join(patterns, ";")}
 	start := time.Now()
-	assert.True(t, r.AppliesTo(files))
-	_, decided := r.MatchesPaths(files)
+	assert.True(t, r.AppliesTo(git_model.NewPathMatchBudget(), files))
+	_, decided := r.MatchesPaths(git_model.NewPathMatchBudget(), files)
 	assert.False(t, decided)
 	assert.Less(t, time.Since(start), 50*slowdown*time.Millisecond)
 
 	// within the bound the files are matched
-	matches, decided := r.MatchesPaths([]string{"src/x/a1b2c7/y.go", "README.md"})
+	matches, decided := r.MatchesPaths(git_model.NewPathMatchBudget(), []string{"src/x/a1b2c7/y.go", "README.md"})
 	assert.True(t, matches && decided)
-	matches, decided = r.MatchesPaths([]string{"README.md"})
+	matches, decided = r.MatchesPaths(git_model.NewPathMatchBudget(), []string{"README.md"})
 	assert.True(t, !matches && decided)
-	assert.False(t, r.AppliesTo([]string{"README.md"}))
+	assert.False(t, r.AppliesTo(git_model.NewPathMatchBudget(), []string{"README.md"}))
 
 	for _, stored := range []string{strings.Repeat("a;", 100) + "a", strings.Repeat("a", 8<<10+1)} {
 		r := &git_model.ApprovalRule{PathPatterns: stored}
-		assert.True(t, r.AppliesTo([]string{"unrelated.txt"}))
-		_, decided := r.MatchesPaths([]string{"unrelated.txt"})
+		assert.True(t, r.AppliesTo(git_model.NewPathMatchBudget(), []string{"unrelated.txt"}))
+		_, decided := r.MatchesPaths(git_model.NewPathMatchBudget(), []string{"unrelated.txt"})
 		assert.False(t, decided)
 	}
+}
+
+// One budget is shared by every rule of an evaluation: 60 rules of 100 patterns (20 per level, three levels) against
+// 20 files of 4 KiB take at most the work of one budget, and the rules beyond it fail closed.
+func TestApprovalRulePathMatchingSharedBudget(t *testing.T) {
+	patterns := make([]string, 100)
+	for i := range patterns {
+		patterns[i] = fmt.Sprintf("**/a*b*c%d/**", i)
+	}
+	files := make([]string, 20)
+	for i := range files {
+		files[i] = strings.Repeat("ab/", 1365) + fmt.Sprint(i)
+	}
+	budget := git_model.NewPathMatchBudget()
+	undecided := 0
+	start := time.Now()
+	for range 60 {
+		r := &git_model.ApprovalRule{PathPatterns: strings.Join(patterns, ";")}
+		if _, decided := r.MatchesPaths(budget, files); !decided {
+			undecided++
+			assert.True(t, r.AppliesTo(budget, files), "fails closed")
+		}
+	}
+	// 20 files of 4 KiB against 100 patterns is about 8 Mi / 1 of the budget: only the first rule fits
+	assert.Equal(t, 59, undecided)
+	// about 0.3 s; without the shared budget it was about 13 s
+	assert.Less(t, time.Since(start), 3*slowdown*time.Second)
+
+	// a rule that fits in what is left is still matched
+	small := &git_model.ApprovalRule{PathPatterns: "docs/**"}
+	matches, decided := small.MatchesPaths(budget, []string{"docs/a.md"})
+	assert.True(t, matches && decided)
 }
