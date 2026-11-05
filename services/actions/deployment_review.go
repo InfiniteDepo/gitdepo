@@ -178,12 +178,17 @@ func reviewerIneligibility(ctx context.Context, repo *repo_model.Repository, u *
 	return "", nil
 }
 
-// withoutTwoFactor returns the users among ids who have no two-factor authentication while the owner is an
-// organization that requires it. Deployment approval applies that requirement to everyone, site administrators
-// included (repository access exempts them, user_model.User.TwoFactorBlocked): this is the one place that decides it.
-func withoutTwoFactor(ctx context.Context, owner *user_model.User, ids []int64) (container.Set[int64], error) {
+// twoFactorRequired tells if deployment approval in a repository of owner requires two-factor authentication: the
+// owner is an organization that requires it. It then applies to everyone, site administrators included (repository
+// access exempts them, user_model.User.TwoFactorBlocked): this is the one place that decides it.
+func twoFactorRequired(owner *user_model.User) bool {
+	return owner != nil && owner.IsOrganization() && owner.RequireTwoFactor
+}
+
+// usersWithoutTwoFactor returns the users among ids who have no two-factor authentication.
+func usersWithoutTwoFactor(ctx context.Context, ids []int64) (container.Set[int64], error) {
 	missing := container.Set[int64]{}
-	if owner == nil || !owner.IsOrganization() || !owner.RequireTwoFactor || len(ids) == 0 {
+	if len(ids) == 0 {
 		return missing, nil
 	}
 	has, err := auth_model.UserIDsWithTwoFactor(ctx, ids)
@@ -196,6 +201,15 @@ func withoutTwoFactor(ctx context.Context, owner *user_model.User, ids []int64) 
 		}
 	}
 	return missing, nil
+}
+
+// withoutTwoFactor returns the users among ids who may not approve in a repository of owner for lack of two-factor
+// authentication.
+func withoutTwoFactor(ctx context.Context, owner *user_model.User, ids []int64) (container.Set[int64], error) {
+	if !twoFactorRequired(owner) {
+		return container.Set[int64]{}, nil
+	}
+	return usersWithoutTwoFactor(ctx, ids)
 }
 
 // usableReviewer tells if u is a person who can sign in.

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	actions_model "forgejo.org/models/actions"
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
@@ -119,18 +120,68 @@ func TestDeploymentMails(t *testing.T) {
 		assert.Len(t, sent.review, 1, "a reviewer who can't read the repository's Actions is not mailed")
 	})
 
-	t.Run("nothing is sent for a change that was rolled back", func(t *testing.T) {
+	t.Run("nothing is sent for a change that was rolled back, and a retry sends one", func(t *testing.T) {
+		// the emitter's queue has no audit actor, so the gate wraps the transaction's context: the mail must still
+		// wait for the commit
+		for name, ctx := range map[string]context.Context{"with an actor": audit_model.WithSystem(t.Context(), "test"), "without an actor": t.Context()} {
+			sent := mockDeploymentMails(t)
+			f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{4}, nil)
+			_, err := db.GetEngine(t.Context()).Exec("DELETE FROM action_deployment WHERE job_id = ?", f.job.ID)
+			require.NoError(t, err)
+			rollback := errors.New("rollback")
+			require.ErrorIs(t, db.WithTx(ctx, func(ctx context.Context) error {
+				_, err := gateEnvironment(ctx, f.job)
+				require.NoError(t, err)
+				assert.Len(t, sent.review, 1, "%s: nothing inside the transaction", name)
+				return rollback
+			}), rollback)
+			assert.Len(t, sent.review, 1, "%s: nothing for the rolled-back change", name)
+			require.NoError(t, db.WithTx(ctx, func(ctx context.Context) error {
+				_, err := gateEnvironment(ctx, f.job)
+				return err
+			}))
+			assert.Len(t, sent.review, 2, "%s: the retry sends one", name)
+		}
+	})
+
+	t.Run("an approval revoked at release mails the reviewers again", func(t *testing.T) {
+		sent := mockDeploymentMails(t)
+		f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{2, 4}, nil)
+		assert.Equal(t, [][]int64{{2, 4}}, sent.review)
+		_, err := f.review(t, 4, true, "")
+		require.NoError(t, err)
+		revokeActionsRead(t, 4)
+		f.emit(t)
+		assert.Equal(t, actions_model.DeploymentWaitingReview, f.status(t))
+		assert.Equal(t, [][]int64{{2, 4}, {2}}, sent.review)
+	})
+
+	t.Run("the jobs of a run attempt that deploy to one environment share a mail", func(t *testing.T) {
 		sent := mockDeploymentMails(t)
 		f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{4}, nil)
-		_, err := db.GetEngine(t.Context()).Exec("DELETE FROM action_deployment WHERE job_id = ?", f.job.ID)
+		first := f.deployment(t)
+		other := &actions_model.ActionDeployment{RepoID: first.RepoID, RunID: first.RunID, JobID: first.JobID + 1000, Attempt: first.Attempt,
+			EnvironmentID: first.EnvironmentID, Status: actions_model.DeploymentWaitingReview, TriggerUserID: first.TriggerUserID}
+		require.NoError(t, db.Insert(t.Context(), other))
+		mailDeploymentReviewers(f.ctx, f.run, "deploy", f.env, other)
+		assert.Len(t, sent.review, 1, "the first job's mail covers it")
+
+		other.Attempt++ // a rerun of that job alone
+		_, err := db.GetEngine(t.Context()).ID(other.ID).Cols("attempt").Update(other)
 		require.NoError(t, err)
-		rollback := errors.New("rollback")
-		require.ErrorIs(t, db.WithTx(f.ctx, func(ctx context.Context) error {
-			_, err := gateEnvironment(ctx, f.job)
-			require.NoError(t, err)
-			return rollback
-		}), rollback)
-		assert.Len(t, sent.review, 1)
+		mailDeploymentReviewers(f.ctx, f.run, "deploy", f.env, other)
+		assert.Len(t, sent.review, 2)
+
+		other.Attempt--
+		_, err = db.GetEngine(t.Context()).ID(other.ID).Cols("attempt").Update(other)
+		require.NoError(t, err)
+		_, err = f.review(t, 4, false, "no")
+		require.NoError(t, err)
+		other.Status = actions_model.DeploymentRejected
+		_, err = db.GetEngine(t.Context()).ID(other.ID).Cols("status").Update(other)
+		require.NoError(t, err)
+		mailDeploymentDecided(f.ctx, f.env, other)
+		assert.Equal(t, []int64{2}, sent.decided, "one rejection mail for both")
 	})
 }
 

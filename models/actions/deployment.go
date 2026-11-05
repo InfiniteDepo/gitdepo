@@ -148,6 +148,13 @@ func RevokeDeploymentApproval(ctx context.Context, d *ActionDeployment) (bool, e
 	return n == 1, err
 }
 
+// HasEarlierDeployment tells if a deployment of the same run, environment and attempt as d (another job of a matrix,
+// say) with a lower ID has one of the statuses: the mails about one run and environment are sent once, by the first.
+func HasEarlierDeployment(ctx context.Context, d *ActionDeployment, statuses ...DeploymentStatus) (bool, error) {
+	return db.GetEngine(ctx).Where("run_id = ? AND environment_id = ? AND attempt = ? AND id < ?", d.RunID, d.EnvironmentID, d.Attempt, d.ID).
+		In("status", statuses).Exist(new(ActionDeployment))
+}
+
 // FindExpiredReviews returns at most limit deployments that have waited for a review since before the cutoff, the ones
 // looked at longest ago first (TouchDeployments moves one that failed to the back, so none can block the others).
 func FindExpiredReviews(ctx context.Context, cutoff timeutil.TimeStamp, limit int) ([]*ActionDeployment, error) {

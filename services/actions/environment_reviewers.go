@@ -263,25 +263,25 @@ func FindEnvironmentLastApprovers(ctx context.Context, userIDs []int64) ([]*Envi
 	if err != nil {
 		return nil, err
 	}
-	// the users without two-factor authentication don't depend on the organization, only whether it requires it
-	var twoFactorOrg *user_model.User
+	// who lacks two-factor authentication doesn't depend on the organization, only whether one requires it
 	repos := map[int64]*repo_model.Repository{}
+	anyRequired := false
 	for _, row := range rows {
 		repos[row.Repo.ID] = row.Repo
-		if row.Repo.Owner.IsOrganization() && row.Repo.Owner.RequireTwoFactor {
-			twoFactorOrg = row.Repo.Owner
-		}
+		anyRequired = anyRequired || twoFactorRequired(row.Repo.Owner)
 	}
-	missing, err := withoutTwoFactor(ctx, twoFactorOrg, candidates)
-	if err != nil {
-		return nil, err
+	missing := container.Set[int64]{}
+	if anyRequired {
+		if missing, err = usersWithoutTwoFactor(ctx, candidates); err != nil {
+			return nil, err
+		}
 	}
 	type repoUser struct{ repo, user int64 }
 	eligible := container.Set[repoUser]{}
 	for _, row := range rows {
-		m := missing
-		if !row.Repo.Owner.RequireTwoFactor || !row.Repo.Owner.IsOrganization() {
-			m = nil
+		var m container.Set[int64]
+		if twoFactorRequired(row.Repo.Owner) {
+			m = missing
 		}
 		if row.User != nil && approverReason(row, m) == "" {
 			eligible.Add(repoUser{row.Repo.ID, row.User.ID})

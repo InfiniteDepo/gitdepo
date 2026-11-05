@@ -312,7 +312,10 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 		if revoked, err := revokeApprovalIfIneligible(ctx, run, env, d); err != nil {
 			return behaviourError, err
 		} else if revoked {
-			return behaviourHoldJob, nil // RevokeDeploymentApproval stored the current release time
+			// it waits for a review again (RevokeDeploymentApproval stored the current release time): tell the reviewers
+			d.Status, d.ReviewedBy = actions_model.DeploymentWaitingReview, 0
+			mailDeploymentReviewers(ctx, run, job.Name, env, d)
+			return behaviourHoldJob, nil
 		}
 	}
 	nextDeploymentStatus(d, env, reason, now)

@@ -10,6 +10,7 @@ import (
 
 	actions_model "forgejo.org/models/actions"
 	"forgejo.org/models/db"
+	org_model "forgejo.org/models/organization"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/graceful"
 	"forgejo.org/modules/log"
@@ -62,10 +63,14 @@ func afterCommit(ctx context.Context, what string, send func(ctx context.Context
 }
 
 // mailDeploymentReviewers mails the users who may review d that it waits for them, once the transaction that made it
-// wait commits: the gate calls it only when a deployment starts to wait for a review, so a later pass sends nothing
-// and a rerun's new attempt (a new deployment) sends its own.
+// wait commits: the gate calls it only when a deployment starts to wait for a review (or does again, when an approval
+// is revoked), so a later pass sends nothing and a rerun's new attempt (a new deployment) sends its own. The jobs of a
+// run attempt that deploy to one environment (a matrix) share one mail: the first of them that waits sends it.
 func mailDeploymentReviewers(ctx context.Context, run *actions_model.ActionRun, jobName string, env *actions_model.ActionEnvironment, d *actions_model.ActionDeployment) {
 	afterCommit(ctx, "a deployment waiting for a review", func(ctx context.Context) error {
+		if earlier, err := actions_model.HasEarlierDeployment(ctx, d, actions_model.DeploymentWaitingReview); err != nil || earlier {
+			return err
+		}
 		ids, _, err := DeploymentApprovers(ctx, nil, run, env, d)
 		if err != nil || len(ids) == 0 {
 			return err
@@ -83,12 +88,15 @@ func mailDeploymentReviewers(ctx context.Context, run *actions_model.ActionRun, 
 }
 
 // mailDeploymentDecided mails the user who started the attempt that d was rejected or expired, once the transaction
-// that decided it commits.
+// that decided it commits; once for the jobs of a run attempt that deploy to one environment.
 func mailDeploymentDecided(ctx context.Context, env *actions_model.ActionEnvironment, d *actions_model.ActionDeployment) {
 	if d.TriggerUserID <= 0 {
 		return
 	}
 	afterCommit(ctx, "a rejected or expired deployment", func(ctx context.Context) error {
+		if earlier, err := actions_model.HasEarlierDeployment(ctx, d, d.Status); err != nil || earlier {
+			return err
+		}
 		run, err := actions_model.GetRunByID(ctx, d.RunID)
 		if err != nil {
 			return err
@@ -141,4 +149,80 @@ func possibleUser(ctx context.Context, id int64) (*user_model.User, error) {
 		return user_model.NewGhostUser(), nil
 	}
 	return u, err
+}
+
+// RunReviewers is who may review the waiting deployments of one run, decided once for all their environments: for the
+// run page of a viewer who may change the repository's Actions, the only one shown the reviewers.
+type RunReviewers struct {
+	run   *actions_model.ActionRun
+	check *EnvironmentReviewerCheck
+	names map[int64][]string
+}
+
+// LoadRunReviewers decides the reviewers of the environments for run with a fixed number of queries: the reviewer
+// check of the settings pages, the listed users the doer may see and the listed teams.
+func LoadRunReviewers(ctx context.Context, doer *user_model.User, run *actions_model.ActionRun, envs []*actions_model.ActionEnvironment, reviewers map[int64][]*actions_model.ActionEnvironmentReviewer) (*RunReviewers, error) {
+	if err := run.LoadRepo(ctx); err != nil {
+		return nil, err
+	}
+	check, err := CheckEnvironmentReviewers(ctx, run.Repo, doer, envs, reviewers)
+	if err != nil {
+		return nil, err
+	}
+	var userIDs, teamIDs []int64
+	for _, rs := range reviewers {
+		for _, r := range rs {
+			if r.TeamID > 0 {
+				teamIDs = append(teamIDs, r.TeamID)
+			} else {
+				userIDs = append(userIDs, r.UserID)
+			}
+		}
+	}
+	users, err := VisibleUsers(ctx, doer, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	teams := map[int64]*org_model.Team{}
+	if len(teamIDs) > 0 {
+		var list []*org_model.Team
+		if err := db.GetEngine(ctx).In("id", teamIDs).And("org_id = ?", run.Repo.OwnerID).Find(&list); err != nil {
+			return nil, err
+		}
+		for _, t := range list {
+			teams[t.ID] = t
+		}
+	}
+	r := &RunReviewers{run: run, check: check, names: map[int64][]string{}}
+	for envID, rs := range reviewers {
+		var us, ts []string
+		for _, rv := range rs {
+			if rv.TeamID > 0 {
+				if t := teams[rv.TeamID]; t != nil {
+					ts = append(ts, run.Repo.OwnerName+"/"+t.Name)
+				}
+			} else if u := users[rv.UserID]; u != nil && !u.IsGhost() {
+				us = append(us, u.GetDisplayName())
+			}
+		}
+		slices.Sort(us)
+		slices.Sort(ts)
+		r.names[envID] = append(us, ts...)
+	}
+	return r, nil
+}
+
+// Names are the listed reviewers of the environment: the users the doer may see, then the teams as org/team.
+func (r *RunReviewers) Names(envID int64) []string {
+	return r.names[envID]
+}
+
+// Nobody tells if no listed reviewer can approve d now, and if that is because of the self-review rule alone.
+func (r *RunReviewers) Nobody(env *actions_model.ActionEnvironment, d *actions_model.ActionDeployment) (nobody, selfReview bool) {
+	all := r.check.Approvers[env.ID]
+	approvers := withoutSelfReview(all, env, r.run, d)
+	if r.check.NoReviewer[env.ID] || len(approvers) == 0 {
+		return true, len(approvers) < len(all)
+	}
+	return false, false
 }
