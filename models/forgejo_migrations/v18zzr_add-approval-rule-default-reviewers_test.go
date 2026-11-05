@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// v18zzqApprovalRuleBefore is the table before the migration.
-type v18zzqApprovalRuleBefore struct {
+// v18zzrApprovalRuleBefore is the table before the migration.
+type v18zzrApprovalRuleBefore struct {
 	ID                int64   `xorm:"pk autoincr"`
 	ProtectedBranchID int64   `xorm:"INDEX UNIQUE(s) NOT NULL"`
 	Name              string  `xorm:"VARCHAR(255) UNIQUE(s) NOT NULL"`
@@ -24,12 +24,12 @@ type v18zzqApprovalRuleBefore struct {
 	RequireCodeOwners bool    `xorm:"NOT NULL DEFAULT false"`
 }
 
-func (v18zzqApprovalRuleBefore) TableName() string {
+func (v18zzrApprovalRuleBefore) TableName() string {
 	return "approval_rule"
 }
 
 func Test_addApprovalRuleDefaultReviewers(t *testing.T) {
-	x, deferable := migration_tests.PrepareTestEnv(t, 0, new(v18zzqApprovalRuleBefore))
+	x, deferable := migration_tests.PrepareTestEnv(t, 0, new(v18zzrApprovalRuleBefore))
 	defer deferable()
 	require.NotNil(t, x)
 	_, err := x.Exec("INSERT INTO approval_rule (protected_branch_id, name, required_count, user_i_ds, team_i_ds, path_patterns) VALUES (1, 'Security', 2, '[2]', '[]', 'docs/**')")
