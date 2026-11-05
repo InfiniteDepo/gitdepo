@@ -257,7 +257,26 @@ func TestGroupWritesThatAddTeamMembersAreOwnActs(t *testing.T) {
 	group.GrantsOrgAdmin = true
 	require.ErrorIs(t, UpdateGroup(grant, group), audit_model.ErrNotOwnAct)
 	assert.False(t, unittest.AssertExistsAndLoadBean(t, &org_model.UserGroup{ID: group.ID}).GrantsOrgAdmin)
-	require.ErrorIs(t, SetOrgAdminExclusions(grant, []int64{3}), audit_model.ErrNotOwnAct)
+	group.GrantsOrgAdmin = false
+
+	// a new name retargets the login sources that map to it
+	group.Name = "staff"
+	require.ErrorIs(t, UpdateGroup(grant, group), audit_model.ErrNotOwnAct)
+	assert.Equal(t, "deployers", unittest.AssertExistsAndLoadBean(t, &org_model.UserGroup{ID: group.ID}).Name)
+	group.Name, group.Description = " Deployers ", "a description" // same name, other fields
+	require.NoError(t, UpdateGroup(grant, group))
+	group.Name = "staff"
+	require.NoError(t, UpdateGroup(ownCtx(), group), "the admin's own rename")
+	group.Name = "deployers"
+	require.NoError(t, UpdateGroup(ownCtx(), group))
+
+	// adding an exclusion only removes owners, lifting one adds them
+	require.NoError(t, SetOrgAdminExclusions(grant, []int64{3}))
+	require.ErrorIs(t, SetOrgAdminExclusions(grant, nil), audit_model.ErrNotOwnAct)
+	excluded, err := org_model.GetOrgAdminExclusionOrgIDs(db.DefaultContext)
+	require.NoError(t, err)
+	assert.True(t, excluded.Contains(3))
+	require.NoError(t, SetOrgAdminExclusions(ownCtx(), nil))
 
 	// the person's own link, then a login source sync adds a group member to the reviewer team
 	require.NoError(t, LinkTeam(ownCtx(), group, reviewers))

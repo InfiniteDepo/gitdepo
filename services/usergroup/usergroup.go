@@ -280,14 +280,15 @@ func CreateGroup(ctx context.Context, group *org_model.UserGroup) error {
 }
 
 // UpdateGroup updates the name, description and roles of a user group, and
-// the role flags of its members.
+// the role flags of its members. Turning on the org-admin role adds owners, and a new name retargets the login
+// sources that map a directory group to that name onto the group's teams, so both are only the admin's own act.
 func UpdateGroup(ctx context.Context, group *org_model.UserGroup) error {
 	return db.WithTx(ctx, func(ctx context.Context) error {
 		old, err := org_model.GetUserGroupByID(ctx, group.ID)
 		if err != nil {
 			return err
 		}
-		if group.GrantsOrgAdmin && !old.GrantsOrgAdmin { // its members become owners of every organization
+		if (group.GrantsOrgAdmin && !old.GrantsOrgAdmin) || !strings.EqualFold(strings.TrimSpace(group.Name), old.Name) {
 			if err := audit_model.CheckOwnAct(ctx); err != nil {
 				return err
 			}
@@ -622,11 +623,8 @@ func syncOrgAdminLinks(ctx context.Context, orgID int64, groups []*org_model.Use
 
 // SetOrgAdminExclusions replaces the organizations excluded from the org-admin
 // role and updates the links of the organizations that changed. Lifting an exclusion adds owners, so it is only the
-// admin's own act.
+// admin's own act; adding one only removes owners.
 func SetOrgAdminExclusions(ctx context.Context, orgIDs []int64) error {
-	if err := audit_model.CheckOwnAct(ctx); err != nil {
-		return err
-	}
 	return db.WithTx(ctx, func(ctx context.Context) error {
 		old, err := org_model.GetOrgAdminExclusionOrgIDs(ctx)
 		if err != nil {
@@ -637,6 +635,11 @@ func SetOrgAdminExclusions(ctx context.Context, orgIDs []int64) error {
 		for id := range old {
 			if !next.Contains(id) {
 				changed = append(changed, id)
+			}
+		}
+		if len(changed) > 0 { // lifted
+			if err := audit_model.CheckOwnAct(ctx); err != nil {
+				return err
 			}
 		}
 		for id := range next {

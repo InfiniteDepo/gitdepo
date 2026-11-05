@@ -122,7 +122,21 @@ func TestOrgTeamMemberAddOwnAct(t *testing.T) {
 			adminGrant := createOAuth2Token(t, loginUser(t, "user1"), []auth_model.AccessTokenScope{auth_model.AccessTokenScopeWriteAdmin})
 			MakeRequest(t, NewRequest(t, "PUT", "/api/v1/admin/groups/deployers/members/user10").AddTokenAuth(adminGrant), http.StatusForbidden)
 			MakeRequest(t, NewRequestWithJSON(t, "PATCH", "/api/v1/admin/groups/deployers", &api.EditUserGroupOption{GrantsOrgAdmin: new(true)}).AddTokenAuth(adminGrant), http.StatusForbidden)
-			MakeRequest(t, NewRequestWithJSON(t, "PUT", "/api/v1/admin/roles/org-admin/exclusions", &api.SetOrgAdminExclusionsOption{Orgs: []string{}}).AddTokenAuth(adminGrant), http.StatusForbidden)
+			// a new name retargets the login sources mapping to it onto the group's teams
+			MakeRequest(t, NewRequestWithJSON(t, "PATCH", "/api/v1/admin/groups/deployers", &api.EditUserGroupOption{Name: new("staff")}).AddTokenAuth(adminGrant), http.StatusForbidden)
+			MakeRequest(t, NewRequestWithJSON(t, "PATCH", "/api/v1/admin/groups/deployers", &api.EditUserGroupOption{Description: new("other fields")}).AddTokenAuth(adminGrant), http.StatusOK)
+			adminToken := getUserToken(t, "user1", auth_model.AccessTokenScopeWriteAdmin)
+			MakeRequest(t, NewRequestWithJSON(t, "PATCH", "/api/v1/admin/groups/deployers", &api.EditUserGroupOption{Name: new("staff")}).AddTokenAuth(adminToken), http.StatusOK)
+			loginUser(t, "user1").MakeRequest(t, NewRequestWithValues(t, "POST", fmt.Sprintf("/admin/groups/%d/edit", group.ID), map[string]string{"name": "deployers"}), http.StatusSeeOther)
+			assert.Equal(t, "deployers", unittest.AssertExistsAndLoadBean(t, &org_model.UserGroup{ID: group.ID}).Name)
+			// adding an org-admin exclusion only removes owners, lifting one adds them
+			exclusions := func(orgs []string) *RequestWrapper {
+				return NewRequestWithJSON(t, "PUT", "/api/v1/admin/roles/org-admin/exclusions", &api.SetOrgAdminExclusionsOption{Orgs: orgs})
+			}
+			MakeRequest(t, exclusions([]string{"org3"}).AddTokenAuth(adminGrant), http.StatusNoContent)
+			MakeRequest(t, exclusions([]string{}).AddTokenAuth(adminGrant), http.StatusForbidden)
+			unittest.AssertExistsAndLoadBean(t, &org_model.OrgAdminExclusion{OrgID: 3})
+			MakeRequest(t, exclusions([]string{}).AddTokenAuth(adminToken), http.StatusNoContent)
 
 			MakeRequest(t, NewRequest(t, "PUT", linkURL).AddTokenAuth(ownerToken), http.StatusNoContent)
 			unittest.AssertExistsAndLoadBean(t, &org_model.TeamUser{TeamID: reviewers.ID, UID: 8, Reason: org_model.MembershipReasonAddedByUserGroup})
