@@ -80,8 +80,20 @@ func TestCodeOwnerLineMarksBounded(t *testing.T) {
 		return counter.n.Load(), marks, time.Since(start)
 	}
 	run(1) // warm up
-	one, _, _ := run(1)
-	many, marks, took := run(2000)
+	// the counter is process-wide: a query of a background goroutine can land in one reading, so read until two agree
+	stable := func(n int) (int64, []LineOwnerMarks, time.Duration) {
+		prev, marks, took := run(n)
+		for range 5 {
+			cur, m, d := run(n)
+			if cur == prev {
+				return cur, m, d
+			}
+			prev, marks, took = cur, m, d
+		}
+		return prev, marks, took
+	}
+	one, _, _ := stable(1)
+	many, marks, took := stable(2000)
 	assert.Equal(t, one, many, "the queries don't depend on the number of lines")
 	assert.Less(t, took, 3*time.Second)
 	t.Logf("2000 lines naming a team of %d members: %d queries, %v", members, many, took)
