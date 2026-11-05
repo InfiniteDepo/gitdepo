@@ -25,5 +25,4 @@ func TestWritersLoadFailureIsNotRemembered(t *testing.T) {
 	require.NoError(t, w.Load(t.Context(), 1))
 	assert.True(t, w.Can(1, 2), "user 2 owns repository 1")
 	assert.True(t, w.WouldWrite(1, 2))
-	assert.False(t, w.TwoFactorBlocked(1, 2))
 }

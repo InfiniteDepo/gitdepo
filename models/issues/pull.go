@@ -1101,15 +1101,6 @@ type CodeOwners struct {
 	File string
 }
 
-// GetCodeOwnersFromReader returns the code owners configuration
-// Return warning messages on parsing errors
-// We're trying to do the best we can when parsing a file.
-// Invalid lines are skipped. Non-existent users and teams too.
-func GetCodeOwnersFromReader(ctx context.Context, ownerID int64, rc io.ReadCloser, truncated bool) ([]*CodeOwnerRule, []string) {
-	owners := ParseCodeOwners(ctx, ownerID, rc, truncated)
-	return owners.Rules, owners.Warnings
-}
-
 // ParseCodeOwners parses a CODEOWNERS file of a repository of the owner ownerID. A section header is never compiled
 // as a pattern. A team resolves only within the owner's organization: a team of another organization is as unknown as
 // one that doesn't exist, and warned about in the same words.

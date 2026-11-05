@@ -67,9 +67,6 @@ func (w *Writers) Can(repoID, uid int64) bool { return w.by[repoID][uid] && !w.b
 // WouldWrite reports whether the user would write the repository if the two-factor requirement didn't hold them back.
 func (w *Writers) WouldWrite(repoID, uid int64) bool { return w.by[repoID][uid] }
 
-// TwoFactorBlocked reports whether the user has write access that the two-factor requirement holds back.
-func (w *Writers) TwoFactorBlocked(repoID, uid int64) bool { return w.blocked[repoID][uid] }
-
 // Why a listed user can't approve; the values are the reasons of the owner checks.
 const (
 	ReasonNoWrite    = "no_write"
