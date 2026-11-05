@@ -14,16 +14,16 @@ func init() {
 	})
 }
 
-type v18zzsActionEnvironment struct {
+type v18zztActionEnvironment struct {
 	ID                int64 `xorm:"pk autoincr"`
 	CreatedByWorkflow bool  `xorm:"NOT NULL DEFAULT false"`
 }
 
-func (v18zzsActionEnvironment) TableName() string {
+func (v18zztActionEnvironment) TableName() string {
 	return "action_environment"
 }
 
 func addActionsEnvironmentCreatedByWorkflow(x *xorm.Engine) error {
-	_, err := x.SyncWithOptions(xorm.SyncOptions{IgnoreDropIndices: true}, new(v18zzsActionEnvironment))
+	_, err := x.SyncWithOptions(xorm.SyncOptions{IgnoreDropIndices: true}, new(v18zztActionEnvironment))
 	return err
 }
