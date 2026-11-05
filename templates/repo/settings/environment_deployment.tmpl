@@ -1,0 +1,13 @@
+{{/* the last deployment of an environment (environmentDeployment), or nil */}}
+{{if .}}
+	<span class="environment-deployment tw-inline-flex tw-items-center tw-gap-1">
+		{{if .Status.IsWaiting}}<span class="text yellow">{{svg "octicon-clock"}}</span> {{ctx.Locale.Tr "actions.environments.deployment.waiting"}}
+		{{- else if eq .Status.String "released"}}<span class="text green">{{svg "octicon-check-circle"}}</span> {{ctx.Locale.Tr "actions.environments.deployment.released"}}
+		{{- else if eq .Status.String "cancelled"}}<span class="text grey">{{svg "octicon-stop"}}</span> {{ctx.Locale.Tr "actions.environments.deployment.cancelled"}}
+		{{- else if eq .Status.String "rejected"}}<span class="text red">{{svg "octicon-x-circle"}}</span> {{ctx.Locale.Tr "actions.environments.deployment.rejected"}}
+		{{- else if eq .Status.String "expired"}}<span class="text red">{{svg "octicon-x-circle"}}</span> {{ctx.Locale.Tr "actions.environments.deployment.expired"}}
+		{{- else}}<span class="text red">{{svg "octicon-x-circle"}}</span> {{ctx.Locale.Tr "actions.environments.deployment.refused"}}{{end}}
+		{{DateUtils.TimeSince .Created}}
+		{{if .RefName}}{{if .RunLink}}<a class="ui basic label" href="{{.RunLink}}">{{.RefName}}</a>{{else}}<span class="ui basic label">{{.RefName}}</span>{{end}}{{end}}
+	</span>
+{{end}}

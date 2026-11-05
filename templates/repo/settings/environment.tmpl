@@ -1,0 +1,154 @@
+{{template "repo/settings/layout_head" (dict "ctxData" . "pageClass" "repository settings actions environments")}}
+	<div class="repo-setting-content">
+		{{if .NoReviewer}}
+			<div class="ui warning message" id="environment-no-reviewer">{{svg "octicon-alert"}} {{ctx.Locale.Tr "actions.environments.no_eligible_reviewer"}}</div>
+		{{end}}
+		<h4 class="ui top attached header">
+			{{if .Environment}}{{ctx.Locale.Tr "actions.environments.edit_title" .Environment.Name}}{{else}}{{ctx.Locale.Tr "actions.environments.new"}}{{end}}
+		</h4>
+		<div class="ui attached segment">
+			<form class="ui form" id="environment-form" method="post" action="{{if .Environment}}{{.EnvironmentLink}}{{else}}{{.EnvironmentsLink}}/new{{end}}">
+				<div class="field">
+					<label for="environment-name">{{ctx.Locale.Tr "name"}}</label>
+					<input id="environment-name" name="name" value="{{.Form.Name}}" maxlength="255" {{if .Environment}}readonly{{else}}required autofocus{{end}}>
+					<p class="help">{{ctx.Locale.Tr "actions.environments.name.desc"}}</p>
+				</div>
+
+				<div class="field">
+					<label for="environment-reviewers-input">{{ctx.Locale.Tr "actions.environments.reviewers"}}</label>
+					<p class="help">{{ctx.Locale.Tr "actions.environments.reviewers.desc" .MaxReviewers}}</p>
+					<div class="ui multiple search selection dropdown custom" id="environment-reviewers" data-max="{{.MaxReviewers}}">
+						<input type="hidden" id="environment-reviewers-input" name="reviewers" value="{{.Form.Reviewers}}">
+						<div class="default text">{{ctx.Locale.Tr "actions.environments.reviewers.placeholder"}}</div>
+						<div class="menu">
+							{{range .ReviewerOptions}}
+								<div class="item{{if .Reason}} environment-reviewer-ineligible{{end}}" data-value="{{.Key}}">
+									{{if .User}}{{ctx.AvatarUtils.Avatar .User 20 "mini"}}{{.User.GetDisplayName}}{{else}}{{svg "octicon-people"}} {{.Team.Name}}{{end}}
+									{{if .Reason}}
+										<span class="help">
+											{{if eq .Reason "not_usable"}}{{ctx.Locale.Tr "actions.environments.reviewer.not_usable"}}
+											{{- else if eq .Reason "two_factor"}}{{ctx.Locale.Tr "actions.environments.reviewer.two_factor"}}
+											{{- else if eq .Reason "none_in_team"}}{{ctx.Locale.Tr "actions.environments.reviewer.none_in_team"}}
+											{{- else}}{{ctx.Locale.Tr "actions.environments.reviewer.no_access"}}{{end}}
+										</span>
+									{{end}}
+								</div>
+							{{end}}
+						</div>
+					</div>
+					<p class="help" id="environment-reviewers-count" data-text="{{ctx.Locale.Tr "actions.environments.reviewers.count"}}" data-full="{{ctx.Locale.Tr "actions.environments.reviewers.full"}}"></p>
+				</div>
+				<div class="field">
+					<div class="ui checkbox">
+						<input type="checkbox" id="environment-prevent-self-review" name="prevent_self_review" {{if .Form.PreventSelfReview}}checked{{end}}>
+						<label for="environment-prevent-self-review">{{ctx.Locale.Tr "actions.environments.prevent_self_review"}}</label>
+						<p class="help">{{ctx.Locale.Tr "actions.environments.prevent_self_review.desc"}}</p>
+					</div>
+				</div>
+
+				<div class="field">
+					<label for="environment-wait-timer">{{ctx.Locale.Tr "actions.environments.wait_timer"}}</label>
+					<div class="tw-flex tw-items-center tw-gap-2">
+						<input id="environment-wait-timer" name="wait_timer" type="number" min="0" max="{{.MaxWaitTimer}}" value="{{.Form.WaitTimer}}" class="tw-max-w-[12rem]">
+						<span>{{ctx.Locale.Tr "actions.environments.wait_timer.minutes"}}</span>
+					</div>
+					<p class="help">{{ctx.Locale.Tr "actions.environments.wait_timer.desc"}}</p>
+				</div>
+
+				<div class="grouped fields" id="environment-ref-policy">
+					<label>{{ctx.Locale.Tr "actions.environments.refs"}}</label>
+					<div class="field">
+						<div class="ui radio checkbox">
+							<input type="radio" id="environment-ref-any" name="ref_policy" value="0" {{if eq .Form.RefPolicy 0}}checked{{end}}>
+							<label for="environment-ref-any">{{ctx.Locale.Tr "actions.environments.refs.any"}}</label>
+						</div>
+					</div>
+					<div class="field">
+						<div class="ui radio checkbox">
+							<input type="radio" id="environment-ref-protected" name="ref_policy" value="1" {{if eq .Form.RefPolicy 1}}checked{{end}}>
+							<label for="environment-ref-protected">{{ctx.Locale.Tr "actions.environments.summary.protected_branches"}}</label>
+							<p class="help">{{ctx.Locale.Tr "actions.environments.refs.protected.desc"}}</p>
+						</div>
+					</div>
+					<div class="field">
+						<div class="ui radio checkbox">
+							<input type="radio" id="environment-ref-patterns" name="ref_policy" value="2" {{if eq .Form.RefPolicy 2}}checked{{end}}>
+							<label for="environment-ref-patterns">{{ctx.Locale.Tr "actions.environments.refs.patterns"}}</label>
+							<p class="help">{{ctx.Locale.Tr "actions.environments.refs.patterns.desc"}}</p>
+						</div>
+					</div>
+					<div class="field tw-pl-8 {{if ne .Form.RefPolicy 2}}tw-hidden{{end}}" id="environment-patterns">
+						<template id="environment-pattern-row">
+							{{template "repo/settings/environment_pattern" .EmptyPattern}}
+						</template>
+						<div id="environment-pattern-rows">
+							{{range .Form.Patterns}}{{template "repo/settings/environment_pattern" .}}{{end}}
+						</div>
+						<button type="button" class="ui small button" id="environment-pattern-add">{{svg "octicon-plus"}} {{ctx.Locale.Tr "actions.environments.refs.add"}}</button>
+						<p class="help">{{ctx.Locale.Tr "actions.environments.refs.hint"}}</p>
+					</div>
+				</div>
+
+				<div class="field">
+					<label for="environment-runner-labels">{{ctx.Locale.Tr "actions.environments.runner_labels"}}</label>
+					<p class="help">{{ctx.Locale.Tr "actions.environments.runner_labels.desc"}}</p>
+					<textarea id="environment-runner-labels" name="runner_labels" rows="2">{{.Form.RunnerLabels}}</textarea>
+				</div>
+				<div class="field">
+					<label for="environment-allowed-workflows">{{ctx.Locale.Tr "actions.environments.allowed_workflows"}}</label>
+					<p class="help">{{ctx.Locale.Tr "actions.environments.allowed_workflows.desc"}}</p>
+					<textarea id="environment-allowed-workflows" name="allowed_workflows" rows="2">{{.Form.AllowedWorkflows}}</textarea>
+				</div>
+
+				<div class="divider"></div>
+				<div class="field">
+					<button class="ui primary button" id="environment-save">{{if .Environment}}{{ctx.Locale.Tr "actions.environments.save"}}{{else}}{{ctx.Locale.Tr "actions.environments.create"}}{{end}}</button>
+					<a class="ui button" href="{{.EnvironmentsLink}}">{{ctx.Locale.Tr "cancel"}}</a>
+				</div>
+			</form>
+		</div>
+
+		{{if .Environment}}
+			<div class="tw-mt-4" id="environment-secrets">{{template "shared/actions/secrets_list" .}}</div>
+			<div class="tw-mt-4" id="environment-variables">{{template "shared/actions/variables_list" .}}</div>
+
+			<h4 class="ui top attached error header tw-mt-4">{{ctx.Locale.Tr "repo.settings.danger_zone"}}</h4>
+			<div class="ui attached error danger segment">
+				<div class="flex-list">
+					<div class="flex-item">
+						<div class="flex-item-main">
+							<div class="flex-item-title">{{ctx.Locale.Tr "actions.environments.delete"}}</div>
+							<div class="flex-item-body">{{ctx.Locale.Tr "actions.environments.delete.desc"}}</div>
+						</div>
+						<div class="flex-item-trailing">
+							<button class="danger button show-modal" data-modal="#delete-environment-modal">{{ctx.Locale.Tr "actions.environments.delete"}}</button>
+						</div>
+					</div>
+				</div>
+			</div>
+
+			<dialog class="modal" id="delete-environment-modal">
+				<article>
+					<header>{{ctx.Locale.Tr "actions.environments.delete.title" .Environment.Name}}</header>
+					<form class="ui form" method="post" action="{{.EnvironmentLink}}/delete">
+						<div class="content">
+							<p>{{ctx.Locale.Tr "actions.environments.delete.confirm" .Environment.Name}}</p>
+							<p>
+								{{ctx.Locale.Tr "actions.environments.delete.last"}}
+								{{if .LastDeployment}}{{template "repo/settings/environment_deployment" .LastDeployment}}{{else}}{{ctx.Locale.Tr "actions.environments.delete.never"}}{{end}}
+							</p>
+							<div class="field">
+								<label for="environment-delete-confirm">{{ctx.Locale.Tr "actions.environments.delete.type_name"}}</label>
+								<input id="environment-delete-confirm" name="confirm_name" autocomplete="off" required data-name="{{.Environment.Name}}">
+							</div>
+						</div>
+						<div class="actions">
+							<button type="button" class="ui button" command="close" commandfor="delete-environment-modal">{{ctx.Locale.Tr "cancel"}}</button>
+							<button class="ui red button" id="environment-delete-button" disabled>{{ctx.Locale.Tr "actions.environments.delete"}}</button>
+						</div>
+					</form>
+				</article>
+			</dialog>
+		{{end}}
+	</div>
+{{template "repo/settings/layout_footer" .}}

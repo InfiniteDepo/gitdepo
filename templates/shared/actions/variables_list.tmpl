@@ -1,9 +1,11 @@
+{{/* .VariablesLink, .VariablesTitle and .VariablesDescription, if set, replace .Link and the default title: a page with both lists, such as an environment, sets them */}}
+{{$link := or .VariablesLink .Link}}
 <h4 class="ui top attached header">
-	{{ctx.Locale.Tr "actions.variables.management"}}
+	{{or .VariablesTitle (ctx.Locale.Tr "actions.variables.management")}}
 	<div class="ui right">
 		<button class="ui primary tiny button show-modal"
 			data-modal="#edit-variable-modal"
-			data-modal-form.action="{{.Link}}/new"
+			data-modal-form.action="{{$link}}/new"
 			data-modal-header="{{ctx.Locale.Tr "actions.variables.creation"}}"
 			data-modal-dialog-variable-name=""
 			data-modal-dialog-variable-data=""
@@ -13,6 +15,7 @@
 	</div>
 </h4>
 <div class="ui attached segment">
+	{{if .VariablesDescription}}<p>{{.VariablesDescription}}</p>{{end}}
 	{{if .Variables}}
 	<div class="flex-list">
 		{{range .Variables}}
@@ -22,7 +25,7 @@
 			</div>
 			<div class="flex-item-main">
 				<div class="flex-item-title">
-					{{.Name}}{{if and $.OverridesOrg (index $.OverridesOrg .Name)}} <span class="ui tiny label">{{ctx.Locale.Tr "repo_group.overrides_org"}}</span>{{end}}
+					{{.Name}}{{if and $.OverridesOrg (index $.OverridesOrg .Name)}} <span class="ui tiny label">{{ctx.Locale.Tr "repo_group.overrides_org"}}</span>{{else if and $.OverridesRepo (index $.OverridesRepo .Name)}} <span class="ui tiny label">{{ctx.Locale.Tr "actions.environments.overrides_repo"}}</span>{{end}}
 				</div>
 				<div class="flex-item-body">
 					{{.Data}}
@@ -35,7 +38,7 @@
 				<button class="btn interact-bg tw-p-2 show-modal"
 					data-tooltip-content="{{ctx.Locale.Tr "actions.variables.edit"}}"
 					data-modal="#edit-variable-modal"
-					data-modal-form.action="{{$.Link}}/{{.ID}}/edit"
+					data-modal-form.action="{{$link}}/{{.ID}}/edit"
 					data-modal-header="{{ctx.Locale.Tr "actions.variables.edit"}}"
 					data-modal-dialog-variable-name="{{.Name}}"
 					data-modal-dialog-variable-data="{{.Data}}"
@@ -44,7 +47,7 @@
 				</button>
 				<button class="btn interact-bg tw-p-2 link-action"
 					data-tooltip-content="{{ctx.Locale.Tr "actions.variables.deletion"}}"
-					data-url="{{$.Link}}/{{.ID}}/delete"
+					data-url="{{$link}}/{{.ID}}/delete"
 					data-modal-id="delete-variable"
 				>
 					{{svg "octicon-trash"}}

@@ -1,0 +1,9 @@
+{{/* one row of the ref patterns of an environment (an EnvironmentRefPattern, the zero one for a new row) */}}
+<div class="tw-flex tw-items-center tw-gap-2 tw-mb-2 environment-pattern">
+	<select name="pattern_type" class="tw-w-auto" aria-label="{{ctx.Locale.Tr "actions.environments.refs.type"}}">
+		<option value="branch" {{if ne .Type "tag"}}selected{{end}}>{{ctx.Locale.Tr "actions.environments.refs.branch"}}</option>
+		<option value="tag" {{if eq .Type "tag"}}selected{{end}}>{{ctx.Locale.Tr "actions.environments.refs.tag"}}</option>
+	</select>
+	<input name="pattern" value="{{.Pattern}}" maxlength="255" aria-label="{{ctx.Locale.Tr "actions.environments.refs.pattern"}}">
+	<button type="button" class="btn interact-bg tw-p-2 environment-pattern-remove" data-tooltip-content="{{ctx.Locale.Tr "actions.environments.refs.remove"}}" aria-label="{{ctx.Locale.Tr "actions.environments.refs.remove"}}">{{svg "octicon-trash"}}</button>
+</div>

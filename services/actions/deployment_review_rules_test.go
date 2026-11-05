@@ -13,6 +13,8 @@ import (
 	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	org_model "forgejo.org/models/organization"
+	repo_model "forgejo.org/models/repo"
+	"forgejo.org/models/unit"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/queue"
@@ -499,4 +501,31 @@ func TestReviewerTeamsCheckedInTransaction(t *testing.T) {
 	require.Len(t, rs, 1, "a refused list changes nothing")
 	assert.EqualValues(t, 1, rs[0].TeamID)
 	unittest.AssertNotExistsBean(t, &actions_model.ActionEnvironment{RepoID: 3, LowerName: "other"})
+}
+
+// The bulk decision of the settings pages gives the reasons of ReviewChecker.May without the rules of one run.
+func TestCheckEnvironmentReviewers(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	require.NoError(t, db.Insert(t.Context(), &repo_model.RepoUnit{RepoID: 3, Type: unit.TypeActions}))
+	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 3}) // private, of org3
+	require.NoError(t, repo.LoadOwner(t.Context()))
+	envs := []*actions_model.ActionEnvironment{{ID: 1, ReviewsRequired: true}, {ID: 2, ReviewsRequired: true}, {ID: 3, ReviewsRequired: true}, {ID: 4}}
+	reviewers := map[int64][]*actions_model.ActionEnvironmentReviewer{
+		1: {{UserID: 2}},                  // an owner of org3
+		2: {{UserID: 10}, {TeamID: 7}},    // no access; a team whose member (user15) can't read repo3
+		3: {{UserID: 10}, {TeamID: 1}},    // the Owners team of org3 counts
+		4: {{UserID: 99999}, {TeamID: 7}}, // a missing user; reviews not required: no warning
+	}
+	check, err := CheckEnvironmentReviewers(t.Context(), repo, envs, reviewers)
+	require.NoError(t, err)
+	assert.Equal(t, map[int64]bool{1: false, 2: true, 3: false, 4: false}, check.NoReviewer)
+	assert.Equal(t, map[string]string{"user:10": ReviewerNoAccess, "team:7": ReviewerNoneInTeam, "user:99999": ReviewerNotUsable}, check.Ineligible)
+
+	// a reviewer that can't sign in no longer counts
+	_, err = db.GetEngine(t.Context()).ID(2).Cols("prohibit_login").Update(&user_model.User{ProhibitLogin: true})
+	require.NoError(t, err)
+	check, err = CheckEnvironmentReviewers(t.Context(), repo, envs[:1], reviewers)
+	require.NoError(t, err)
+	assert.True(t, check.NoReviewer[1])
+	assert.Equal(t, ReviewerNotUsable, check.Ineligible["user:2"])
 }

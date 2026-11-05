@@ -933,3 +933,22 @@ type SaveTopicForm struct {
 type CommitNotesForm struct {
 	Notes string
 }
+
+// EnvironmentForm is the rules of an Actions environment as the settings page posts them: the reviewers as "user:<id>"
+// and "team:<id>" separated by commas, one pattern row per pattern_type/pattern pair, labels and workflows one per line.
+type EnvironmentForm struct {
+	Name              string
+	Reviewers         string
+	PreventSelfReview bool
+	WaitTimer         string // parsed by the handler, so text that is no number is refused, not read as 0
+	RefPolicy         string
+	PatternTypes      []string `form:"pattern_type"`
+	Patterns          []string `form:"pattern"`
+	RunnerLabels      string
+	AllowedWorkflows  string
+}
+
+func (f *EnvironmentForm) Validate(req *http.Request, errs binding.Errors) binding.Errors {
+	ctx := context.GetValidateContext(req)
+	return middleware.Validate(errs, ctx.Data, f, ctx.Locale)
+}

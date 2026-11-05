@@ -33,7 +33,7 @@ func repoGroupActionsPage(ctx *context.Context, kind string) {
 	overrides := map[string]bool{}
 	if kind == "secrets" {
 		ctx.Data["Description"] = ctx.Tr("repo_group.secrets_desc")
-		shared_secrets.SetSecretsContext(ctx, org.ID, group.ID, 0)
+		shared_secrets.SetSecretsContext(ctx, org.ID, group.ID, 0, 0)
 		orgSecrets, err := db.Find[secret_model.Secret](ctx, secret_model.FindSecretsOptions{OwnerID: org.ID})
 		if err != nil {
 			ctx.ServerError("FindSecrets", err)
@@ -44,7 +44,7 @@ func repoGroupActionsPage(ctx *context.Context, kind string) {
 		}
 	} else {
 		ctx.Data["Description"] = ctx.Tr("repo_group.variables_desc")
-		shared_actions.SetVariablesContext(ctx, org.ID, group.ID, 0)
+		shared_actions.SetVariablesContext(ctx, org.ID, group.ID, 0, 0)
 		orgVars, err := db.Find[actions_model.ActionVariable](ctx, actions_model.FindVariablesOpts{OwnerID: org.ID})
 		if err != nil {
 			ctx.ServerError("FindVariables", err)
@@ -79,7 +79,7 @@ func RepoGroupSecretCreate(ctx *context.Context) {
 		ctx.JSONError(ctx.GetErrMsg())
 		return
 	}
-	shared_secrets.CreateSecretPost(ctx, orgID, groupID, 0, redirect)
+	shared_secrets.CreateSecretPost(ctx, orgID, groupID, 0, 0, redirect)
 }
 
 // RepoGroupSecretEdit edits a project secret of the project.
@@ -89,13 +89,13 @@ func RepoGroupSecretEdit(ctx *context.Context) {
 		ctx.JSONError(ctx.GetErrMsg())
 		return
 	}
-	shared_secrets.EditSecretPost(ctx, orgID, groupID, 0, ctx.ParamsInt64(":secret_id"), redirect)
+	shared_secrets.EditSecretPost(ctx, orgID, groupID, 0, 0, ctx.ParamsInt64(":secret_id"), redirect)
 }
 
 // RepoGroupSecretDelete deletes a project secret of the project.
 func RepoGroupSecretDelete(ctx *context.Context) {
 	orgID, groupID, redirect := repoGroupLinks(ctx, "secrets")
-	shared_secrets.DeleteSecretPost(ctx, orgID, groupID, 0, ctx.ParamsInt64(":secret_id"), redirect)
+	shared_secrets.DeleteSecretPost(ctx, orgID, groupID, 0, 0, ctx.ParamsInt64(":secret_id"), redirect)
 }
 
 // RepoGroupVariableCreate creates a project variable of the project.
@@ -105,7 +105,7 @@ func RepoGroupVariableCreate(ctx *context.Context) {
 		ctx.JSONError(ctx.GetErrMsg())
 		return
 	}
-	shared_actions.CreateVariable(ctx, orgID, groupID, 0, redirect)
+	shared_actions.CreateVariable(ctx, orgID, groupID, 0, 0, redirect)
 }
 
 // RepoGroupVariableUpdate edits a project variable of the project.
@@ -115,11 +115,11 @@ func RepoGroupVariableUpdate(ctx *context.Context) {
 		ctx.JSONError(ctx.GetErrMsg())
 		return
 	}
-	shared_actions.UpdateVariable(ctx, orgID, groupID, 0, redirect)
+	shared_actions.UpdateVariable(ctx, orgID, groupID, 0, 0, redirect)
 }
 
 // RepoGroupVariableDelete deletes a project variable of the project.
 func RepoGroupVariableDelete(ctx *context.Context) {
 	orgID, groupID, redirect := repoGroupLinks(ctx, "variables")
-	shared_actions.DeleteVariable(ctx, orgID, groupID, 0, redirect)
+	shared_actions.DeleteVariable(ctx, orgID, groupID, 0, 0, redirect)
 }

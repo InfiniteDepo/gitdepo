@@ -28,31 +28,9 @@ var errUnknownReviewer = util.NewInvalidArgumentErrorf("unknown reviewer")
 // (audit_model.ErrNotOwnAct otherwise). After an update the jobs that wait for the environment are decided again by
 // the new rules.
 func SaveEnvironment(ctx context.Context, doer *user_model.User, e *actions_model.ActionEnvironment, userIDs, teamIDs []int64) (bool, error) {
-	if err := audit_model.CheckOwnAct(ctx); err != nil {
-		return false, err
-	}
-	repo, err := repo_model.GetRepositoryByID(ctx, e.RepoID)
+	reviewers, err := environmentReviewers(ctx, doer, e, userIDs, teamIDs)
 	if err != nil {
 		return false, err
-	}
-	reviewers := make([]actions_model.ActionEnvironmentReviewer, 0, len(userIDs)+len(teamIDs))
-	for _, id := range userIDs {
-		u, err := user_model.GetUserByID(ctx, id)
-		if user_model.IsErrUserNotExist(err) || (err == nil && (id <= 0 || !u.IsIndividual() || !user_model.IsUserVisibleToViewer(ctx, u, doer))) {
-			return false, errUnknownReviewer
-		} else if err != nil {
-			return false, err
-		}
-		reviewers = append(reviewers, actions_model.ActionEnvironmentReviewer{UserID: id})
-	}
-	for _, id := range teamIDs {
-		team, err := org_model.GetTeamByID(ctx, id)
-		if org_model.IsErrTeamNotExist(err) || (err == nil && team.OrgID != repo.OwnerID) {
-			return false, errUnknownReviewer
-		} else if err != nil {
-			return false, err
-		}
-		reviewers = append(reviewers, actions_model.ActionEnvironmentReviewer{TeamID: id})
 	}
 	if e.ID == 0 {
 		stored, err := actions_model.GetRepoEnvironmentByName(ctx, e.RepoID, e.Name)
@@ -72,6 +50,49 @@ func SaveEnvironment(ctx context.Context, doer *user_model.User, e *actions_mode
 	}
 	emitEnvironmentRuns(ctx, e)
 	return false, nil
+}
+
+// CreateEnvironment creates the environment e.Name of the repository with the rules and reviewers of e as
+// SaveEnvironment does, but never changes one that exists: a name that is taken ignoring case is
+// actions_model.ErrEnvironmentExists.
+func CreateEnvironment(ctx context.Context, doer *user_model.User, e *actions_model.ActionEnvironment, userIDs, teamIDs []int64) error {
+	reviewers, err := environmentReviewers(ctx, doer, e, userIDs, teamIDs)
+	if err != nil {
+		return err
+	}
+	return actions_model.CreateEnvironment(ctx, e, reviewers)
+}
+
+// environmentReviewers checks that the doer's own act changes the rules of e and turns the IDs into its reviewers: a
+// user is an individual account the doer can see, a team belongs to the organization that owns the repository.
+func environmentReviewers(ctx context.Context, doer *user_model.User, e *actions_model.ActionEnvironment, userIDs, teamIDs []int64) ([]actions_model.ActionEnvironmentReviewer, error) {
+	if err := audit_model.CheckOwnAct(ctx); err != nil {
+		return nil, err
+	}
+	repo, err := repo_model.GetRepositoryByID(ctx, e.RepoID)
+	if err != nil {
+		return nil, err
+	}
+	reviewers := make([]actions_model.ActionEnvironmentReviewer, 0, len(userIDs)+len(teamIDs))
+	for _, id := range userIDs {
+		u, err := user_model.GetUserByID(ctx, id)
+		if user_model.IsErrUserNotExist(err) || (err == nil && (id <= 0 || !u.IsIndividual() || !user_model.IsUserVisibleToViewer(ctx, u, doer))) {
+			return nil, errUnknownReviewer
+		} else if err != nil {
+			return nil, err
+		}
+		reviewers = append(reviewers, actions_model.ActionEnvironmentReviewer{UserID: id})
+	}
+	for _, id := range teamIDs {
+		team, err := org_model.GetTeamByID(ctx, id)
+		if org_model.IsErrTeamNotExist(err) || (err == nil && team.OrgID != repo.OwnerID) {
+			return nil, errUnknownReviewer
+		} else if err != nil {
+			return nil, err
+		}
+		reviewers = append(reviewers, actions_model.ActionEnvironmentReviewer{TeamID: id})
+	}
+	return reviewers, nil
 }
 
 // emitEnvironmentRuns queues the gate for the runs that have a job of the environment no runner took yet, after a

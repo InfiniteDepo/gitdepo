@@ -13,11 +13,13 @@ import (
 	"forgejo.org/services/forms"
 )
 
-func SetVariablesContext(ctx *context.Context, ownerID, groupID, repoID int64) {
+// SetVariablesContext lists the variables of a level as shared/secrets.SetSecretsContext names it.
+func SetVariablesContext(ctx *context.Context, ownerID, groupID, repoID, environmentID int64) {
 	variables, err := db.Find[actions_model.ActionVariable](ctx, actions_model.FindVariablesOpts{
-		OwnerID: ownerID,
-		GroupID: groupID,
-		RepoID:  repoID,
+		OwnerID:       ownerID,
+		GroupID:       groupID,
+		RepoID:        repoID,
+		EnvironmentID: environmentID,
 	})
 	if err != nil {
 		ctx.ServerError("FindVariables", err)
@@ -26,10 +28,10 @@ func SetVariablesContext(ctx *context.Context, ownerID, groupID, repoID int64) {
 	ctx.Data["Variables"] = variables
 }
 
-func CreateVariable(ctx *context.Context, ownerID, groupID, repoID int64, redirectURL string) {
+func CreateVariable(ctx *context.Context, ownerID, groupID, repoID, environmentID int64, redirectURL string) {
 	form := web.GetForm(ctx).(*forms.EditVariableForm)
 
-	v, err := actions_service.CreateVariable(ctx, ownerID, groupID, repoID, 0, form.Name, form.Data)
+	v, err := actions_service.CreateVariable(ctx, ownerID, groupID, repoID, environmentID, form.Name, form.Data)
 	if err != nil {
 		log.Error("CreateVariable: %v", err)
 		ctx.JSONError(ctx.Tr("actions.variables.creation.failed"))
@@ -40,11 +42,11 @@ func CreateVariable(ctx *context.Context, ownerID, groupID, repoID int64, redire
 	ctx.JSONRedirect(redirectURL)
 }
 
-func UpdateVariable(ctx *context.Context, ownerID, groupID, repoID int64, redirectURL string) {
+func UpdateVariable(ctx *context.Context, ownerID, groupID, repoID, environmentID int64, redirectURL string) {
 	id := ctx.ParamsInt64(":variable_id")
 	form := web.GetForm(ctx).(*forms.EditVariableForm)
 
-	if ok, err := actions_service.UpdateVariable(ctx, id, ownerID, groupID, repoID, 0, form.Name, form.Data); err != nil || !ok {
+	if ok, err := actions_service.UpdateVariable(ctx, id, ownerID, groupID, repoID, environmentID, form.Name, form.Data); err != nil || !ok {
 		if !ok {
 			ctx.JSONError(ctx.Tr("actions.variables.not_found"))
 		} else {
@@ -57,10 +59,10 @@ func UpdateVariable(ctx *context.Context, ownerID, groupID, repoID int64, redire
 	ctx.JSONRedirect(redirectURL)
 }
 
-func DeleteVariable(ctx *context.Context, ownerID, groupID, repoID int64, redirectURL string) {
+func DeleteVariable(ctx *context.Context, ownerID, groupID, repoID, environmentID int64, redirectURL string) {
 	id := ctx.ParamsInt64(":variable_id")
 
-	if ok, err := actions_model.DeleteVariable(ctx, id, ownerID, groupID, repoID); err != nil || !ok {
+	if ok, err := actions_service.DeleteVariableByID(ctx, id, ownerID, groupID, repoID, environmentID); err != nil || !ok {
 		if !ok {
 			ctx.JSONError(ctx.Tr("actions.variables.not_found"))
 		} else {

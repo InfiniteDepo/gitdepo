@@ -63,6 +63,17 @@ func UpdateVariable(ctx context.Context, variableID, ownerID, groupID, repoID, e
 	})
 }
 
+// DeleteVariableByID deletes the variable with that ID of a level (see CreateVariable) and reports if there was one.
+func DeleteVariableByID(ctx context.Context, variableID, ownerID, groupID, repoID, environmentID int64) (bool, error) {
+	if environmentID != 0 {
+		if err := audit_model.CheckOwnAct(ctx); err != nil {
+			return false, err
+		}
+		return actions_model.DeleteEnvironmentVariable(ctx, variableID, repoID, environmentID)
+	}
+	return actions_model.DeleteVariable(ctx, variableID, ownerID, groupID, repoID)
+}
+
 func DeleteVariableByName(ctx context.Context, ownerID, groupID, repoID, environmentID int64, name string) error {
 	if environmentID != 0 {
 		if err := audit_model.CheckOwnAct(ctx); err != nil {

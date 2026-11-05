@@ -55,12 +55,52 @@ func CreateOrUpdateSecret(ctx context.Context, ownerID, groupID, repoID, environ
 	return s, false, nil
 }
 
-func DeleteSecretByID(ctx context.Context, ownerID, groupID, repoID, secretID int64) error {
+// CreateSecret inserts a new secret of a level as CreateOrUpdateSecret names it (an existing name is an error).
+func CreateSecret(ctx context.Context, ownerID, groupID, repoID, environmentID int64, name, data string) (*secret_model.Secret, error) {
+	if environmentID != 0 {
+		if err := audit_model.CheckOwnAct(ctx); err != nil {
+			return nil, err
+		}
+		return secret_model.InsertEncryptedEnvironmentSecret(ctx, repoID, environmentID, name, data)
+	}
+	return secret_model.InsertEncryptedSecret(ctx, ownerID, groupID, repoID, name, data)
+}
+
+// EditSecret renames the secret with that ID of a level, and sets its value unless data is empty; a secret of another
+// level is util.ErrNotExist.
+func EditSecret(ctx context.Context, ownerID, groupID, repoID, environmentID, id int64, name, data string) (*secret_model.Secret, error) {
+	var s *secret_model.Secret
+	var err error
+	if environmentID != 0 {
+		if err := audit_model.CheckOwnAct(ctx); err != nil {
+			return nil, err
+		}
+		s, err = secret_model.GetEnvironmentSecretByID(ctx, repoID, environmentID, id)
+	} else {
+		s, err = secret_model.GetSecretByID(ctx, ownerID, groupID, repoID, id)
+	}
+	if err != nil {
+		return nil, err
+	}
+	s.Name = name
+	if data != "" {
+		s.SetData(data)
+	}
+	return s, secret_model.UpdateSecret(ctx, s, data != "")
+}
+
+func DeleteSecretByID(ctx context.Context, ownerID, groupID, repoID, environmentID, secretID int64) error {
+	if environmentID != 0 {
+		if err := audit_model.CheckOwnAct(ctx); err != nil {
+			return err
+		}
+	}
 	s, err := db.Find[secret_model.Secret](ctx, secret_model.FindSecretsOptions{
-		OwnerID:  ownerID,
-		GroupID:  groupID,
-		RepoID:   repoID,
-		SecretID: secretID,
+		OwnerID:       ownerID,
+		GroupID:       groupID,
+		RepoID:        repoID,
+		EnvironmentID: environmentID,
+		SecretID:      secretID,
 	})
 	if err != nil {
 		return err

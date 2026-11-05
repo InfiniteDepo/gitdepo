@@ -123,27 +123,132 @@ func (c *ReviewChecker) doerMayAct(ctx context.Context) (bool, error) {
 		return *c.doerOK, nil
 	}
 	ok := false
-	doer, repo := c.doer, c.run.Repo
 	// a decision is its reviewer's own: under sudo, or with a credential another party holds for the reviewer, nobody
 	// reviews, so can_review says what the review call will
-	if !audit_model.IsOwnAct(ctx) {
-		doer = nil
-	}
-	if doer != nil && doer.ID > 0 && !doer.IsActions() && !doer.IsAccessTokenBot() && !doer.IsOrganization() && doer.IsActive && !doer.ProhibitLogin {
-		blocked, err := doer.TwoFactorBlocked(ctx, repo.Owner)
+	if c.doer != nil && audit_model.IsOwnAct(ctx) {
+		reason, err := reviewerIneligibility(ctx, c.run.Repo, c.doer)
 		if err != nil {
 			return false, err
 		}
-		if !blocked {
-			perm, err := access_model.GetUserRepoPermission(ctx, repo, doer)
-			if err != nil {
-				return false, err
-			}
-			ok = perm.CanRead(unit.TypeActions)
-		}
+		ok = reason == ""
 	}
 	c.doerOK = &ok
 	return ok, nil
+}
+
+// Why a user can't approve any deployment of a repository (the values of reviewerIneligibility)
+const (
+	ReviewerNotUsable  = "not_usable"   // not a person who can sign in: deactivated, login prohibited, a bot or an organization
+	ReviewerTwoFactor  = "two_factor"   // the owner requires two-factor authentication, which the user lacks
+	ReviewerNoAccess   = "no_access"    // can't read the repository's Actions
+	ReviewerNoneInTeam = "none_in_team" // a team none of whose members can approve
+)
+
+// reviewerIneligibility is what holds for a reviewer on every deployment of the repository (whose owner is loaded): a
+// usable person with read access to its Actions. It returns "" if u may review, otherwise why not.
+func reviewerIneligibility(ctx context.Context, repo *repo_model.Repository, u *user_model.User) (string, error) {
+	if u.ID <= 0 || u.IsActions() || u.IsAccessTokenBot() || !u.IsIndividual() || !u.IsActive || u.ProhibitLogin {
+		return ReviewerNotUsable, nil
+	}
+	if blocked, err := u.TwoFactorBlocked(ctx, repo.Owner); err != nil || blocked {
+		return ReviewerTwoFactor, err
+	}
+	perm, err := access_model.GetUserRepoPermission(ctx, repo, u)
+	if err != nil {
+		return "", err
+	} else if !perm.CanRead(unit.TypeActions) {
+		return ReviewerNoAccess, nil
+	}
+	return "", nil
+}
+
+// EnvironmentReviewerCheck says, for the listed reviewers of environments of one repository, who can approve a
+// deployment at this moment by the rules every deployment shares (those of one run, such as self-review, are left out).
+type EnvironmentReviewerCheck struct {
+	Ineligible map[string]string // reviewer key (ActionEnvironmentReviewer.Key) -> why it can't approve; absent = can
+	NoReviewer map[int64]bool    // environment ID -> it requires reviews and no listed reviewer can approve
+}
+
+// CheckEnvironmentReviewers decides the reviewers of the environments of repo (whose owner is loaded), with the rule of
+// ReviewChecker.May. It reads the users and the members of the teams in one query each and decides each user once,
+// whatever the number of environments that list them; a team counts as soon as one member can approve.
+func CheckEnvironmentReviewers(ctx context.Context, repo *repo_model.Repository, envs []*actions_model.ActionEnvironment, reviewers map[int64][]*actions_model.ActionEnvironmentReviewer) (*EnvironmentReviewerCheck, error) {
+	var userIDs, teamIDs []int64
+	for _, rs := range reviewers {
+		for _, r := range rs {
+			if r.TeamID > 0 {
+				teamIDs = append(teamIDs, r.TeamID)
+			} else {
+				userIDs = append(userIDs, r.UserID)
+			}
+		}
+	}
+	members := map[int64][]int64{}
+	if len(teamIDs) > 0 {
+		var rows []*org_model.TeamUser
+		// only a team of the organization that owns the repository counts, as in May
+		if err := db.GetEngine(ctx).In("team_id", teamIDs).And("org_id = ?", repo.OwnerID).Find(&rows); err != nil {
+			return nil, err
+		}
+		for _, r := range rows {
+			members[r.TeamID] = append(members[r.TeamID], r.UID)
+			userIDs = append(userIDs, r.UID)
+		}
+	}
+	users, err := user_model.GetUsersByIDs(ctx, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[int64]*user_model.User, len(users))
+	for _, u := range users {
+		byID[u.ID] = u
+	}
+	decided := map[int64]string{}
+	reason := func(id int64) (string, error) {
+		if r, ok := decided[id]; ok {
+			return r, nil
+		}
+		r := ReviewerNotUsable // deleted meanwhile
+		if u := byID[id]; u != nil {
+			var err error
+			if r, err = reviewerIneligibility(ctx, repo, u); err != nil {
+				return "", err
+			}
+		}
+		decided[id] = r
+		return r, nil
+	}
+	check := &EnvironmentReviewerCheck{Ineligible: map[string]string{}, NoReviewer: map[int64]bool{}}
+	keyReason := func(r *actions_model.ActionEnvironmentReviewer) (string, error) {
+		if why, ok := check.Ineligible[r.Key()]; ok {
+			return why, nil
+		}
+		if r.TeamID == 0 {
+			return reason(r.UserID)
+		}
+		for _, uid := range members[r.TeamID] {
+			if why, err := reason(uid); err != nil || why == "" {
+				return why, err
+			}
+		}
+		return ReviewerNoneInTeam, nil
+	}
+	for _, env := range envs {
+		eligible := false
+		for _, r := range reviewers[env.ID] {
+			why, err := keyReason(r)
+			if err != nil {
+				return nil, err
+			}
+			if why == "" {
+				eligible = true
+			} else {
+				check.Ineligible[r.Key()] = why
+			}
+		}
+		check.NoReviewer[env.ID] = env.ReviewsRequired && !eligible
+	}
+	return check, nil
 }
 
 // May decides if the doer may review the deployment d at this moment (its status is not looked at): a listed user, or a

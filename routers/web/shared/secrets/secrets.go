@@ -16,8 +16,10 @@ import (
 	secrets_service "forgejo.org/services/secrets"
 )
 
-func SetSecretsContext(ctx *context.Context, ownerID, groupID, repoID int64) {
-	secrets, err := db.Find[secret_model.Secret](ctx, secret_model.FindSecretsOptions{OwnerID: ownerID, GroupID: groupID, RepoID: repoID})
+// SetSecretsContext lists the secrets of a level: an owner, a project of an owner, a repository, or (environmentID not
+// 0) an environment of the repository. The handlers below take the same level.
+func SetSecretsContext(ctx *context.Context, ownerID, groupID, repoID, environmentID int64) {
+	secrets, err := db.Find[secret_model.Secret](ctx, secret_model.FindSecretsOptions{OwnerID: ownerID, GroupID: groupID, RepoID: repoID, EnvironmentID: environmentID})
 	if err != nil {
 		ctx.ServerError("FindSecrets", err)
 		return
@@ -26,11 +28,11 @@ func SetSecretsContext(ctx *context.Context, ownerID, groupID, repoID int64) {
 	ctx.Data["Secrets"] = secrets
 }
 
-func CreateSecretPost(ctx *context.Context, ownerID, groupID, repoID int64, redirectURL string) {
+func CreateSecretPost(ctx *context.Context, ownerID, groupID, repoID, environmentID int64, redirectURL string) {
 	form := web.GetForm(ctx).(*forms.CreateSecretForm)
 
 	normalizedData := util.ReserveLineBreakForTextarea(form.Data)
-	secret, err := secret_model.InsertEncryptedSecret(ctx, ownerID, groupID, repoID, form.Name, normalizedData)
+	secret, err := secrets_service.CreateSecret(ctx, ownerID, groupID, repoID, environmentID, form.Name, normalizedData)
 	if err != nil {
 		log.Error("InsertEncryptedSecret failed: %v", err)
 		ctx.JSONError(ctx.Tr("secrets.creation.failed"))
@@ -41,27 +43,17 @@ func CreateSecretPost(ctx *context.Context, ownerID, groupID, repoID int64, redi
 	ctx.JSONRedirect(redirectURL)
 }
 
-func EditSecretPost(ctx *context.Context, ownerID, groupID, repoID, id int64, redirectURL string) {
+func EditSecretPost(ctx *context.Context, ownerID, groupID, repoID, environmentID, id int64, redirectURL string) {
 	form := web.GetForm(ctx).(*forms.EditSecretForm)
 
-	secret, err := secret_model.GetSecretByID(ctx, ownerID, groupID, repoID, id)
+	secret, err := secrets_service.EditSecret(ctx, ownerID, groupID, repoID, environmentID, id, form.Name, util.ReserveLineBreakForTextarea(form.Data))
 	if errors.Is(err, util.ErrNotExist) {
 		ctx.NotFound("GetSecretByID", err)
 		return
-	} else if err != nil {
-		ctx.ServerError("GetSecretByID", err)
-		return
 	}
-
-	secret.Name = form.Name
-	if form.Data != "" {
-		secret.SetData(util.ReserveLineBreakForTextarea(form.Data))
-	}
-
-	err = secret_model.UpdateSecret(ctx, secret, form.Data != "")
 	if err != nil {
 		log.Error("UpdateSecret failed: %v", err)
-		ctx.JSONError(ctx.Tr("actions.secrets.mutation.failure_message", secret.Name))
+		ctx.JSONError(ctx.Tr("actions.secrets.mutation.failure_message", form.Name))
 		return
 	}
 
@@ -69,8 +61,8 @@ func EditSecretPost(ctx *context.Context, ownerID, groupID, repoID, id int64, re
 	ctx.JSONRedirect(redirectURL)
 }
 
-func DeleteSecretPost(ctx *context.Context, ownerID, groupID, repoID, id int64, redirectURL string) {
-	err := secrets_service.DeleteSecretByID(ctx, ownerID, groupID, repoID, id)
+func DeleteSecretPost(ctx *context.Context, ownerID, groupID, repoID, environmentID, id int64, redirectURL string) {
+	err := secrets_service.DeleteSecretByID(ctx, ownerID, groupID, repoID, environmentID, id)
 	if err != nil {
 		log.Error("DeleteSecretByID(%d) failed: %v", id, err)
 		ctx.JSONError(ctx.Tr("secrets.deletion.failed"))
