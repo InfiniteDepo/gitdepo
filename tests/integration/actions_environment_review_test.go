@@ -4,6 +4,7 @@
 package integration
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -31,6 +32,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// setEnvironmentReviewers makes the users and teams the reviewers of the environment as it is stored, keeping its rules.
+func setEnvironmentReviewers(ctx context.Context, e *actions_model.ActionEnvironment, userIDs, teamIDs []int64) error {
+	stored, err := actions_model.GetRepoEnvironmentByID(ctx, e.RepoID, e.ID)
+	if err != nil {
+		return err
+	}
+	_, err = actions_service.SaveEnvironment(ctx, stored, userIDs, teamIDs)
+	return err
+}
 
 // Required reviewers, approvals, expiry, allowed workflows, referenced secrets, the OIDC environment claim and the
 // refusal of a monolithic call that names an environment, each through the real Actions, API and cron code.
@@ -105,8 +116,8 @@ func TestActionsEnvironmentReviews(t *testing.T) {
 			if mutate != nil {
 				mutate(e)
 			}
-			require.NoError(t, actions_model.CreateEnvironment(ctx, e))
-			require.NoError(t, actions_service.SetEnvironmentReviewers(ctx, e, reviewers, nil))
+			require.NoError(t, actions_model.CreateEnvironment(ctx, e, nil))
+			require.NoError(t, setEnvironmentReviewers(ctx, e, reviewers, nil))
 			return e
 		}
 		basePath := fmt.Sprintf("/api/v1/repos/%s/%s/actions/runs", user2.Name, repo.Name)
@@ -322,7 +333,7 @@ func TestActionsEnvironmentReviews(t *testing.T) {
 			_, job := pushJob("", "rv-g", "    environment: breakglass-rv\n", "echo")
 			require.Equal(t, actions_model.DeploymentWaitingReview, deployment(job, 1).Status)
 			assert.Nil(t, runner.maybeFetchTask(t))
-			require.NoError(t, actions_service.SetEnvironmentReviewers(ctx, e, nil, nil))
+			require.NoError(t, setEnvironmentReviewers(ctx, e, nil, nil))
 			require.Eventually(t, func() bool { return hasStatus(job, actions_model.StatusWaiting) }, 10*time.Second, 100*time.Millisecond)
 			assert.Equal(t, actions_model.DeploymentReleased, deployment(job, 1).Status)
 			runner.execTask(t, runner.fetchTask(t), &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
@@ -538,7 +549,7 @@ jobs:
 			assert.EqualValues(t, 1, count())
 			MakeRequest(t, NewRequest(t, "DELETE", "/api/v1/admin/users/"+user5.Name+"?purge=true").AddTokenAuth(adminToken), http.StatusNoContent)
 			assert.EqualValues(t, 0, count())
-			require.NoError(t, actions_service.SetEnvironmentReviewers(ctx, e, []int64{user4.ID}, nil))
+			require.NoError(t, setEnvironmentReviewers(ctx, e, []int64{user4.ID}, nil))
 			require.NoError(t, actions_service.DeleteEnvironment(ctx, e))
 			assert.EqualValues(t, 0, count())
 		})

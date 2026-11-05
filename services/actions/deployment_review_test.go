@@ -38,6 +38,25 @@ type reviewFixture struct {
 	ctx context.Context
 }
 
+// setReviewers makes the users and teams the reviewers of the environment as it is stored, keeping its rules.
+func setReviewers(ctx context.Context, e *actions_model.ActionEnvironment, userIDs, teamIDs []int64) error {
+	stored, err := actions_model.GetRepoEnvironmentByID(ctx, e.RepoID, e.ID)
+	if err != nil {
+		return err
+	}
+	_, err = SaveEnvironment(ctx, stored, userIDs, teamIDs)
+	return err
+}
+
+// replaceReviewers is setReviewers without the checks of the users and teams and without the pass of the emitter.
+func replaceReviewers(ctx context.Context, e *actions_model.ActionEnvironment, reviewers []actions_model.ActionEnvironmentReviewer) error {
+	stored, err := actions_model.GetRepoEnvironmentByID(ctx, e.RepoID, e.ID)
+	if err != nil {
+		return err
+	}
+	return actions_model.UpdateEnvironment(ctx, stored, reviewers)
+}
+
 func newReviewFixture(t *testing.T, env *actions_model.ActionEnvironment, userIDs, teamIDs []int64) *reviewFixture {
 	t.Helper()
 	require.NoError(t, unittest.PrepareTestDatabase())
@@ -51,7 +70,7 @@ func newReviewFixture(t *testing.T, env *actions_model.ActionEnvironment, userID
 	f := &reviewFixture{ctx: audit_model.WithSystem(t.Context(), "test")}
 	env.Name = "prod"
 	f.env = newEnvironment(t, env)
-	require.NoError(t, SetEnvironmentReviewers(f.ctx, f.env, userIDs, teamIDs))
+	require.NoError(t, setReviewers(f.ctx, f.env, userIDs, teamIDs))
 	f.job = gateJob(t, envWorkflow("    environment: prod\n"), "refs/heads/main")
 	b, err := gateEnvironment(f.ctx, f.job)
 	require.NoError(t, err)
@@ -352,7 +371,7 @@ func TestReviewDeployments(t *testing.T) {
 				if len(tc.teams) > 0 {
 					teamReadsActions(t, org3) // the repository belongs to the organization the teams belong to
 				}
-				require.NoError(t, SetEnvironmentReviewers(f.ctx, f.env, tc.users, tc.teams))
+				require.NoError(t, setReviewers(f.ctx, f.env, tc.users, tc.teams))
 				if tc.setup != nil {
 					tc.setup(t, f)
 				}
@@ -400,7 +419,7 @@ func TestReviewDeployments(t *testing.T) {
 	t.Run("a run with another environment's job: the doer reviews only what they may", func(t *testing.T) {
 		f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{2}, nil)
 		other := newEnvironment(t, &actions_model.ActionEnvironment{Name: "other"})
-		require.NoError(t, SetEnvironmentReviewers(f.ctx, other, []int64{4}, nil))
+		require.NoError(t, setReviewers(f.ctx, other, []int64{4}, nil))
 		grantActionsRead(t, 4)
 		// a second blocked job of the same run, gated by "other" (user 4 reviews it, not "prod")
 		_, err := db.GetEngine(t.Context()).Exec("INSERT INTO action_deployment (repo_id, environment_id, run_id, job_id, attempt, status, trigger_user_id, created) VALUES (63, ?, ?, 601, 1, ?, 2, ?)",
@@ -511,13 +530,13 @@ func TestEnvironmentReviewers(t *testing.T) {
 	env := newEnvironment(t, &actions_model.ActionEnvironment{Name: "prod"})
 
 	t.Run("limits and shapes", func(t *testing.T) {
-		require.ErrorIs(t, SetEnvironmentReviewers(ctx, env, []int64{1, 2, 4, 5, 8, 10, 11}, nil), util.ErrInvalidArgument, "seven")
-		require.NoError(t, SetEnvironmentReviewers(ctx, env, []int64{1, 2, 4, 5, 8, 10}, nil), "six")
-		require.ErrorIs(t, SetEnvironmentReviewers(ctx, env, []int64{2, 2}, nil), util.ErrInvalidArgument, "twice")
-		require.ErrorIs(t, SetEnvironmentReviewers(ctx, env, []int64{0}, nil), util.ErrInvalidArgument)
-		require.ErrorIs(t, SetEnvironmentReviewers(ctx, env, []int64{-2}, nil), util.ErrInvalidArgument, "the Actions user")
-		require.ErrorIs(t, SetEnvironmentReviewers(ctx, env, []int64{3}, nil), util.ErrInvalidArgument, "an organization")
-		require.ErrorIs(t, SetEnvironmentReviewers(ctx, env, []int64{99999}, nil), util.ErrInvalidArgument)
+		require.ErrorIs(t, setReviewers(ctx, env, []int64{1, 2, 4, 5, 8, 10, 11}, nil), util.ErrInvalidArgument, "seven")
+		require.NoError(t, setReviewers(ctx, env, []int64{1, 2, 4, 5, 8, 10}, nil), "six")
+		require.ErrorIs(t, setReviewers(ctx, env, []int64{2, 2}, nil), util.ErrInvalidArgument, "twice")
+		require.ErrorIs(t, setReviewers(ctx, env, []int64{0}, nil), util.ErrInvalidArgument)
+		require.ErrorIs(t, setReviewers(ctx, env, []int64{-2}, nil), util.ErrInvalidArgument, "the Actions user")
+		require.ErrorIs(t, setReviewers(ctx, env, []int64{3}, nil), util.ErrInvalidArgument, "an organization")
+		require.ErrorIs(t, setReviewers(ctx, env, []int64{99999}, nil), util.ErrInvalidArgument)
 		rs, err := actions_model.FindEnvironmentReviewers(ctx, env.ID)
 		require.NoError(t, err)
 		assert.Len(t, rs, 6, "a refused list changes nothing")
@@ -525,17 +544,17 @@ func TestEnvironmentReviewers(t *testing.T) {
 
 	t.Run("a team must belong to the organization that owns the repository", func(t *testing.T) {
 		// repository 63 is user2's: no team belongs to its owner
-		require.ErrorIs(t, SetEnvironmentReviewers(ctx, env, nil, []int64{2}), util.ErrInvalidArgument)
+		require.ErrorIs(t, setReviewers(ctx, env, nil, []int64{2}), util.ErrInvalidArgument)
 		teamReadsActions(t, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3}))
-		require.NoError(t, SetEnvironmentReviewers(ctx, env, []int64{2}, []int64{2}))
-		require.ErrorIs(t, SetEnvironmentReviewers(ctx, env, nil, []int64{3}), util.ErrInvalidArgument, "team 3 is org 6's")
-		require.ErrorIs(t, SetEnvironmentReviewers(ctx, env, nil, []int64{999}), util.ErrInvalidArgument)
+		require.NoError(t, setReviewers(ctx, env, []int64{2}, []int64{2}))
+		require.ErrorIs(t, setReviewers(ctx, env, nil, []int64{3}), util.ErrInvalidArgument, "team 3 is org 6's")
+		require.ErrorIs(t, setReviewers(ctx, env, nil, []int64{999}), util.ErrInvalidArgument)
 	})
 
 	t.Run("a change is audited once, an equal list is not", func(t *testing.T) {
 		since := auditSince(t)
-		require.NoError(t, SetEnvironmentReviewers(ctx, env, []int64{4}, nil))
-		require.NoError(t, SetEnvironmentReviewers(ctx, env, []int64{4}, nil))
+		require.NoError(t, setReviewers(ctx, env, []int64{4}, nil))
+		require.NoError(t, setReviewers(ctx, env, []int64{4}, nil))
 		assert.Len(t, auditActions(t, since, "repo.actions_env.updated"), 1)
 	})
 
@@ -546,7 +565,7 @@ func TestEnvironmentReviewers(t *testing.T) {
 			return n
 		}
 		teamReadsActions(t, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3}))
-		require.NoError(t, SetEnvironmentReviewers(ctx, env, []int64{4, 5}, []int64{2}))
+		require.NoError(t, setReviewers(ctx, env, []int64{4, 5}, []int64{2}))
 		assert.EqualValues(t, 3, count())
 		team, err := org_model.GetTeamByID(ctx, 2)
 		require.NoError(t, err)

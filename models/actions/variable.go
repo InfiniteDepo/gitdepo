@@ -57,6 +57,14 @@ func lockGroup(ctx context.Context, ownerID, groupID int64) error {
 	return err
 }
 
+// lockLevel takes the lock of the project or the environment of a variable, if it belongs to one.
+func lockLevel(ctx context.Context, ownerID, groupID, repoID, environmentID int64) error {
+	if environmentID != 0 {
+		return LockEnvironment(ctx, repoID, environmentID)
+	}
+	return lockGroup(ctx, ownerID, groupID)
+}
+
 func InsertVariable(ctx context.Context, ownerID, groupID, repoID int64, name, data string) (*ActionVariable, error) {
 	return insertVariable(ctx, ownerID, groupID, repoID, 0, name, data)
 }
@@ -85,13 +93,8 @@ func insertVariable(ctx context.Context, ownerID, groupID, repoID, environmentID
 		Data:          data,
 	}
 	return variable, db.WithTx(ctx, func(ctx context.Context) error {
-		if err := lockGroup(ctx, ownerID, groupID); err != nil {
+		if err := lockLevel(ctx, ownerID, groupID, repoID, environmentID); err != nil {
 			return err
-		}
-		if environmentID != 0 {
-			if err := LockEnvironment(ctx, repoID, environmentID); err != nil {
-				return err
-			}
 		}
 		if err := db.Insert(ctx, variable); err != nil {
 			return err
@@ -161,7 +164,7 @@ func FindVariables(ctx context.Context, opts FindVariablesOpts) ([]*ActionVariab
 func UpdateVariable(ctx context.Context, variable *ActionVariable) (bool, error) {
 	var count int64
 	err := db.WithTx(ctx, func(ctx context.Context) (err error) {
-		if err = lockGroup(ctx, variable.OwnerID, variable.GroupID); err != nil {
+		if err = lockLevel(ctx, variable.OwnerID, variable.GroupID, variable.RepoID, variable.EnvironmentID); err != nil {
 			return err
 		}
 		stored := new(ActionVariable)
@@ -204,7 +207,7 @@ func DeleteEnvironmentVariable(ctx context.Context, variableID, repoID, environm
 func deleteVariable(ctx context.Context, variableID, ownerID, groupID, repoID, environmentID int64) (bool, error) {
 	var count int64
 	err := db.WithTx(ctx, func(ctx context.Context) (err error) {
-		if err = lockGroup(ctx, ownerID, groupID); err != nil {
+		if err = lockLevel(ctx, ownerID, groupID, repoID, environmentID); err != nil {
 			return err
 		}
 		stored := new(ActionVariable)

@@ -16,11 +16,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestReplaceEnvironmentReviewers(t *testing.T) {
+func TestEnvironmentReviewerList(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	ctx := audit_model.WithSystem(t.Context(), "test")
 	e := &ActionEnvironment{RepoID: 1, Name: "prod"}
-	require.NoError(t, CreateEnvironment(ctx, e))
+	require.NoError(t, CreateEnvironment(ctx, e, nil))
 
 	required := func() bool {
 		stored, err := GetRepoEnvironmentByID(ctx, e.RepoID, e.ID)
@@ -36,7 +36,7 @@ func TestReplaceEnvironmentReviewers(t *testing.T) {
 		}
 		return rs
 	}
-	require.NoError(t, ReplaceEnvironmentReviewers(ctx, e, append(users(2, 3), ActionEnvironmentReviewer{TeamID: 5})))
+	require.NoError(t, UpdateEnvironment(ctx, e, append(users(2, 3), ActionEnvironmentReviewer{TeamID: 5})))
 	rs, err := FindEnvironmentReviewers(ctx, e.ID)
 	require.NoError(t, err)
 	assert.Len(t, rs, 3)
@@ -51,21 +51,21 @@ func TestReplaceEnvironmentReviewers(t *testing.T) {
 		"team twice":    {{TeamID: 4}, {TeamID: 4}},
 		"negative team": {{TeamID: -1}},
 	} {
-		require.ErrorIs(t, ReplaceEnvironmentReviewers(ctx, e, list), util.ErrInvalidArgument, name)
+		require.ErrorIs(t, UpdateEnvironment(ctx, e, list), util.ErrInvalidArgument, name)
 	}
 	rs, err = FindEnvironmentReviewers(ctx, e.ID)
 	require.NoError(t, err)
 	assert.Len(t, rs, 3, "a refused list changes nothing")
 
-	require.NoError(t, ReplaceEnvironmentReviewers(ctx, e, nil), "no reviewers")
+	require.NoError(t, UpdateEnvironment(ctx, e, nil), "no reviewers")
 	assert.False(t, required())
 
-	gone := &ActionEnvironment{ID: 9999, RepoID: 1}
-	require.ErrorIs(t, ReplaceEnvironmentReviewers(ctx, gone, users(1)), ErrEnvironmentNotFound)
-	other := &ActionEnvironment{ID: e.ID, RepoID: 2}
-	require.ErrorIs(t, ReplaceEnvironmentReviewers(ctx, other, users(1)), ErrEnvironmentNotFound, "an environment of another repository")
+	gone := &ActionEnvironment{ID: 9999, RepoID: 1, Name: "prod"}
+	require.ErrorIs(t, UpdateEnvironment(ctx, gone, users(1)), ErrEnvironmentNotFound)
+	other := &ActionEnvironment{ID: e.ID, RepoID: 2, Name: "prod"}
+	require.ErrorIs(t, UpdateEnvironment(ctx, other, users(1)), ErrEnvironmentNotFound, "an environment of another repository")
 
-	require.NoError(t, ReplaceEnvironmentReviewers(ctx, e, users(2)))
+	require.NoError(t, UpdateEnvironment(ctx, e, users(2)))
 	require.NoError(t, DeleteEnvironment(ctx, e, func(context.Context) error { return nil }))
 	n, err := db.GetEngine(ctx).Count(new(ActionEnvironmentReviewer))
 	require.NoError(t, err)

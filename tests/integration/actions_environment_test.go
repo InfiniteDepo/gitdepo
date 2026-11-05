@@ -105,7 +105,7 @@ jobs:
 			if mutate != nil {
 				mutate(e)
 			}
-			require.NoError(t, actions_model.CreateEnvironment(ctx, e))
+			require.NoError(t, actions_model.CreateEnvironment(ctx, e, nil))
 			return e
 		}
 
@@ -663,7 +663,7 @@ jobs:
 			assert.Equal(t, []string{"env-b", "env-a"}, reload(jobs[0]).RunsOn)
 
 			e.RunnerLabels = []string{"env-c"}
-			require.NoError(t, actions_model.UpdateEnvironment(ctx, e))
+			require.NoError(t, actions_model.UpdateEnvironment(ctx, e, nil))
 			run, err := actions_model.GetRunByID(t.Context(), jobs[0].RunID)
 			require.NoError(t, err)
 			_, err = actions_service.RerunAllJobs(t.Context(), nil, run)

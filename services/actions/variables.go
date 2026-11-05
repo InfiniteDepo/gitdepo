@@ -14,7 +14,9 @@ import (
 	"forgejo.org/modules/util"
 )
 
-func CreateVariable(ctx context.Context, ownerID, groupID, repoID int64, name, data string) (*actions_model.ActionVariable, error) {
+// CreateVariable creates a variable of the instance, an owner, a project, a repository, or (environmentID not 0) an
+// environment of the repository.
+func CreateVariable(ctx context.Context, ownerID, groupID, repoID, environmentID int64, name, data string) (*actions_model.ActionVariable, error) {
 	if err := secret.ValidateName(name); err != nil {
 		return nil, err
 	}
@@ -23,15 +25,13 @@ func CreateVariable(ctx context.Context, ownerID, groupID, repoID int64, name, d
 		return nil, err
 	}
 
-	v, err := actions_model.InsertVariable(ctx, ownerID, groupID, repoID, name, util.ReserveLineBreakForTextarea(data))
-	if err != nil {
-		return nil, err
+	if environmentID != 0 {
+		return actions_model.InsertEnvironmentVariable(ctx, repoID, environmentID, name, util.ReserveLineBreakForTextarea(data))
 	}
-
-	return v, nil
+	return actions_model.InsertVariable(ctx, ownerID, groupID, repoID, name, util.ReserveLineBreakForTextarea(data))
 }
 
-func UpdateVariable(ctx context.Context, variableID, ownerID, groupID, repoID int64, name, data string) (bool, error) {
+func UpdateVariable(ctx context.Context, variableID, ownerID, groupID, repoID, environmentID int64, name, data string) (bool, error) {
 	if err := secret.ValidateName(name); err != nil {
 		return false, err
 	}
@@ -41,27 +41,33 @@ func UpdateVariable(ctx context.Context, variableID, ownerID, groupID, repoID in
 	}
 
 	return actions_model.UpdateVariable(ctx, &actions_model.ActionVariable{
-		ID:      variableID,
-		Name:    strings.ToUpper(name),
-		Data:    util.ReserveLineBreakForTextarea(data),
-		OwnerID: ownerID,
-		GroupID: groupID,
-		RepoID:  repoID,
+		ID:            variableID,
+		Name:          strings.ToUpper(name),
+		Data:          util.ReserveLineBreakForTextarea(data),
+		OwnerID:       ownerID,
+		GroupID:       groupID,
+		RepoID:        repoID,
+		EnvironmentID: environmentID,
 	})
 }
 
-func DeleteVariableByName(ctx context.Context, ownerID, groupID, repoID int64, name string) error {
+func DeleteVariableByName(ctx context.Context, ownerID, groupID, repoID, environmentID int64, name string) error {
 	v, err := GetVariable(ctx, actions_model.FindVariablesOpts{
-		OwnerID: ownerID,
-		GroupID: groupID,
-		RepoID:  repoID,
-		Name:    name,
+		OwnerID:       ownerID,
+		GroupID:       groupID,
+		RepoID:        repoID,
+		EnvironmentID: environmentID,
+		Name:          name,
 	})
 	if err != nil {
 		return err
 	}
 
-	_, err = actions_model.DeleteVariable(ctx, v.ID, ownerID, groupID, repoID)
+	if environmentID != 0 {
+		_, err = actions_model.DeleteEnvironmentVariable(ctx, v.ID, repoID, environmentID)
+	} else {
+		_, err = actions_model.DeleteVariable(ctx, v.ID, ownerID, groupID, repoID)
+	}
 	return err
 }
 

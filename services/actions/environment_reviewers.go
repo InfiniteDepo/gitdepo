@@ -5,6 +5,7 @@ package actions
 
 import (
 	"context"
+	"errors"
 
 	actions_model "forgejo.org/models/actions"
 	org_model "forgejo.org/models/organization"
@@ -14,35 +15,50 @@ import (
 	"forgejo.org/modules/util"
 )
 
-// SetEnvironmentReviewers makes the users and teams the required reviewers of the environment (at most
-// actions_model.MaxEnvironmentReviewers together). A user is an existing individual account; a team belongs to the
-// organization that owns the repository, no other.
-func SetEnvironmentReviewers(ctx context.Context, e *actions_model.ActionEnvironment, userIDs, teamIDs []int64) error {
+// SaveEnvironment saves the rules of e with the users and teams as its required reviewers (at most
+// actions_model.MaxEnvironmentReviewers together) in one transaction, and reports if it created it. With e.ID 0 it
+// creates the environment of the repository named e.Name, or, when that name exists ignoring case, updates that one
+// (keeping its name). A user is an existing individual account; a team belongs to the organization that owns the
+// repository, no other. After an update the jobs that wait for the environment are decided again by the new rules.
+func SaveEnvironment(ctx context.Context, e *actions_model.ActionEnvironment, userIDs, teamIDs []int64) (bool, error) {
 	repo, err := repo_model.GetRepositoryByID(ctx, e.RepoID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	reviewers := make([]actions_model.ActionEnvironmentReviewer, 0, len(userIDs)+len(teamIDs))
 	for _, id := range userIDs {
 		u, err := user_model.GetUserByID(ctx, id)
 		if err != nil {
-			return util.NewInvalidArgumentErrorf("unknown reviewer")
+			return false, util.NewInvalidArgumentErrorf("unknown reviewer")
 		} else if id <= 0 || !u.IsIndividual() {
-			return util.NewInvalidArgumentErrorf("a reviewer is a user or a team")
+			return false, util.NewInvalidArgumentErrorf("a reviewer is a user or a team")
 		}
 		reviewers = append(reviewers, actions_model.ActionEnvironmentReviewer{UserID: id})
 	}
 	for _, id := range teamIDs {
 		team, err := org_model.GetTeamByID(ctx, id)
 		if err != nil || team.OrgID != repo.OwnerID {
-			return util.NewInvalidArgumentErrorf("unknown reviewer team") // the same for a team of another organization
+			return false, util.NewInvalidArgumentErrorf("unknown reviewer team") // the same for a team of another organization
 		}
 		reviewers = append(reviewers, actions_model.ActionEnvironmentReviewer{TeamID: id})
 	}
-	if err := actions_model.ReplaceEnvironmentReviewers(ctx, e, reviewers); err != nil {
-		return err
+	if e.ID == 0 {
+		stored, err := actions_model.GetRepoEnvironmentByName(ctx, e.RepoID, e.Name)
+		if errors.Is(err, actions_model.ErrEnvironmentNotFound) {
+			if err = actions_model.CreateEnvironment(ctx, e, reviewers); !errors.Is(err, actions_model.ErrEnvironmentExists) {
+				return err == nil, err
+			}
+			stored, err = actions_model.GetRepoEnvironmentByName(ctx, e.RepoID, e.Name) // created by a concurrent request
+		}
+		if err != nil {
+			return false, err
+		}
+		e.ID, e.Name = stored.ID, stored.Name
 	}
-	return emitEnvironmentRuns(ctx, e)
+	if err := actions_model.UpdateEnvironment(ctx, e, reviewers); err != nil {
+		return false, err
+	}
+	return false, emitEnvironmentRuns(ctx, e)
 }
 
 // emitEnvironmentRuns queues the gate for the runs that have a job of the environment no runner took yet, after a

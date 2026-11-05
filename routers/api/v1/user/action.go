@@ -101,7 +101,7 @@ func (Action) CreateOrUpdateSecret(ctx *context.APIContext) {
 
 	opt := web.GetForm(ctx).(*api.CreateOrUpdateSecretOption)
 
-	_, created, err := secrets_service.CreateOrUpdateSecret(ctx, ctx.Doer().ID, 0, 0, ctx.Params("secretname"), opt.Data)
+	_, created, err := secrets_service.CreateOrUpdateSecret(ctx, ctx.Doer().ID, 0, 0, 0, ctx.Params("secretname"), opt.Data)
 	if err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusBadRequest, "CreateOrUpdateSecret", err)
@@ -147,7 +147,7 @@ func (Action) DeleteSecret(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	err := secrets_service.DeleteSecretByName(ctx, ctx.Doer().ID, 0, 0, ctx.Params("secretname"))
+	err := secrets_service.DeleteSecretByName(ctx, ctx.Doer().ID, 0, 0, 0, ctx.Params("secretname"))
 	if err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusBadRequest, "DeleteSecret", err)
@@ -213,7 +213,7 @@ func (Action) CreateVariable(ctx *context.APIContext) {
 		return
 	}
 
-	if _, err := actions_service.CreateVariable(ctx, ownerID, 0, 0, variableName, opt.Value); err != nil {
+	if _, err := actions_service.CreateVariable(ctx, ownerID, 0, 0, 0, variableName, opt.Value); err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusBadRequest, "CreateVariable", err)
 		} else {
@@ -276,7 +276,7 @@ func (Action) UpdateVariable(ctx *context.APIContext) {
 	if opt.Name == "" {
 		opt.Name = ctx.Params("variablename")
 	}
-	if _, err := actions_service.UpdateVariable(ctx, v.ID, ctx.Doer().ID, 0, 0, opt.Name, opt.Value); err != nil {
+	if _, err := actions_service.UpdateVariable(ctx, v.ID, ctx.Doer().ID, 0, 0, 0, opt.Name, opt.Value); err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusBadRequest, "UpdateVariable", err)
 		} else {
@@ -315,7 +315,7 @@ func (Action) DeleteVariable(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	if err := actions_service.DeleteVariableByName(ctx, ctx.Doer().ID, 0, 0, ctx.Params("variablename")); err != nil {
+	if err := actions_service.DeleteVariableByName(ctx, ctx.Doer().ID, 0, 0, 0, ctx.Params("variablename")); err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusBadRequest, "DeleteVariableByName", err)
 		} else if errors.Is(err, util.ErrNotExist) {

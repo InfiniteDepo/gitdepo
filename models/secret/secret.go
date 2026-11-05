@@ -103,13 +103,8 @@ func insertEncryptedSecret(ctx context.Context, ownerID, groupID, repoID, enviro
 	}
 
 	return secret, db.WithTx(ctx, func(ctx context.Context) error {
-		if err := LockGroup(ctx, ownerID, groupID); err != nil {
+		if err := lockLevel(ctx, secret); err != nil {
 			return err
-		}
-		if environmentID != 0 {
-			if err := LockEnvironment(ctx, repoID, environmentID); err != nil {
-				return err
-			}
 		}
 		if err := db.Insert(ctx, secret); err != nil {
 			return err
@@ -159,7 +154,7 @@ func recordSecret(ctx context.Context, actions audit_model.LevelActions, s *Secr
 // DeleteSecret deletes s and records actions_secret.deleted.
 func DeleteSecret(ctx context.Context, s *Secret) error {
 	return db.WithTx(ctx, func(ctx context.Context) error {
-		if err := LockGroup(ctx, s.OwnerID, s.GroupID); err != nil {
+		if err := lockLevel(ctx, s); err != nil {
 			return err
 		}
 		actions := audit_model.LevelActions{Repo: "repo.actions_secret.deleted", Org: "org.actions_secret.deleted", Account: "account.actions_secret.deleted"}
@@ -172,6 +167,14 @@ func DeleteSecret(ctx context.Context, s *Secret) error {
 		_, err := db.DeleteByID[Secret](ctx, s.ID)
 		return err
 	})
+}
+
+// lockLevel takes the lock of the project or the environment that s belongs to, if any.
+func lockLevel(ctx context.Context, s *Secret) error {
+	if s.EnvironmentID != 0 {
+		return LockEnvironment(ctx, s.RepoID, s.EnvironmentID)
+	}
+	return LockGroup(ctx, s.OwnerID, s.GroupID)
 }
 
 // LockGroup locks the project row (nothing for groupID 0), so that deleting the project (which deletes its secrets)
@@ -285,7 +288,7 @@ func UpdateSecret(ctx context.Context, secret *Secret, valueChanged bool, column
 	secret.Name = strings.ToUpper(secret.Name)
 
 	return db.WithTx(ctx, func(ctx context.Context) error {
-		if err := LockGroup(ctx, secret.OwnerID, secret.GroupID); err != nil {
+		if err := lockLevel(ctx, secret); err != nil {
 			return err
 		}
 		e := db.GetEngine(ctx)

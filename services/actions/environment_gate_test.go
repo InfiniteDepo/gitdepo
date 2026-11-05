@@ -73,7 +73,7 @@ func deploymentOf(t *testing.T, job *actions_model.ActionRunJob) *actions_model.
 func newEnvironment(t *testing.T, e *actions_model.ActionEnvironment) *actions_model.ActionEnvironment {
 	t.Helper()
 	e.RepoID = 63
-	require.NoError(t, actions_model.CreateEnvironment(audit_model.WithSystem(t.Context(), "test"), e))
+	require.NoError(t, actions_model.CreateEnvironment(audit_model.WithSystem(t.Context(), "test"), e, nil))
 	return e
 }
 
@@ -375,7 +375,7 @@ func TestGateEnvironment(t *testing.T) {
 
 		// the environment's timer is shortened meanwhile: the deployment keeps the deadline it was given
 		env.WaitTimerMinutes = 1
-		require.NoError(t, actions_model.UpdateEnvironment(audit_model.WithSystem(t.Context(), "test"), env))
+		require.NoError(t, actions_model.UpdateEnvironment(audit_model.WithSystem(t.Context(), "test"), env, nil))
 		b, err = gateEnvironment(t.Context(), job)
 		require.NoError(t, err)
 		assert.Equal(t, behaviourHoldJob, b)
@@ -402,7 +402,7 @@ func TestGateEnvironment(t *testing.T) {
 		require.Equal(t, behaviourHoldJob, b)
 
 		env.RefPolicy, env.RefPatterns = actions_model.EnvironmentRefPatterns, []actions_model.EnvironmentRefPattern{branch("release/*")}
-		require.NoError(t, actions_model.UpdateEnvironment(audit_model.WithSystem(t.Context(), "test"), env))
+		require.NoError(t, actions_model.UpdateEnvironment(audit_model.WithSystem(t.Context(), "test"), env, nil))
 		timeutil.MockSet(start.Add(time.Hour))
 		b, err = gateEnvironment(t.Context(), job)
 		require.NoError(t, err)
@@ -752,7 +752,7 @@ func TestEnvironmentSecretsAndVariables(t *testing.T) {
 func otherRepoEnvironment(t *testing.T) *actions_model.ActionEnvironment {
 	t.Helper()
 	e := &actions_model.ActionEnvironment{RepoID: 1, Name: "elsewhere"}
-	require.NoError(t, actions_model.CreateEnvironment(audit_model.WithSystem(t.Context(), "test"), e))
+	require.NoError(t, actions_model.CreateEnvironment(audit_model.WithSystem(t.Context(), "test"), e, nil))
 	return e
 }
 
@@ -907,7 +907,7 @@ func TestGateAllowedWorkflows(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, behaviourHoldJob, b)
 		env.AllowedWorkflows = []string{"deploy.yml"}
-		require.NoError(t, actions_model.UpdateEnvironment(audit_model.WithSystem(t.Context(), "test"), env))
+		require.NoError(t, actions_model.UpdateEnvironment(audit_model.WithSystem(t.Context(), "test"), env, nil))
 		b, err = gateEnvironment(t.Context(), job)
 		require.NoError(t, err)
 		assert.Equal(t, behaviourFailJob, b)

@@ -204,7 +204,7 @@ func TestEnvironmentRowLock(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	ctx := audit_model.WithSystem(db.DefaultContext, "test")
 	env := &ActionEnvironment{RepoID: 1, Name: "locked"}
-	require.NoError(t, CreateEnvironment(ctx, env))
+	require.NoError(t, CreateEnvironment(ctx, env, nil))
 	require.NoError(t, db.WithTx(ctx, func(ctx context.Context) error { return LockEnvironment(ctx, 1, env.ID) }))
 	require.ErrorIs(t, LockEnvironment(ctx, 1, env.ID+1000), ErrEnvironmentNotFound)
 	require.ErrorIs(t, LockEnvironment(ctx, 2, env.ID), ErrEnvironmentNotFound, "another repository's environment")

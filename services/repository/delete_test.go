@@ -42,9 +42,9 @@ func TestDeleteRepository(t *testing.T) {
 		other := forgery.CreateRepository(t, user2, nil)
 		ctx := audit_model.WithSystem(t.Context(), "test")
 		env := &actions_model.ActionEnvironment{RepoID: repo.ID, Name: "prod"}
-		require.NoError(t, actions_model.CreateEnvironment(ctx, env))
+		require.NoError(t, actions_model.CreateEnvironment(ctx, env, nil))
 		otherEnv := &actions_model.ActionEnvironment{RepoID: other.ID, Name: "prod"}
-		require.NoError(t, actions_model.CreateEnvironment(ctx, otherEnv))
+		require.NoError(t, actions_model.CreateEnvironment(ctx, otherEnv, nil))
 		for _, e := range []*actions_model.ActionEnvironment{env, otherEnv} {
 			_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, e.RepoID, e.ID, "TOKEN", "s3cr3t")
 			require.NoError(t, err)

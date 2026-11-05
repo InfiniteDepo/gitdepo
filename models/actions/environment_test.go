@@ -167,13 +167,13 @@ func TestEnvironmentLifecycle(t *testing.T) {
 	since := auditMax(t)
 
 	prod := &ActionEnvironment{RepoID: 1, Name: "Production", RefPolicy: EnvironmentRefPatterns, RefPatterns: []EnvironmentRefPattern{{EnvironmentPatternBranch, "main"}}}
-	require.NoError(t, CreateEnvironment(ctx, prod))
+	require.NoError(t, CreateEnvironment(ctx, prod, nil))
 	assert.NotZero(t, prod.ID)
 	assert.EqualValues(t, 0, prod.OwnerID)
-	require.ErrorIs(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 1, Name: "PRODUCTION"}), ErrEnvironmentExists, "a twin of another case")
-	require.ErrorIs(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 1, Name: "a\nb"}), util.ErrInvalidArgument)
-	require.ErrorIs(t, CreateEnvironment(ctx, &ActionEnvironment{Name: "x"}), util.ErrInvalidArgument, "needs a repository")
-	require.NoError(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 2, Name: "Production"}), "the name is per repository")
+	require.ErrorIs(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 1, Name: "PRODUCTION"}, nil), ErrEnvironmentExists, "a twin of another case")
+	require.ErrorIs(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 1, Name: "a\nb"}, nil), util.ErrInvalidArgument)
+	require.ErrorIs(t, CreateEnvironment(ctx, &ActionEnvironment{Name: "x"}, nil), util.ErrInvalidArgument, "needs a repository")
+	require.NoError(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 2, Name: "Production"}, nil), "the name is per repository")
 
 	for _, name := range []string{"production", "PRODUCTION", " Production "} {
 		found, err := GetRepoEnvironmentByName(ctx, 1, name)
@@ -194,6 +194,8 @@ func TestEnvironmentLifecycle(t *testing.T) {
 	assert.Empty(t, staging.RefPatterns)
 	assert.Zero(t, staging.WaitTimerMinutes)
 	assert.Empty(t, staging.RunnerLabels)
+	assert.True(t, staging.CreatedByWorkflow, "a workflow created it")
+	assert.False(t, prod.CreatedByWorkflow)
 	twin, err := GetOrCreateRepoEnvironment(ctx, 1, "staging")
 	require.NoError(t, err)
 	assert.Equal(t, staging.ID, twin.ID)
@@ -206,23 +208,29 @@ func TestEnvironmentLifecycle(t *testing.T) {
 	_, err = GetOrCreateRepoEnvironment(ctx, 1, strings.Repeat("a", 256))
 	require.ErrorIs(t, err, util.ErrInvalidArgument)
 
-	envs, err := FindRepoEnvironments(ctx, 1)
+	envs, count, err := FindRepoEnvironments(ctx, 1, db.ListOptions{})
 	require.NoError(t, err)
 	require.Len(t, envs, 2)
+	assert.EqualValues(t, 2, count)
 	assert.Equal(t, "Production", envs[0].Name)
+	envs, count, err = FindRepoEnvironments(ctx, 1, db.ListOptions{Page: 2, PageSize: 1})
+	require.NoError(t, err)
+	require.Len(t, envs, 1)
+	assert.EqualValues(t, 2, count, "the count is of every page")
+	assert.Equal(t, "staging", envs[0].LowerName)
 
 	// an update changes the rules, not the name's identity
 	prod.RefPolicy, prod.RefPatterns, prod.WaitTimerMinutes, prod.Name = EnvironmentRefProtectedBranches, nil, 10, "PRODUCTION"
-	require.NoError(t, UpdateEnvironment(ctx, prod))
+	require.NoError(t, UpdateEnvironment(ctx, prod, nil))
 	stored, err := GetRepoEnvironmentByID(ctx, 1, prod.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "PRODUCTION", stored.Name)
 	assert.Equal(t, 10, stored.WaitTimerMinutes)
 	assert.Empty(t, stored.RefPatterns)
-	require.NoError(t, UpdateEnvironment(ctx, stored), "an update without a change records nothing")
+	require.NoError(t, UpdateEnvironment(ctx, stored, nil), "an update without a change records nothing")
 	renamed := *stored
 	renamed.Name = "Live"
-	require.ErrorIs(t, UpdateEnvironment(ctx, &renamed), util.ErrInvalidArgument)
+	require.ErrorIs(t, UpdateEnvironment(ctx, &renamed, nil), util.ErrInvalidArgument)
 
 	// secrets and variables of an environment go with it; the deployments stay
 	secret, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 1, prod.ID, "token", "s3cr3t-value")
@@ -309,7 +317,7 @@ func TestEnvironmentLimit(t *testing.T) {
 	}
 	_, err := GetOrCreateRepoEnvironment(ctx, 1, "one-too-many")
 	require.ErrorIs(t, err, ErrEnvironmentLimit)
-	require.ErrorIs(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 1, Name: "also-too-many"}), ErrEnvironmentLimit)
+	require.ErrorIs(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 1, Name: "also-too-many"}, nil), ErrEnvironmentLimit)
 	existing, err := GetOrCreateRepoEnvironment(ctx, 1, "ENV-7")
 	require.NoError(t, err, "an environment that exists is still found at the cap")
 	assert.Equal(t, "env-7", existing.Name)
@@ -430,7 +438,7 @@ func TestEnvironmentSecretVariableAudit(t *testing.T) {
 func TestEnvironmentNamesAreASCII(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	ctx := auditCtx()
-	require.NoError(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 1, Name: "Kprod"}))
+	require.NoError(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 1, Name: "Kprod"}, nil))
 	got, err := GetRepoEnvironmentByName(ctx, 1, "  kPROD ")
 	require.NoError(t, err)
 	assert.Equal(t, "Kprod", got.Name)

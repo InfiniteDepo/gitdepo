@@ -209,3 +209,33 @@ func FindRunDeployments(ctx context.Context, runID int64) ([]*ActionDeployment, 
 	var ds []*ActionDeployment
 	return ds, db.GetEngine(ctx).Where("run_id = ?", runID).OrderBy("job_id, attempt").Find(&ds)
 }
+
+// FindLastDeployments returns the newest deployment of each of the environments of the repository that has one.
+func FindLastDeployments(ctx context.Context, repoID int64, environmentIDs []int64) (map[int64]*ActionDeployment, error) {
+	var ids []int64
+	if err := db.GetEngine(ctx).Table("action_deployment").Select("MAX(id)").Where("repo_id = ?", repoID).
+		In("environment_id", environmentIDs).GroupBy("environment_id").Find(&ids); err != nil {
+		return nil, err
+	}
+	var ds []*ActionDeployment
+	if err := db.GetEngine(ctx).In("id", ids).Find(&ds); err != nil {
+		return nil, err
+	}
+	out := make(map[int64]*ActionDeployment, len(ds))
+	for _, d := range ds {
+		out[d.EnvironmentID] = d
+	}
+	return out, nil
+}
+
+// FindRepoDeployments returns a page of the deployments of the repository, newest first, of one environment
+// (environmentID 0: of every environment), and how many there are.
+func FindRepoDeployments(ctx context.Context, repoID, environmentID int64, opts db.ListOptions) ([]*ActionDeployment, int64, error) {
+	sess := db.GetEngine(ctx).Where("repo_id = ?", repoID)
+	if environmentID != 0 {
+		sess = sess.And("environment_id = ?", environmentID)
+	}
+	var ds []*ActionDeployment
+	count, err := db.SetSessionPagination(sess, &opts).OrderBy("id DESC").FindAndCount(&ds)
+	return ds, count, err
+}

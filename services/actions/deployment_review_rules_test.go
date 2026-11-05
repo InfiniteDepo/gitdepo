@@ -30,7 +30,7 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 	t.Run("reviewers added while the timer runs hold the job for an approval", func(t *testing.T) {
 		f := newReviewFixture(t, &actions_model.ActionEnvironment{WaitTimerMinutes: 5}, nil, nil)
 		assert.Equal(t, actions_model.DeploymentWaitingTimer, f.status(t))
-		require.NoError(t, SetEnvironmentReviewers(f.ctx, f.env, []int64{2}, nil))
+		require.NoError(t, setReviewers(f.ctx, f.env, []int64{2}, nil))
 		b, err := gateEnvironment(f.ctx, f.job)
 		require.NoError(t, err)
 		assert.Equal(t, behaviourHoldJob, b)
@@ -39,7 +39,7 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 
 	t.Run("reviewers removed by an edit release a job that waits for an approval", func(t *testing.T) {
 		f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{2}, nil)
-		require.NoError(t, SetEnvironmentReviewers(f.ctx, f.env, nil, nil))
+		require.NoError(t, setReviewers(f.ctx, f.env, nil, nil))
 		b, err := gateEnvironment(f.ctx, f.job)
 		require.NoError(t, err)
 		assert.Equal(t, behaviourExecuteJob, b)
@@ -49,7 +49,7 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 	t.Run("reviewers lost by a deletion keep holding, one entry per environment", func(t *testing.T) {
 		f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{2, 4}, nil)
 		other := newEnvironment(t, &actions_model.ActionEnvironment{Name: "other"})
-		require.NoError(t, SetEnvironmentReviewers(f.ctx, other, []int64{4}, nil))
+		require.NoError(t, setReviewers(f.ctx, other, []int64{4}, nil))
 		since := auditSince(t)
 		require.NoError(t, db.WithTx(f.ctx, func(ctx context.Context) error {
 			return actions_model.RemoveReviewers(ctx, actions_model.UserReviewerCond(4))
@@ -68,7 +68,7 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 		d := &actions_model.ActionDeployment{Status: actions_model.DeploymentWaitingReview, Created: 1 << 40}
 		nextDeploymentStatus(d, stored, "", 1)
 		assert.Equal(t, actions_model.DeploymentWaitingReview, d.Status)
-		require.NoError(t, SetEnvironmentReviewers(f.ctx, stored, nil, nil))
+		require.NoError(t, setReviewers(f.ctx, stored, nil, nil))
 		stored, err = actions_model.GetRepoEnvironmentByID(f.ctx, 63, other.ID)
 		require.NoError(t, err)
 		assert.False(t, stored.ReviewsRequired, "an edit is how the rule is lifted")
@@ -77,7 +77,7 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 	t.Run("deleting a team keeps the environment holding", func(t *testing.T) {
 		f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{2}, nil)
 		teamReadsActions(t, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3}))
-		require.NoError(t, SetEnvironmentReviewers(f.ctx, f.env, nil, []int64{2}))
+		require.NoError(t, setReviewers(f.ctx, f.env, nil, []int64{2}))
 		team, err := org_model.GetTeamByID(f.ctx, 2)
 		require.NoError(t, err)
 		since := auditSince(t)
@@ -91,7 +91,7 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 	t.Run("a transfer drops the teams of the old organization, audited, and keeps requiring a review", func(t *testing.T) {
 		f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{2}, nil)
 		teamReadsActions(t, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3}))
-		require.NoError(t, SetEnvironmentReviewers(f.ctx, f.env, []int64{2}, []int64{2})) // team 2 is organization 3's
+		require.NoError(t, setReviewers(f.ctx, f.env, []int64{2}, []int64{2})) // team 2 is organization 3's
 		require.NoError(t, db.WithTx(f.ctx, func(ctx context.Context) error {
 			return actions_model.RemoveReviewers(ctx, actions_model.ForeignTeamReviewerCond(63, 3))
 		}))
@@ -124,14 +124,14 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 		assert.Len(t, auditActions(t, since, "repo.actions_env.updated"), 1)
 		// a team of another organization, as after a restore to a new owner
 		require.NoError(t, db.WithTx(f.ctx, func(ctx context.Context) error {
-			require.NoError(t, actions_model.ReplaceEnvironmentReviewers(ctx, f.env, []actions_model.ActionEnvironmentReviewer{{UserID: 2}, {TeamID: 2}}))
+			require.NoError(t, replaceReviewers(ctx, f.env, []actions_model.ActionEnvironmentReviewer{{UserID: 2}, {TeamID: 2}}))
 			return actions_model.RemoveReviewers(ctx, actions_model.ForeignTeamReviewerCond(63, 6))
 		}))
 		rs, err := actions_model.FindEnvironmentReviewers(f.ctx, f.env.ID)
 		require.NoError(t, err)
 		assert.Len(t, rs, 1)
 		// deleting a team that reviews there
-		require.NoError(t, actions_model.ReplaceEnvironmentReviewers(f.ctx, f.env, []actions_model.ActionEnvironmentReviewer{{TeamID: 2}}))
+		require.NoError(t, replaceReviewers(f.ctx, f.env, []actions_model.ActionEnvironmentReviewer{{TeamID: 2}}))
 		team, err := org_model.GetTeamByID(f.ctx, 2)
 		require.NoError(t, err)
 		require.NoError(t, models.DeleteTeam(f.ctx, team))
@@ -165,7 +165,7 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 		defer test.MockVariableValue(&jobEmitterQueue, q)()
 		_, err = db.GetEngine(t.Context()).Exec("UPDATE action_run_job SET task_id = 0 WHERE id = ?", f.job.ID) // no runner took it
 		require.NoError(t, err)
-		require.NoError(t, SetEnvironmentReviewers(f.ctx, f.env, nil, nil))
+		require.NoError(t, setReviewers(f.ctx, f.env, nil, nil))
 		select {
 		case id := <-queued:
 			assert.Equal(t, f.run.ID, id)
@@ -181,7 +181,7 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 		defer test.MockVariableValue(&setting.Actions.DeploymentApprovalTimeout, 48*time.Hour)()
 		_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET created = ? WHERE job_id = ?", time.Now().Add(-49*time.Hour).Unix(), f.job.ID)
 		require.NoError(t, err)
-		require.NoError(t, actions_model.ReplaceEnvironmentReviewers(f.ctx, f.env, nil)) // no emitter pass, as in a race with the cron
+		require.NoError(t, replaceReviewers(f.ctx, f.env, nil)) // no emitter pass, as in a race with the cron
 		require.NoError(t, ExpireDeploymentReviews(f.ctx))
 		assert.Equal(t, actions_model.DeploymentWaitingReview, f.status(t), "not expired")
 		f.emit(t)
@@ -208,7 +208,7 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 		require.NoError(t, unittest.PrepareTestDatabase())
 		for _, name := range []string{"a:b", "a b", "a\tb", "a\u00a0b", "a\u2003b"} {
 			require.Error(t, actions_model.CreateEnvironment(audit_model.WithSystem(t.Context(), "test"),
-				&actions_model.ActionEnvironment{RepoID: 63, Name: name}), name)
+				&actions_model.ActionEnvironment{RepoID: 63, Name: name}, nil), name)
 		}
 	})
 }
