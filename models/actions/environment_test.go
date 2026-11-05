@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
 	secret_model "forgejo.org/models/secret"
@@ -57,6 +58,13 @@ func TestEnvironmentNormalize(t *testing.T) {
 		"name with tab":            func(e *ActionEnvironment) { e.Name = "pro\td" },
 		"name with unicode space":  func(e *ActionEnvironment) { e.Name = "prod\u2003" },
 		"name with DEL":            func(e *ActionEnvironment) { e.Name = "pro\x7fd" },
+		"name of dots":             func(e *ActionEnvironment) { e.Name = ".." },
+		"name of one dot":          func(e *ActionEnvironment) { e.Name = "." },
+		"name with slash":          func(e *ActionEnvironment) { e.Name = "a/b" },
+		"name with question mark":  func(e *ActionEnvironment) { e.Name = "a?b" },
+		"name with hash":           func(e *ActionEnvironment) { e.Name = "a#b" },
+		"name with percent":        func(e *ActionEnvironment) { e.Name = "a%2fb" },
+		"name with backslash":      func(e *ActionEnvironment) { e.Name = "a\\b" },
 		"allowed workflow empty":   func(e *ActionEnvironment) { e.AllowedWorkflows = []string{""} },
 		"allowed workflow unicode": func(e *ActionEnvironment) { e.AllowedWorkflows = []string{"d\u0435ploy.yml"} },
 		"allowed workflow control": func(e *ActionEnvironment) { e.AllowedWorkflows = []string{"deploy\n.yml"} },
@@ -432,6 +440,64 @@ func TestEnvironmentSecretVariableAudit(t *testing.T) {
 		"repo.actions_env_secret.created", "repo.actions_env_secret.updated", "repo.actions_env_secret.deleted",
 		"repo.actions_env_variable.created", "repo.actions_env_variable.updated", "repo.actions_env_variable.deleted",
 	}, actions)
+}
+
+// Values of secrets and variables are at most 64 KiB at every level, an environment holds at most 100 of each, and
+// only the doer's own act writes an environment's secrets, variables and rules, whoever calls the model.
+func TestEnvironmentSecretVariableLimits(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := auditCtx()
+	env, err := GetOrCreateRepoEnvironment(ctx, 1, "limits")
+	require.NoError(t, err)
+
+	big := strings.Repeat("x", secret_model.MaxValueSize+1)
+	fits := strings.Repeat("x", secret_model.MaxValueSize)
+	_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, 1, env.ID, "BIG", big)
+	require.ErrorIs(t, err, util.ErrInvalidArgument)
+	_, err = secret_model.InsertEncryptedSecret(ctx, 0, 0, 1, "BIG", big)
+	require.ErrorIs(t, err, util.ErrInvalidArgument, "a repository secret too")
+	_, err = InsertEnvironmentVariable(ctx, 1, env.ID, "BIG", big)
+	require.ErrorIs(t, err, util.ErrInvalidArgument)
+	_, err = InsertVariable(ctx, 2, 0, 0, "BIG", big)
+	require.ErrorIs(t, err, util.ErrInvalidArgument, "an owner variable too")
+	v, err := InsertEnvironmentVariable(ctx, 1, env.ID, "FITS", fits)
+	require.NoError(t, err)
+	v.Data = big
+	_, err = UpdateVariable(ctx, v)
+	require.ErrorIs(t, err, util.ErrInvalidArgument, "an update too")
+
+	for i := 1; i < secret_model.MaxPerEnvironment; i++ {
+		_, err := InsertEnvironmentVariable(ctx, 1, env.ID, fmt.Sprintf("V%d", i), "x")
+		require.NoError(t, err)
+	}
+	for i := range secret_model.MaxPerEnvironment {
+		_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 1, env.ID, fmt.Sprintf("S%d", i), "x")
+		require.NoError(t, err)
+	}
+	_, err = InsertEnvironmentVariable(ctx, 1, env.ID, "ONE_MORE", "x")
+	require.ErrorIs(t, err, util.ErrInvalidArgument)
+	_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, 1, env.ID, "ONE_MORE", "x")
+	require.ErrorIs(t, err, util.ErrInvalidArgument)
+	_, err = InsertVariable(ctx, 0, 0, 1, "ONE_MORE", "x")
+	require.NoError(t, err, "the repository level has no count cap")
+
+	t.Run("own act", func(t *testing.T) {
+		bare := t.Context() // no actor: can't be told from a delegated credential
+		_, err := InsertEnvironmentVariable(bare, 1, env.ID, "NOT_OWN", "x")
+		require.ErrorIs(t, err, audit_model.ErrNotOwnAct)
+		_, err = secret_model.InsertEncryptedEnvironmentSecret(bare, 1, env.ID, "NOT_OWN", "x")
+		require.ErrorIs(t, err, audit_model.ErrNotOwnAct)
+		v.Data = "y"
+		_, err = UpdateVariable(bare, v)
+		require.ErrorIs(t, err, audit_model.ErrNotOwnAct)
+		_, err = DeleteEnvironmentVariable(bare, v.ID, 1, env.ID)
+		require.ErrorIs(t, err, audit_model.ErrNotOwnAct)
+		require.ErrorIs(t, UpdateEnvironment(bare, env, nil), audit_model.ErrNotOwnAct)
+		require.ErrorIs(t, CreateEnvironment(bare, &ActionEnvironment{RepoID: 1, Name: "other"}, nil), audit_model.ErrNotOwnAct)
+		require.ErrorIs(t, DeleteEnvironment(bare, env, func(context.Context) error { return nil }), audit_model.ErrNotOwnAct)
+		_, err = InsertVariable(bare, 0, 0, 1, "REPO_LEVEL", "x")
+		require.NoError(t, err, "the repository level keeps its own rules")
+	})
 }
 
 // A look-alike or non-ASCII name finds no environment (the Kelvin sign lower-cases to an ASCII k) and creates none.

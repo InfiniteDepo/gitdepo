@@ -432,7 +432,7 @@ func TestActionsEnvironmentReviews(t *testing.T) {
 			d := deployment(unapproved, 1)
 			assert.Equal(t, actions_model.DeploymentWaitingReview, d.Status)
 			assert.NotZero(t, d.ReleaseAfterUnix)
-			_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET release_after_unix = 1 WHERE id = ?", d.ID)
+			_, err := db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET release_after_unix = 1, created = created - 86400 WHERE id = ?", d.ID)
 			require.NoError(t, err)
 			require.NoError(t, actions_service.StartDueDeployments(t.Context()))
 			assert.Equal(t, actions_model.DeploymentWaitingReview, deployment(unapproved, 1).Status)
@@ -449,7 +449,7 @@ func TestActionsEnvironmentReviews(t *testing.T) {
 			assert.Equal(t, actions_model.StatusBlocked, reload(approved).Status, "not due")
 
 			// the timer ends: the approved job is released, the other one still waits
-			_, err = db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET release_after_unix = 1 WHERE id = ?", deployment(approved, 1).ID)
+			_, err = db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET release_after_unix = 1, created = created - 86400 WHERE id = ?", deployment(approved, 1).ID)
 			require.NoError(t, err)
 			require.NoError(t, actions_service.StartDueDeployments(t.Context()))
 			assert.Equal(t, actions_model.DeploymentReleased, deployment(approved, 1).Status)
@@ -615,7 +615,7 @@ jobs:
 			require.NoError(t, err)
 			assert.False(t, isDue())
 			MakeRequest(t, NewRequestWithJSON(t, "PUT", fmt.Sprintf("/api/v1/repos/%s/%s/actions/environments/lost-pass", user2.Name, repo.Name),
-				api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: user4.ID}}}).AddTokenAuth(ownerToken), http.StatusOK)
+				envRules(api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: user4.ID}}})).AddTokenAuth(ownerToken), http.StatusOK)
 			assert.False(t, isDue())
 
 			// the reviewers are removed and the change is committed, but its own pass of the gate never runs (what

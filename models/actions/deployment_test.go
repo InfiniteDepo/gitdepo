@@ -5,6 +5,7 @@ package actions
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -251,7 +252,7 @@ func TestStaleDeploymentsAreDue(t *testing.T) {
 
 	setTimes(now-10, now-50) // the rules changed after the deployments
 	assert.ElementsMatch(t, []int64{791, 792}, due())
-	// a failed pass keeps the change visible (a timer's deployment is not touched), the other runs stay due
+	// a pass that failed to queue keeps the change visible (only the time it was looked at moves)
 	require.NoError(t, TouchDueDeployments(ctx, 792, now))
 	assert.ElementsMatch(t, []int64{791, 792}, due())
 	// a queued pass marks them seen
@@ -270,4 +271,84 @@ func TestStaleDeploymentsAreDue(t *testing.T) {
 	_, err = db.GetEngine(ctx).Exec("UPDATE action_deployment SET repo_id = 5 WHERE id = ?", timer.ID)
 	require.NoError(t, err)
 	assert.Empty(t, due())
+}
+
+// Runs whose pass keeps failing, more of them than one tick takes, never hold back the others: a run is taken again only
+// after every run that waits longer, stale ones (whose environment changed) included.
+func TestStuckDeploymentsDontStarveOthers(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := auditCtx()
+	now := timeutil.TimeStampNow()
+	env := &ActionEnvironment{RepoID: 4, Name: "prod"}
+	require.NoError(t, CreateEnvironment(ctx, env, nil))
+	newDeployment := func(runID int64, status DeploymentStatus, envID int64, updated timeutil.TimeStamp) {
+		job := &ActionRunJob{RunID: runID, RepoID: 4, OwnerID: 1, Attempt: 1, JobID: "deploy", Status: StatusBlocked, Handle: fmt.Sprintf("stuck-%d", runID)}
+		require.NoError(t, db.Insert(ctx, job))
+		d := &ActionDeployment{RepoID: 4, EnvironmentID: envID, RunID: runID, JobID: job.ID, Attempt: 1, Status: status, ReleaseAfterUnix: now - 1}
+		require.NoError(t, db.Insert(ctx, d))
+		_, err := db.GetEngine(ctx).Exec("UPDATE action_deployment SET updated = ? WHERE id = ?", updated, d.ID)
+		require.NoError(t, err)
+	}
+	// three runs wait under rules changed since (their environment is newer), longest waiting first; a fourth run of
+	// another environment's timer became due later
+	for i := range int64(3) {
+		newDeployment(5001+i, DeploymentWaitingReview, env.ID, now-1000+timeutil.TimeStamp(i))
+	}
+	newDeployment(5100, DeploymentWaitingTimer, 0, now-10)
+	_, err := db.GetEngine(ctx).Exec("UPDATE action_environment SET updated = ? WHERE id = ?", now-100, env.ID)
+	require.NoError(t, err)
+
+	seen := map[int64]int{}
+	for tick := range 3 {
+		runs, err := FindDueDeploymentRunIDs(ctx, now, 2)
+		require.NoError(t, err)
+		require.Len(t, runs, 2)
+		for _, runID := range runs {
+			seen[runID]++
+			if runID != 5100 { // the stuck runs: their pass fails every time, so each goes to the back of the line
+				require.NoError(t, TouchDueDeployments(ctx, runID, now+timeutil.TimeStamp(tick)))
+			}
+		}
+		if seen[5100] > 0 {
+			break
+		}
+	}
+	assert.Equal(t, 1, seen[5100], "the other run is taken in spite of more stuck runs than one tick takes")
+	assert.Equal(t, map[int64]int{5001: 1, 5002: 1, 5003: 1, 5100: 1}, seen, "each once, in turn")
+	// they stay stale, and stay due, until a pass is queued
+	runs, err := FindDueDeploymentRunIDs(ctx, now, 10)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []int64{5001, 5002, 5003, 5100}, runs)
+}
+
+// One repository with many due runs (an edit of its rules makes all its waiting ones stale) takes at most
+// MaxDueRunsPerRepo of a tick: another repository's due timer is taken in the same tick.
+func TestDueDeploymentsPerRepository(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := auditCtx()
+	now := timeutil.TimeStampNow()
+	flood := &ActionEnvironment{RepoID: 4, Name: "flood"}
+	require.NoError(t, CreateEnvironment(ctx, flood, nil))
+	for i := range int64(150) {
+		job := &ActionRunJob{RunID: 6000 + i, RepoID: 4, OwnerID: 1, Attempt: 1, JobID: "deploy", Status: StatusBlocked, Handle: fmt.Sprintf("flood-%d", i)}
+		require.NoError(t, db.Insert(ctx, job))
+		require.NoError(t, db.Insert(ctx, &ActionDeployment{RepoID: 4, EnvironmentID: flood.ID, RunID: job.RunID, JobID: job.ID, Attempt: 1, Status: DeploymentWaitingReview}))
+	}
+	_, err := db.GetEngine(ctx).Exec("UPDATE action_deployment SET updated = ? WHERE environment_id = ?", now-7200, flood.ID)
+	require.NoError(t, err)
+	_, err = db.GetEngine(ctx).Exec("UPDATE action_environment SET updated = ? WHERE id = ?", now-1, flood.ID) // the rules were just edited
+	require.NoError(t, err)
+	victim := &ActionRunJob{RunID: 6999, RepoID: 1, OwnerID: 2, Attempt: 1, JobID: "deploy", Status: StatusBlocked, Handle: "victim"}
+	require.NoError(t, db.Insert(ctx, victim))
+	require.NoError(t, db.Insert(ctx, &ActionDeployment{RepoID: 1, RunID: 6999, JobID: victim.ID, Attempt: 1, Status: DeploymentWaitingTimer, ReleaseAfterUnix: now - 60}))
+	_, err = db.GetEngine(ctx).Exec("UPDATE action_deployment SET updated = ? WHERE job_id = ?", now-120, victim.ID)
+	require.NoError(t, err)
+
+	runs, err := FindDueDeploymentRunIDs(ctx, now, 100)
+	require.NoError(t, err)
+	assert.Len(t, runs, MaxDueRunsPerRepo+1)
+	assert.Contains(t, runs, int64(6999), "the other repository's due timer is in the same tick")
+	runs, err = FindDueDeploymentRunIDs(ctx, now, 5)
+	require.NoError(t, err)
+	assert.Len(t, runs, 5, "bounded")
 }

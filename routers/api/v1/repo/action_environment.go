@@ -214,8 +214,9 @@ func CreateOrUpdateActionEnvironment(ctx *context.APIContext) {
 	// ---
 	// summary: Create a deployment environment of a repository, or replace the protection rules of the one with that name
 	// description: >
-	//   The body is the whole set of rules: a field left out is reset to no rule, so a body without reviewers removes
-	//   them and the jobs that wait for a review are released. An environment whose name differs only in case is the
+	//   The body is the whole set of rules and every field is required (a field left out is a 422): an empty list, 0
+	//   or false sets no rule, so an empty reviewers list removes them and the jobs that wait for a review are
+	//   released. An environment whose name differs only in case is the
 	//   same environment and keeps its name. Every change is recorded in the audit log. Only a person's own
 	//   credential changes the rules: a request under sudo, with an OAuth2 grant or with an authorized integration is a
 	//   403. An unknown reviewer, or one the caller can't see, is a 422; so is an invalid rule.
@@ -258,15 +259,19 @@ func CreateOrUpdateActionEnvironment(ctx *context.APIContext) {
 	//     "$ref": "#/responses/validationError"
 
 	form := web.GetForm(ctx).(*api.CreateOrUpdateEnvironmentOption)
-	env := &actions_model.ActionEnvironment{
-		RepoID: ctx.Repo().Repository.ID, Name: ctx.Params("environment"), WaitTimerMinutes: form.WaitTimer,
-		PreventSelfReview: form.PreventSelfReview, RunnerLabels: form.RunnerLabels, AllowedWorkflows: form.AllowedWorkflows,
+	// every rule is required: a field left out would remove a rule the client may not know about
+	if form.RefPolicy == "" || form.RefPatterns == nil || form.WaitTimer == nil || form.PreventSelfReview == nil ||
+		form.Reviewers == nil || form.RunnerLabels == nil || form.AllowedWorkflows == nil {
+		ctx.Error(http.StatusUnprocessableEntity, "CreateOrUpdateEnvironmentOption", "every rule is required: ref_policy, ref_patterns, wait_timer, prevent_self_review, reviewers, runner_labels and allowed_workflows")
+		return
 	}
-	if form.RefPolicy != "" {
-		if env.RefPolicy = slices.Index(refPolicies, form.RefPolicy); env.RefPolicy < 0 {
-			ctx.Error(http.StatusUnprocessableEntity, "ref_policy", "ref_policy must be any, protected_branches or patterns")
-			return
-		}
+	env := &actions_model.ActionEnvironment{
+		RepoID: ctx.Repo().Repository.ID, Name: ctx.Params("environment"), WaitTimerMinutes: *form.WaitTimer,
+		PreventSelfReview: *form.PreventSelfReview, RunnerLabels: form.RunnerLabels, AllowedWorkflows: form.AllowedWorkflows,
+	}
+	if env.RefPolicy = slices.Index(refPolicies, form.RefPolicy); env.RefPolicy < 0 {
+		ctx.Error(http.StatusUnprocessableEntity, "ref_policy", "ref_policy must be any, protected_branches or patterns")
+		return
 	}
 	for _, p := range form.RefPatterns {
 		if p == nil {
@@ -771,6 +776,8 @@ func UpdateActionEnvironmentVariable(ctx *context.APIContext) {
 	//     "$ref": "#/responses/notFound"
 	//   "423":
 	//     "$ref": "#/responses/repoArchivedError"
+	//   "409":
+	//     description: a variable of the new name exists
 	if env := environmentOfRepo(ctx); env != nil {
 		updateRepoVariable(ctx, env.ID)
 	}

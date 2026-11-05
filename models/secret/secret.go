@@ -93,6 +93,9 @@ func insertEncryptedSecret(ctx context.Context, ownerID, groupID, repoID, enviro
 	if err := ValidateName(name); err != nil {
 		return nil, err
 	}
+	if err := ValidateValue(data); err != nil {
+		return nil, err
+	}
 
 	secret := &Secret{
 		OwnerID:       ownerID,
@@ -104,6 +107,9 @@ func insertEncryptedSecret(ctx context.Context, ownerID, groupID, repoID, enviro
 
 	return secret, db.WithTx(ctx, func(ctx context.Context) error {
 		if err := LockLevel(ctx, secret.OwnerID, secret.GroupID, secret.RepoID, secret.EnvironmentID); err != nil {
+			return err
+		}
+		if err := CheckEnvironmentCount(ctx, "secret", repoID, environmentID); err != nil {
 			return err
 		}
 		if err := db.Insert(ctx, secret); err != nil {
@@ -176,6 +182,10 @@ func DeleteSecret(ctx context.Context, s *Secret) error {
 // write of one takes it.
 func LockLevel(ctx context.Context, ownerID, groupID, repoID, environmentID int64) error {
 	if environmentID != 0 {
+		// an environment's secrets and variables are part of its deployment protection, like its rules
+		if err := audit_model.CheckOwnAct(ctx); err != nil {
+			return err
+		}
 		return LockEnvironment(ctx, repoID, environmentID)
 	}
 	return LockGroup(ctx, ownerID, groupID)
@@ -377,6 +387,35 @@ func FetchEnvironmentSecrets(ctx context.Context, repoID, environmentID int64) (
 		secrets[secret.Name] = decryptedData
 	}
 	return secrets, nil
+}
+
+// MaxValueSize is the largest value of a secret or a variable, at every level (GitHub's limit for a secret), and
+// MaxPerEnvironment the most secrets, and the most variables, one deployment environment holds.
+const (
+	MaxValueSize      = 64 << 10
+	MaxPerEnvironment = 100
+)
+
+// ValidateValue refuses a value of a secret or variable larger than MaxValueSize.
+func ValidateValue(data string) error {
+	if len(data) > MaxValueSize {
+		return util.NewInvalidArgumentErrorf("the value is larger than 64 KiB")
+	}
+	return nil
+}
+
+// CheckEnvironmentCount refuses one more row of table (secret or action_variable) in an environment that holds
+// MaxPerEnvironment; call it under the environment's lock.
+func CheckEnvironmentCount(ctx context.Context, table string, repoID, environmentID int64) error {
+	if environmentID == 0 {
+		return nil
+	}
+	if n, err := db.GetEngine(ctx).Table(table).Where("repo_id = ? AND environment_id = ?", repoID, environmentID).Count(); err != nil {
+		return err
+	} else if n >= MaxPerEnvironment {
+		return util.NewInvalidArgumentErrorf("an environment holds at most %d secrets and %d variables", MaxPerEnvironment, MaxPerEnvironment)
+	}
+	return nil
 }
 
 func ValidateName(name string) error {

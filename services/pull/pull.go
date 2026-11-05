@@ -149,6 +149,9 @@ func NewPullRequest(ctx context.Context, repo *repo_model.Repository, issue *iss
 	baseGitRepo.Close() // close immediately to avoid notifications will open the repository again
 
 	issue_service.ReviewRequestNotify(ctx, issue, issue.Poster, reviewNotifiers)
+	if pr.CommitsAhead > 0 {
+		RequestDefaultReviewers(ctx, pr, "")
+	}
 
 	mentions, err := issues_model.FindAndUpdateIssueMentions(ctx, issue, issue.Poster, issue.Content)
 	if err != nil {
@@ -308,6 +311,7 @@ func changeTargetBranch(ctx context.Context, pr *issues_model.PullRequest, doer 
 	if _, err = issues_model.CreateComment(ctx, options); err != nil {
 		return fmt.Errorf("CreateChangeTargetBranchComment: %w", err)
 	}
+	RequestDefaultReviewers(ctx, pr, "")
 
 	return nil
 }
@@ -380,6 +384,9 @@ func TestPullRequest(ctx context.Context, doer *user_model.User, repoID, olderTh
 		comment, err := CreatePushPullComment(ctx, doer, pr, oldCommitID, newCommitID)
 		if err == nil && comment != nil {
 			notify_service.PullRequestPushCommits(ctx, doer, pr, comment)
+		}
+		if isSync {
+			RequestDefaultReviewers(ctx, pr, oldCommitID)
 		}
 	}
 

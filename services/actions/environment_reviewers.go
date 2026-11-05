@@ -6,9 +6,9 @@ package actions
 import (
 	"context"
 	"errors"
+	"slices"
 
 	actions_model "forgejo.org/models/actions"
-	audit_model "forgejo.org/models/audit"
 	org_model "forgejo.org/models/organization"
 	repo_model "forgejo.org/models/repo"
 	user_model "forgejo.org/models/user"
@@ -17,9 +17,13 @@ import (
 	"forgejo.org/modules/util"
 )
 
-// errUnknownReviewer is the one answer for a reviewer that is missing, hidden from the doer or of the wrong type, so the
-// list is no way to learn about accounts.
-var errUnknownReviewer = util.NewInvalidArgumentErrorf("unknown reviewer")
+// Refusals of a list of reviewers. ErrUnknownReviewer is the one answer for a reviewer that is missing, hidden from
+// the doer or of the wrong type, so the list is no way to learn about accounts.
+var (
+	ErrUnknownReviewer  = util.NewInvalidArgumentErrorf("unknown reviewer")
+	ErrTooManyReviewers = util.NewInvalidArgumentErrorf("too many reviewers")
+	ErrReviewerTwice    = util.NewInvalidArgumentErrorf("a reviewer is listed once")
+)
 
 // SaveEnvironment saves the rules of e with the users and teams as its required reviewers (at most
 // actions_model.MaxEnvironmentReviewers together) in one transaction, and reports if it created it. With e.ID 0 it
@@ -64,14 +68,21 @@ func CreateEnvironment(ctx context.Context, doer *user_model.User, e *actions_mo
 	return actions_model.CreateEnvironment(ctx, e, reviewers)
 }
 
-// environmentReviewers checks that the doer's own act changes the rules of e and turns the IDs into its reviewers: a
+// environmentReviewers checks the list and turns the IDs into the reviewers of e (the model writers check that the
+// change is the doer's own act): a
 // user is an individual account the doer can see, a team belongs to the organization that owns the repository. Only
 // entries the environment doesn't list yet are checked: keeping a listed one reveals nothing new, and one whose user
 // or team was deleted or hidden meanwhile must not block every other change (it stays listed until removed, and can't
 // approve, so the gate stays closed).
 func environmentReviewers(ctx context.Context, doer *user_model.User, e *actions_model.ActionEnvironment, userIDs, teamIDs []int64) ([]actions_model.ActionEnvironmentReviewer, error) {
-	if err := audit_model.CheckOwnAct(ctx); err != nil {
-		return nil, err
+	// the size of the list and duplicates are checked before any lookup, so a long list costs nothing
+	if len(userIDs)+len(teamIDs) > actions_model.MaxEnvironmentReviewers {
+		return nil, ErrTooManyReviewers
+	}
+	for _, ids := range [][]int64{userIDs, teamIDs} {
+		if len(slices.Compact(slices.Sorted(slices.Values(ids)))) != len(ids) {
+			return nil, ErrReviewerTwice
+		}
 	}
 	repo, err := repo_model.GetRepositoryByID(ctx, e.RepoID)
 	if err != nil {
@@ -101,7 +112,7 @@ func environmentReviewers(ctx context.Context, doer *user_model.User, e *actions
 		r := actions_model.ActionEnvironmentReviewer{UserID: id}
 		if !stored[r.Key()] {
 			if id <= 0 {
-				return nil, errUnknownReviewer
+				return nil, ErrUnknownReviewer
 			}
 			newUserIDs = append(newUserIDs, id)
 		}
@@ -123,7 +134,7 @@ func environmentReviewers(ctx context.Context, doer *user_model.User, e *actions
 			}
 		}
 		if found != len(container.SetOf(newUserIDs...)) {
-			return nil, errUnknownReviewer
+			return nil, ErrUnknownReviewer
 		}
 	}
 	for _, id := range teamIDs {
@@ -131,7 +142,7 @@ func environmentReviewers(ctx context.Context, doer *user_model.User, e *actions
 		if !stored[r.Key()] {
 			team, err := org_model.GetTeamByID(ctx, id)
 			if org_model.IsErrTeamNotExist(err) || (err == nil && team.OrgID != repo.OwnerID) {
-				return nil, errUnknownReviewer
+				return nil, ErrUnknownReviewer
 			} else if err != nil {
 				return nil, err
 			}

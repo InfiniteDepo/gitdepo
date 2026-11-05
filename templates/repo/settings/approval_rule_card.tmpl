@@ -8,6 +8,8 @@
 	<div class="ui red message approval-rule-error tw-hidden" data-error="name">{{ctx.Locale.Tr "repo.settings.approval_rule_error_name"}}</div>
 	<div class="ui red message approval-rule-error tw-hidden" data-error="duplicate">{{ctx.Locale.Tr "repo.settings.approval_rule_error_duplicate"}}</div>
 	<div class="ui red message approval-rule-error tw-hidden" data-error="count">{{ctx.Locale.Tr "repo.settings.approval_rule_error_count"}}</div>
+	<div class="ui red message approval-rule-error tw-hidden" data-error="codeowners0">{{ctx.Locale.Tr "repo.settings.approval_rule_error_codeowners0"}}</div>
+	<div class="ui red message approval-rule-error tw-hidden" data-error="pattern">{{ctx.Locale.Tr "repo.settings.approval_rule_error_pattern"}}</div>
 	<div class="ui red message approval-rule-error tw-hidden" data-error="approvers">{{ctx.Locale.Tr "repo.settings.approval_rule_error_approvers"}}</div>
 	<div class="field">
 		<label>{{ctx.Locale.Tr "repo.settings.approval_rule_name"}}</label>
@@ -60,6 +62,20 @@
 		<span class="help">{{ctx.Locale.Tr "repo.settings.approval_rule_teams_help"}}</span>
 	</div>
 	{{end}}
+	<div class="field">
+		<label>{{ctx.Locale.Tr "repo.settings.approval_rule_request_reviews"}}</label>
+		{{/* a select, not a checkbox: an unchecked checkbox sends nothing and would shift the values of the other cards */}}
+		<select name="approval_rule_request_reviews" class="approval-rule-request-reviews">
+			<option value="false">{{ctx.Locale.Tr "repo.settings.approval_rule_request_reviews_no"}}</option>
+			<option value="true" {{if $rule.RequestReviews}}selected{{end}}>{{ctx.Locale.Tr "repo.settings.approval_rule_request_reviews_yes"}}</option>
+		</select>
+		<span class="help">{{ctx.Locale.Tr "repo.settings.approval_rule_request_reviews_help"}}</span>
+	</div>
+	<div class="field approval-rule-source {{if not $rule.RequestReviews}}tw-hidden{{end}}">
+		<label>{{ctx.Locale.Tr "repo.settings.approval_rule_source_branch"}}</label>
+		<input name="approval_rule_source_branch" value="{{$rule.SourceBranchPattern}}" maxlength="255">
+		<span class="help">{{ctx.Locale.Tr "repo.settings.approval_rule_source_branch_help"}}</span>
+	</div>
 	<div class="field">
 		<label>{{ctx.Locale.Tr "repo.settings.approval_rule_paths"}}</label>
 		<input name="approval_rule_paths" value="{{$rule.PathPatterns}}">

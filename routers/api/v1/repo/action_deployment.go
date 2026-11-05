@@ -40,7 +40,8 @@ func runOfRepo(ctx *context.APIContext) *actions_model.ActionRun {
 	return run
 }
 
-// deploymentData holds what the deployments of a page refer to, loaded with one query per table.
+// deploymentData holds what the deployments of a page refer to, loaded with one query per table; users hold the ghost
+// for a user the doer can't see.
 type deploymentData struct {
 	jobs  map[int64]*actions_model.ActionRunJob
 	runs  map[int64]*actions_model.ActionRun
@@ -68,6 +69,12 @@ func loadDeploymentData(ctx *context.APIContext, ds []*actions_model.ActionDeplo
 	userIDs = slices.DeleteFunc(slices.Compact(slices.Sorted(slices.Values(userIDs))), func(id int64) bool { return id == 0 })
 	if data.users, err = user_model.GetUsersByIDsWithBots(ctx, userIDs); err != nil {
 		return nil, err
+	}
+	// a user the doer can't see (e.g. a private account on a public repository) is shown as the ghost
+	for id, u := range data.users {
+		if !user_model.IsUserVisibleToViewer(ctx, u, ctx.Doer()) {
+			data.users[id] = user_model.NewGhostUser()
+		}
 	}
 	return data, nil
 }
