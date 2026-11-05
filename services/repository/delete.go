@@ -633,6 +633,8 @@ func deleteCounts(ctx context.Context, repoID int64) (map[string]int64, error) {
 		{"access_tokens", "access_token", builder.Eq{"owner_type": auth_model.AccessTokenOwnerRepo, "owner_id": repoID}},
 		{"secrets", "secret", builder.Eq{"repo_id": repoID}},
 		{"variables", "action_variable", builder.Eq{"repo_id": repoID}},
+		{"environments", "action_environment", builder.Eq{"repo_id": repoID}},
+		{"deployments", "action_deployment", builder.Eq{"repo_id": repoID}},
 		{"webhooks", "webhook", builder.Eq{"repo_id": repoID}},
 		{"branch_rules", "protected_branch", builder.Eq{"repo_id": repoID}},
 	} {

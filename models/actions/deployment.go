@@ -25,12 +25,19 @@ const (
 	// 5 and up: waiting for reviewers, rejected, expired
 )
 
+// IsWaiting tells if the gate still holds the job: the timer, and later the reviewers, have their own expiry, so the
+// cron that cancels abandoned jobs leaves such a job alone.
+func (s DeploymentStatus) IsWaiting() bool {
+	return s == DeploymentWaitingTimer
+}
+
 // Reasons of a refused deployment; the only values of ActionDeployment.Reason
 const (
 	DeploymentReasonRefNotAllowed      = "ref_not_allowed"
 	DeploymentReasonEnvironmentLimit   = "environment_limit"
 	DeploymentReasonEnvironmentDeleted = "environment_deleted"
 	DeploymentReasonInvalidName        = "invalid_name"
+	DeploymentReasonNotFound           = "environment_not_found"   // a fork pull request names an environment that doesn't exist
 	DeploymentReasonUnsupported        = "environment_unsupported" // a job of a reusable workflow whose environment can't be read
 )
 
@@ -87,14 +94,15 @@ func SetDeploymentStatus(ctx context.Context, d *ActionDeployment, from ...Deplo
 	return n == 1, err
 }
 
-// FindDueDeploymentRunIDs returns the runs, at most limit, with a blocked job whose deployment waits for a wait timer
+// FindDueDeploymentRunIDs returns the runs, at most limit, the longest due first, with a blocked job whose deployment waits for a wait timer
 // that ended.
 func FindDueDeploymentRunIDs(ctx context.Context, now timeutil.TimeStamp, limit int) ([]int64, error) {
 	var ids []int64
 	return ids, db.GetEngine(ctx).Table("action_deployment").
 		Join("INNER", "action_run_job", "action_run_job.id = action_deployment.job_id AND action_run_job.attempt = action_deployment.attempt").
 		Where("action_deployment.status = ? AND action_deployment.release_after_unix <= ? AND action_run_job.status = ?", DeploymentWaitingTimer, now, StatusBlocked).
-		Distinct("action_deployment.run_id").Limit(limit).Find(&ids)
+		Select("action_deployment.run_id").GroupBy("action_deployment.run_id").
+		OrderBy("MIN(action_deployment.release_after_unix), action_deployment.run_id").Limit(limit).Find(&ids)
 }
 
 // CancelOpenDeployments marks the deployments of the job that still wait as cancelled.
@@ -103,4 +111,17 @@ func CancelOpenDeployments(ctx context.Context, jobID int64) error {
 		Where("job_id = ? AND status = ?", jobID, DeploymentWaitingTimer).
 		Update(map[string]any{"status": DeploymentCancelled, "updated": timeutil.TimeStampNow()})
 	return err
+}
+
+// FindUnpickedEnvironmentJobs returns the jobs of the environment that no runner took yet, whose current attempt waits
+// for the gate or was released by it.
+func FindUnpickedEnvironmentJobs(ctx context.Context, repoID, environmentID int64) ([]*ActionRunJob, error) {
+	var jobs []*ActionRunJob
+	return jobs, db.GetEngine(ctx).Table("action_run_job").Select("action_run_job.*").
+		Join("INNER", "action_deployment", "action_run_job.id = action_deployment.job_id AND action_run_job.attempt = action_deployment.attempt").
+		Where("action_deployment.repo_id = ? AND action_deployment.environment_id = ?", repoID, environmentID).
+		And(builder.In("action_deployment.status", DeploymentWaitingTimer, DeploymentReleased)).
+		And(builder.In("action_run_job.status", StatusBlocked, StatusWaiting)).
+		And("action_run_job.task_id = 0").
+		Find(&jobs)
 }

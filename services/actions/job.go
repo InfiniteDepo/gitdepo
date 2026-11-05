@@ -29,7 +29,20 @@ func InitiateNextJobAttempt(ctx context.Context, job *actions_model.ActionRunJob
 
 	// The columns have to be specified here to work around a xorm quirk: It won't update columns that are set to their
 	// zero value without AllCols().
-	if _, err := actions_model.UpdateRunJobWithoutNotification(ctx, job, builder.Eq{"status": oldStatus}, "handle", "attempt", "task_id", "status", "started", "stopped"); err != nil {
+	columns := []string{"handle", "attempt", "task_id", "status", "started", "stopped"}
+	if hasEnvironment, err := jobHasEnvironment(job); err != nil {
+		return err
+	} else if hasEnvironment {
+		// the runner labels of the environment that the last attempt added go: the gate adds those it has now
+		sw, err := job.DecodeWorkflowPayload()
+		if err != nil {
+			return err
+		}
+		_, payloadJob := sw.Job()
+		job.RunsOn = payloadJob.RunsOn()
+		columns = append(columns, "runs_on")
+	}
+	if _, err := actions_model.UpdateRunJobWithoutNotification(ctx, job, builder.Eq{"status": oldStatus}, columns...); err != nil {
 		return err
 	}
 

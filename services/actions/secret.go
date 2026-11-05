@@ -18,10 +18,13 @@ import (
 
 func getSecretsOfTask(ctx context.Context, task *actions_model.ActionTask) (map[string]string, error) {
 	secrets, err := getSecretsOfJob(ctx, task.Job)
+	if err != nil {
+		return nil, err
+	}
 	secrets["GITHUB_TOKEN"] = task.Token
 	secrets["GITEA_TOKEN"] = task.Token
 	secrets["FORGEJO_TOKEN"] = task.Token
-	return secrets, err
+	return secrets, nil
 }
 
 func getSecretsOfJob(ctx context.Context, job *actions_model.ActionRunJob) (map[string]string, error) {

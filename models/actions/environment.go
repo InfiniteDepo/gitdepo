@@ -78,9 +78,14 @@ func init() {
 	db.RegisterModel(new(ActionEnvironment))
 }
 
-// hasControl tells if s holds a control character (NUL, newline, escape, ...).
+// hasControl tells if s holds a character that can make one name look like another or hide in it: a control
+// character (NUL, newline, escape, ...), a format character (zero width space, bidi override, ...), a private-use or
+// surrogate one, or a space other than the plain ASCII one.
 func hasControl(s string) bool {
-	return strings.IndexFunc(s, unicode.IsControl) >= 0
+	return strings.IndexFunc(s, func(r rune) bool {
+		return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Co, r) || unicode.Is(unicode.Cs, r) ||
+			(unicode.IsSpace(r) && r != ' ')
+	}) >= 0
 }
 
 // compilePattern compiles a ref pattern as matchPattern uses it.
@@ -274,7 +279,9 @@ func createEnvironment(ctx context.Context, e *ActionEnvironment, auto bool) err
 }
 
 // GetOrCreateRepoEnvironment returns the environment of the repository with that name (ignoring case); a name that
-// doesn't exist is created without any rule, and concurrent first uses of a name don't fail.
+// doesn't exist is created without any rule. Concurrent first uses of a name don't fail on SQLite and PostgreSQL; on
+// MySQL, inside a transaction that already read (REPEATABLE READ), the one that lost the race may not see the row of
+// the winner and fails once, and the emitter, which calls this, runs its pass again.
 func GetOrCreateRepoEnvironment(ctx context.Context, repoID int64, name string) (*ActionEnvironment, error) {
 	if env, err := GetRepoEnvironmentByName(ctx, repoID, name); !errors.Is(err, ErrEnvironmentNotFound) {
 		return env, err
@@ -344,7 +351,8 @@ func UpdateEnvironment(ctx context.Context, e *ActionEnvironment) error {
 }
 
 // DeleteEnvironment deletes the environment with its secrets and variables and records it. Its deployments stay as
-// history.
+// history. It doesn't touch the jobs that wait for the environment: callers use services/actions DeleteEnvironment,
+// which fails them in the same transaction.
 func DeleteEnvironment(ctx context.Context, e *ActionEnvironment) error {
 	return db.WithTx(ctx, func(ctx context.Context) error {
 		stored, err := GetRepoEnvironmentByID(ctx, e.RepoID, e.ID)
@@ -360,7 +368,10 @@ func DeleteEnvironment(ctx context.Context, e *ActionEnvironment) error {
 		if err != nil {
 			return err
 		}
-		if err := recordEnvironment(ctx, audit_model.LevelActions{Repo: "repo.actions_env.deleted"}, stored, map[string]any{"counts": map[string]int64{"secrets": secrets, "variables": variables}}); err != nil {
+		// the entry keeps the rules that were removed, and how many secrets and variables (never their values)
+		data := stored.auditData()
+		data["counts"] = map[string]int64{"secrets": secrets, "variables": variables}
+		if err := recordEnvironment(ctx, audit_model.LevelActions{Repo: "repo.actions_env.deleted"}, stored, data); err != nil {
 			return err
 		}
 		_, err = db.DeleteByID[ActionEnvironment](ctx, stored.ID)

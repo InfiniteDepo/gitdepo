@@ -17,6 +17,9 @@ import (
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
 	actions_module "forgejo.org/modules/actions"
+	"forgejo.org/modules/queue"
+	"forgejo.org/modules/setting"
+	"forgejo.org/modules/test"
 	"forgejo.org/modules/timeutil"
 
 	"code.forgejo.org/forgejo/runner/v13/act/jobparser"
@@ -484,6 +487,13 @@ func TestGateEnvironment(t *testing.T) {
 	})
 	t.Run("approving a run never skips the gate", func(t *testing.T) {
 		require.NoError(t, unittest.PrepareTestDatabase())
+		cfg, err := setting.NewConfigProviderFromData("[queue.actions_ready_job]\nTYPE = channel\n")
+		require.NoError(t, err)
+		defer test.MockVariableValue(&setting.CfgProvider, cfg)()
+		q := queue.CreateUniqueQueue(t.Context(), "actions_ready_job", func(items ...*jobUpdate) []*jobUpdate { return nil })
+		require.NotNil(t, q)
+		defer test.MockVariableValue(&jobEmitterQueue, q)()
+
 		newEnvironment(t, &actions_model.ActionEnvironment{Name: "slow", WaitTimerMinutes: 5})
 		job := gateJob(t, envWorkflow("    environment: slow\n"), "refs/heads/main")
 		run, err := actions_model.GetRunByID(t.Context(), job.RunID)
@@ -491,9 +501,48 @@ func TestGateEnvironment(t *testing.T) {
 		require.NoError(t, ApproveRun(audit_model.WithSystem(t.Context(), "test"), run, 2))
 		job = unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRunJob{ID: gateJobID})
 		assert.Equal(t, actions_model.StatusBlocked, job.Status)
+		assert.Nil(t, deploymentOf(t, job), "the approval doesn't gate, the emitter does, after the commit")
+		has, err := q.Has(&jobUpdate{RunID: job.RunID})
+		require.NoError(t, err)
+		assert.True(t, has, "the run is queued for the emitter")
+
+		require.NoError(t, checkJobsOfRun(t.Context(), job.RunID, 0))
+		assert.Equal(t, actions_model.StatusBlocked, unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRunJob{ID: gateJobID}).Status)
+		assert.Equal(t, actions_model.DeploymentWaitingTimer, deploymentOf(t, job).Status)
+	})
+
+	t.Run("a fork pull request never creates an environment", func(t *testing.T) {
+		require.NoError(t, unittest.PrepareTestDatabase())
+		newEnvironment(t, &actions_model.ActionEnvironment{Name: "known"})
+		_, err := db.GetEngine(t.Context()).Exec("UPDATE action_run SET is_fork_pull_request = ?, trigger_event = ? WHERE id = 900", true, "pull_request")
+		require.NoError(t, err)
+		job := gateJob(t, envWorkflow("    environment: unknown\n"), "refs/pull/1/head")
+		b, err := gateEnvironment(t.Context(), job)
+		require.NoError(t, err)
+		assert.Equal(t, behaviourFailJob, b)
 		d := deploymentOf(t, job)
-		require.NotNil(t, d)
-		assert.Equal(t, actions_model.DeploymentWaitingTimer, d.Status)
+		assert.Equal(t, actions_model.DeploymentRefused, d.Status)
+		assert.Equal(t, actions_model.DeploymentReasonNotFound, d.Reason)
+		assert.Equal(t, 1, unittest.GetCount(t, &actions_model.ActionEnvironment{}), "nothing was created")
+
+		// an environment that exists is found; pull_request_target creates like any other run
+		job = gateJob(t, envWorkflow("    environment: KNOWN\n"), "refs/pull/1/head")
+		_, err = db.GetEngine(t.Context()).Exec("DELETE FROM action_deployment")
+		require.NoError(t, err)
+		b, err = gateEnvironment(t.Context(), job)
+		require.NoError(t, err)
+		assert.Equal(t, behaviourExecuteJob, b)
+		_, err = db.GetEngine(t.Context()).Exec("UPDATE action_run SET trigger_event = ? WHERE id = 900", "pull_request_target")
+		require.NoError(t, err)
+		job = gateJob(t, envWorkflow("    environment: made-here\n"), "refs/pull/1/head")
+		_, err = db.GetEngine(t.Context()).Exec("DELETE FROM action_deployment")
+		require.NoError(t, err)
+		_, err = db.GetEngine(t.Context()).Exec("UPDATE action_run SET trigger_event = ? WHERE id = 900", "pull_request_target")
+		require.NoError(t, err)
+		b, err = gateEnvironment(t.Context(), job)
+		require.NoError(t, err)
+		assert.Equal(t, behaviourExecuteJob, b)
+		assert.Equal(t, 2, unittest.GetCount(t, &actions_model.ActionEnvironment{}))
 	})
 }
 

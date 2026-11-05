@@ -12,6 +12,7 @@ import (
 
 	actions_model "forgejo.org/models/actions"
 	"forgejo.org/models/db"
+	"forgejo.org/modules/log"
 	"forgejo.org/modules/util"
 	notify_service "forgejo.org/services/notify"
 
@@ -122,12 +123,12 @@ func CancelRun(ctx context.Context, run *actions_model.ActionRun) error {
 }
 
 func ApproveRun(ctx context.Context, run *actions_model.ActionRun, doerID int64) error {
-	return db.WithTx(ctx, func(ctx context.Context) error {
+	hasEnvironmentJob := false
+	if err := db.WithTx(ctx, func(ctx context.Context) error {
 		jobs, err := actions_model.GetRunJobsByRunID(ctx, run.ID)
 		if err != nil {
 			return err
 		}
-		hasEnvironmentJob := false
 		for _, job := range jobs {
 			if len(job.Needs) == 0 && job.Status.IsBlocked() {
 				// A job with an environment is released by the gate of the environment, never here.
@@ -152,11 +153,6 @@ func ApproveRun(ctx context.Context, run *actions_model.ActionRun, doerID int64)
 				}
 			}
 		}
-		if hasEnvironmentJob {
-			if err := checkJobsOfRun(ctx, run.ID, 0); err != nil {
-				return fmt.Errorf("check jobs of run: %w", err)
-			}
-		}
 		CreateCommitStatus(ctx, jobs...)
 
 		if err = RefreshAndPropagateRunStatus(ctx, run.ID); err != nil {
@@ -168,7 +164,15 @@ func ApproveRun(ctx context.Context, run *actions_model.ActionRun, doerID int64)
 		}
 
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	if hasEnvironmentJob { // the gate of their environment looks at them, as after a rerun
+		if err := EmitJobsIfReady(run.ID); err != nil {
+			log.Error("EmitJobsIfReady for run %d after an approval: %v", run.ID, err)
+		}
+	}
+	return nil
 }
 
 func FailRunPreExecutionError(ctx context.Context, run *actions_model.ActionRun, errorCode actions_model.PreExecutionError, details []any) error {

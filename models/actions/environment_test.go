@@ -44,6 +44,10 @@ func TestEnvironmentNormalize(t *testing.T) {
 		"name with newline":       func(e *ActionEnvironment) { e.Name = "a\nb" },
 		"name with NUL":           func(e *ActionEnvironment) { e.Name = "a\x00b" },
 		"name not UTF-8":          func(e *ActionEnvironment) { e.Name = "a\xffb" },
+		"name with zero width":    func(e *ActionEnvironment) { e.Name = "prod\u200buction" },
+		"name with bidi override": func(e *ActionEnvironment) { e.Name = "prod\u202euction" },
+		"name with nbsp":          func(e *ActionEnvironment) { e.Name = "prod\u00a0uction" },
+		"name with private use":   func(e *ActionEnvironment) { e.Name = "prod\ue000uction" },
 		"unknown policy":          func(e *ActionEnvironment) { e.RefPolicy = 3 },
 		"negative policy":         func(e *ActionEnvironment) { e.RefPolicy = -1 },
 		"patterns without policy": func(e *ActionEnvironment) { e.RefPolicy = EnvironmentRefAny },
@@ -58,6 +62,7 @@ func TestEnvironmentNormalize(t *testing.T) {
 		"empty pattern":        func(e *ActionEnvironment) { e.RefPatterns[0].Pattern = "" },
 		"long pattern":         func(e *ActionEnvironment) { e.RefPatterns[0].Pattern = strings.Repeat("a", 256) },
 		"pattern with control": func(e *ActionEnvironment) { e.RefPatterns[0].Pattern = "a\tb" },
+		"pattern with format":  func(e *ActionEnvironment) { e.RefPatterns[0].Pattern = "a\u200bb" },
 		"pattern that doesn't compile": func(e *ActionEnvironment) {
 			e.RefPatterns[0].Pattern = "a[" // an open character class
 		},
@@ -72,6 +77,7 @@ func TestEnvironmentNormalize(t *testing.T) {
 		"empty label":      func(e *ActionEnvironment) { e.RunnerLabels = []string{""} },
 		"long label":       func(e *ActionEnvironment) { e.RunnerLabels = []string{strings.Repeat("l", 256)} },
 		"label with CR":    func(e *ActionEnvironment) { e.RunnerLabels = []string{"a\rb"} },
+		"label with nbsp":  func(e *ActionEnvironment) { e.RunnerLabels = []string{"a\u00a0b"} },
 		"duplicate labels": func(e *ActionEnvironment) { e.RunnerLabels = []string{"a", "b", "a"} },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -212,8 +218,11 @@ func TestEnvironmentLifecycle(t *testing.T) {
 	unittest.AssertExistsAndLoadBean(t, &ActionDeployment{EnvironmentID: prod.ID})
 
 	var actions []string
-	var created map[string]any
+	var created, deleted map[string]any
 	for _, e := range auditEntries(t, since) {
+		if e.Action == "repo.actions_env.deleted" {
+			deleted = entryData(t, e)
+		}
 		actions = append(actions, e.Action)
 		if e.Action == "repo.actions_env.created" && e.TargetID == staging.ID {
 			created = entryData(t, e)
@@ -228,6 +237,14 @@ func TestEnvironmentLifecycle(t *testing.T) {
 	}, actions)
 	assert.Equal(t, true, created["auto"])
 	assert.Equal(t, "Staging", created["name"])
+	// the entry of the deletion keeps the rules that were removed, and counts what went with them
+	assert.EqualValues(t, "PRODUCTION", deleted["name"])
+	assert.EqualValues(t, EnvironmentRefProtectedBranches, deleted["ref_policy"])
+	assert.EqualValues(t, 10, deleted["wait_timer_minutes"])
+	for _, key := range []string{"ref_patterns", "prevent_self_review", "runner_labels"} {
+		assert.Contains(t, deleted, key)
+	}
+	assert.Equal(t, map[string]any{"secrets": float64(1), "variables": float64(1)}, deleted["counts"])
 }
 
 // Concurrent first uses of one name create one environment and none fails.

@@ -6,10 +6,12 @@ package actions
 import (
 	"errors"
 	"html/template"
+	"net/http"
 	"net/url"
 	"time"
 
 	"forgejo.org/modules/setting"
+	"forgejo.org/modules/util"
 	actions_service "forgejo.org/services/actions"
 	app_context "forgejo.org/services/context"
 )
@@ -36,7 +38,10 @@ func ManualRunWorkflow(ctx *app_context.Context) {
 	}
 
 	workflow, err := actions_service.GetWorkflowFromCommit(ctx.Repo.GitRepo, ref, workflowID)
-	if err != nil {
+	if errors.Is(err, util.ErrInvalidArgument) {
+		ctx.Error(http.StatusBadRequest, err.Error())
+		return
+	} else if err != nil {
 		ctx.ServerError("GetWorkflowFromCommit", err)
 		return
 	}

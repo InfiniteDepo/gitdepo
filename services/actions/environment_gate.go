@@ -16,17 +16,21 @@ import (
 	git_model "forgejo.org/models/git"
 	secret_model "forgejo.org/models/secret"
 	actions_module "forgejo.org/modules/actions"
+	"forgejo.org/modules/container"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/timeutil"
 	"forgejo.org/modules/util"
 
 	"code.forgejo.org/forgejo/runner/v13/act/jobparser"
 	"go.yaml.in/yaml/v3"
+	"xorm.io/builder"
 )
 
 // maxDueDeploymentRuns is how many runs one tick of the wait timer task looks at.
 const maxDueDeploymentRuns = 100
 
+// errEnvironmentNotReleased is what a job gets when the secrets or variables of its environment can't be resolved, for
+// example because the environment was deleted after its release: such a job fails, it is never retried.
 var errEnvironmentNotReleased = errors.New("the environment of the job did not release it")
 
 // blockedJobEnvironment returns the `environment:` of the job as stored in its payload, nil if it has none.
@@ -91,6 +95,21 @@ func evaluateEnvironmentText(ctx context.Context, job *actions_model.ActionRunJo
 	return j.Name, nil
 }
 
+// findOrCreateEnvironment is GetOrCreateRepoEnvironment, except for a fork pull request (not pull_request_target): its
+// author may be no writer of the repository and its job gets no environment secrets anyway, so it can only name an
+// environment that exists.
+func findOrCreateEnvironment(ctx context.Context, run *actions_model.ActionRun, name string) (*actions_model.ActionEnvironment, error) {
+	if isForkRun(run) {
+		return actions_model.GetRepoEnvironmentByName(ctx, run.RepoID, name)
+	}
+	return actions_model.GetOrCreateRepoEnvironment(ctx, run.RepoID, name)
+}
+
+// isForkRun tells if the run is of a fork pull request that gets no secrets: not pull_request_target.
+func isForkRun(run *actions_model.ActionRun) bool {
+	return run.IsForkPullRequest && run.TriggerEvent != actions_module.GithubEventPullRequestTarget
+}
+
 // refAllowed tells if the environment accepts a deployment of the run's ref. The ref is the one the server set on the
 // run, never a value of the workflow.
 func refAllowed(ctx context.Context, repoID int64, env *actions_model.ActionEnvironment, ref string) (bool, error) {
@@ -150,7 +169,9 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 			reason = actions_model.DeploymentReasonUnsupported
 		} else if name = strings.TrimSpace(name); err != nil || name == "" {
 			reason = actions_model.DeploymentReasonInvalidName
-		} else if env, err = actions_model.GetOrCreateRepoEnvironment(ctx, job.RepoID, name); errors.Is(err, actions_model.ErrEnvironmentLimit) {
+		} else if env, err = findOrCreateEnvironment(ctx, run, name); errors.Is(err, actions_model.ErrEnvironmentNotFound) && isForkRun(run) {
+			reason = actions_model.DeploymentReasonNotFound
+		} else if errors.Is(err, actions_model.ErrEnvironmentLimit) {
 			reason = actions_model.DeploymentReasonEnvironmentLimit
 		} else if errors.Is(err, util.ErrInvalidArgument) {
 			reason = actions_model.DeploymentReasonInvalidName
@@ -280,7 +301,7 @@ func getEnvironmentSecrets(ctx context.Context, job *actions_model.ActionRunJob)
 	secrets, err := secret_model.FetchEnvironmentSecrets(ctx, env.RepoID, env.ID)
 	if err != nil {
 		// no details, as for the other secrets: FetchEnvironmentSecrets logs them
-		return nil, errors.New("failure to fetch secrets")
+		return nil, fmt.Errorf("%w: failure to fetch secrets", errEnvironmentNotReleased)
 	}
 	return secrets, nil
 }
@@ -304,7 +325,7 @@ func getVariablesOfJob(ctx context.Context, job *actions_model.ActionRunJob) (ma
 	}
 	envVars, err := actions_model.FindVariables(ctx, actions_model.FindVariablesOpts{RepoID: env.RepoID, EnvironmentID: env.ID})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: failure to fetch variables", errEnvironmentNotReleased)
 	}
 	for _, v := range envVars {
 		vars[v.Name] = v.Data
@@ -324,5 +345,89 @@ func StartDueDeployments(ctx context.Context) error {
 			log.Error("EmitJobsIfReady for run %d after a wait timer: %v", runID, err)
 		}
 	}
+	return nil
+}
+
+// jobFailure is a job that failed at the gate after it was loaded, with the status it had.
+type jobFailure struct {
+	job   *actions_model.ActionRunJob
+	prior actions_model.Status
+}
+
+// failUnpickedJob fails a job that no runner took, because its environment is gone: the job fails and the deployment
+// of this attempt, if it still waits or was released, is refused as environment_deleted. It does so in the caller's
+// transaction and reports false if another server moved the job first. Notifications go with notifyFailedJobs after
+// the commit.
+func failUnpickedJob(ctx context.Context, job *actions_model.ActionRunJob, env *actions_model.ActionEnvironment) (*jobFailure, error) {
+	prior := job.Status
+	job.Status, job.Stopped = actions_model.StatusFailure, timeutil.TimeStampNow()
+	cond := builder.And(builder.In("status", actions_model.StatusBlocked, actions_model.StatusWaiting), builder.Eq{"task_id": 0})
+	if n, err := actions_model.UpdateRunJobWithoutNotification(ctx, job, cond, "status", "stopped"); err != nil || n != 1 {
+		return nil, err
+	}
+	d, err := actions_model.GetDeployment(ctx, job.ID, job.Attempt)
+	if err != nil || d == nil || (d.Status != actions_model.DeploymentReleased && !d.Status.IsWaiting()) {
+		return &jobFailure{job, prior}, err
+	}
+	if err := job.LoadRun(ctx); err != nil {
+		return nil, err
+	}
+	if err := job.Run.LoadRepo(ctx); err != nil {
+		return nil, err
+	}
+	from := d.Status
+	d.Status, d.Reason = actions_model.DeploymentRefused, actions_model.DeploymentReasonEnvironmentDeleted
+	if moved, err := actions_model.SetDeploymentStatus(ctx, d, from); err != nil || !moved {
+		return nil, errors.Join(err, errors.New("deployment changed by another request"))
+	}
+	return &jobFailure{job, prior}, recordDeploymentRefused(ctx, job.Run, d, env)
+}
+
+// notifyFailedJobs sends what the failed jobs call for, once their transaction is committed: the notifications, the
+// commit statuses and the run of each, and a pass of the emitter for the jobs that needed them.
+func notifyFailedJobs(ctx context.Context, failures []*jobFailure) {
+	var jobs []*actions_model.ActionRunJob
+	runs := container.Set[int64]{}
+	for _, f := range failures {
+		jobs = append(jobs, f.job)
+		runs.Add(f.job.RunID)
+		if err := PropagateJobStatus(ctx, f.job.ID, f.prior); err != nil {
+			log.Error("PropagateJobStatus for job %d: %v", f.job.ID, err)
+		}
+	}
+	CreateCommitStatus(ctx, jobs...)
+	for runID := range runs {
+		if err := RefreshAndPropagateRunStatus(ctx, runID); err != nil {
+			log.Error("RefreshAndPropagateRunStatus for run %d: %v", runID, err)
+		}
+		if err := EmitJobsIfReady(runID); err != nil {
+			log.Error("EmitJobsIfReady for run %d: %v", runID, err)
+		}
+	}
+}
+
+// DeleteEnvironment deletes the environment (see actions_model.DeleteEnvironment) and, in the same transaction, fails
+// the jobs of it that no runner took yet, whether their deployment waits or was released: the environment can't
+// release them any more, and a job never runs without its gate.
+func DeleteEnvironment(ctx context.Context, e *actions_model.ActionEnvironment) error {
+	var failures []*jobFailure
+	if err := db.WithTx(ctx, func(ctx context.Context) error {
+		failures = failures[:0]
+		jobs, err := actions_model.FindUnpickedEnvironmentJobs(ctx, e.RepoID, e.ID)
+		if err != nil {
+			return err
+		}
+		for _, job := range jobs {
+			if f, err := failUnpickedJob(ctx, job, e); err != nil {
+				return err
+			} else if f != nil {
+				failures = append(failures, f)
+			}
+		}
+		return actions_model.DeleteEnvironment(ctx, e)
+	}); err != nil {
+		return err
+	}
+	notifyFailedJobs(ctx, failures)
 	return nil
 }

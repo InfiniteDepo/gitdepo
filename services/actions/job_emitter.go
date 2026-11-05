@@ -19,6 +19,7 @@ import (
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/queue"
 	"forgejo.org/modules/structs"
+	"forgejo.org/modules/timeutil"
 	"forgejo.org/modules/util"
 
 	"code.forgejo.org/forgejo/runner/v13/act/jobparser"
@@ -113,6 +114,8 @@ func checkJobsOfRun(ctx context.Context, runID int64, recursionCount int) error 
 
 					case behaviourFailJob:
 						job.Status = actions_model.StatusFailure
+						job.Stopped = timeutil.TimeStampNow()
+						updateColumns = append(updateColumns, "stopped")
 
 					case behaviourHoldJob:
 						// The job stays blocked, and a later pass of the emitter looks at it again. Don't let it count as

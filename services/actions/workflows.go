@@ -8,6 +8,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 
 	actions_model "forgejo.org/models/actions"
 	"forgejo.org/models/perm"
@@ -259,9 +261,29 @@ func (entry *Workflow) Dispatch(ctx context.Context, inputGetter InputValueGette
 	return run, jobNames, consistencyCheckRun(ctx, run)
 }
 
+// commitIDPattern is a commit ID, full or abbreviated: letters and digits only, so no revision syntax.
+var commitIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{4,64}$`)
+
+// checkDispatchRef makes sure the expanded ref names a branch, a tag or another ref exactly, or a commit by its ID. Git
+// would also resolve revision syntax (`main~1`, `v1^`, `x@{1}`, `:path`) and the ref is kept in the run, where rules
+// of an environment read it as a name: it must be what it says.
+func checkDispatchRef(gitRepo *git.Repository, ref string) error {
+	if strings.HasPrefix(ref, "refs/") {
+		if !git.IsValidRefPattern(ref) || !gitRepo.IsReferenceExist(ref) {
+			return util.NewInvalidArgumentErrorf("reference '%s' does not exist", ref)
+		}
+	} else if !commitIDPattern.MatchString(ref) {
+		return util.NewInvalidArgumentErrorf("reference '%s' is not a branch, a tag or a commit ID", ref)
+	}
+	return nil
+}
+
 func GetWorkflowFromCommit(gitRepo *git.Repository, ref, workflowID string) (*Workflow, error) {
 	ref, err := gitRepo.ExpandRef(ref)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkDispatchRef(gitRepo, ref); err != nil {
 		return nil, err
 	}
 

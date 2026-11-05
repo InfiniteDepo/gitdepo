@@ -19,6 +19,7 @@ import (
 	secret_model "forgejo.org/models/secret"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/optional"
 	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
 	actions_service "forgejo.org/services/actions"
@@ -40,7 +41,7 @@ func TestActionsEnvironments(t *testing.T) {
 		repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: apiRepo.ID})
 		ctx := audit_model.WithSystem(t.Context(), "test")
 
-		labels := []string{"env-a", "env-b", "env-c", "env-d", "env-e", "env-f", "env-g", "env-h", "env-i", "env-j", "env-k", "env-l", "env-m"}
+		labels := []string{"env-a", "env-b", "env-c", "env-d", "env-e", "env-f", "env-g", "env-h", "env-i", "env-j", "env-k", "env-l", "env-m", "env-n"}
 		runner := newMockRunner()
 		runner.registerAsRepoRunner(t, user2.Name, repo.Name, "env-runner", labels)
 
@@ -81,6 +82,12 @@ jobs:
     steps:
       - run: echo deploy
 `, files, path, label, environment)))
+		}
+		// hasStatus reads the job without require or t.Context(), so that it can run in an Eventually condition
+		hasStatus := func(job *actions_model.ActionRunJob, status actions_model.Status) bool {
+			j := new(actions_model.ActionRunJob)
+			has, err := db.GetEngine(db.DefaultContext).ID(job.ID).Get(j)
+			return err == nil && has && j.Status == status
 		}
 		reload := func(job *actions_model.ActionRunJob) *actions_model.ActionRunJob {
 			return unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRunJob{ID: job.ID})
@@ -159,7 +166,7 @@ jobs:
 
 			for _, name := range []string{"only-releases", "only-protected"} {
 				jobs := push("env-c", "environment: "+name)
-				require.Eventually(t, func() bool { return reload(jobs[0]).Status == actions_model.StatusFailure }, 10*time.Second, 100*time.Millisecond, name)
+				require.Eventually(t, func() bool { return hasStatus(jobs[0], actions_model.StatusFailure) }, 10*time.Second, 100*time.Millisecond, name)
 				d := deployment(jobs[0], 1)
 				require.NotNil(t, d, name)
 				assert.Equal(t, actions_model.DeploymentRefused, d.Status)
@@ -221,7 +228,7 @@ jobs:
 			plain := newMockRunner()
 			plain.registerAsRepoRunner(t, user2.Name, repo.Name, "plain-runner", []string{"env-f"})
 			jobs := push("env-f", "environment: labelled")
-			require.Eventually(t, func() bool { return reload(jobs[0]).Status == actions_model.StatusWaiting }, 10*time.Second, 100*time.Millisecond)
+			require.Eventually(t, func() bool { return hasStatus(jobs[0], actions_model.StatusWaiting) }, 10*time.Second, 100*time.Millisecond)
 			assert.Nil(t, plain.maybeFetchTask(t)) // no env-g label
 
 			task := runner.fetchTask(t) // has env-f and env-g
@@ -409,6 +416,112 @@ jobs:
 				assert.Empty(t, job.EnvironmentName)
 			}
 			assert.Nil(t, runner.maybeFetchTask(t))
+		})
+		t.Run("dispatch only to refs that exist as they are named", func(t *testing.T) {
+			dispatch := func(ref string, status int) {
+				MakeRequest(t, NewRequestWithJSON(t, http.MethodPost,
+					fmt.Sprintf("/api/v1/repos/%s/%s/actions/workflows/env-dispatch.yml/dispatches", user2.Name, repo.Name),
+					&api.DispatchWorkflowOption{Ref: ref, Inputs: map[string]string{"target": "from-input"}},
+				).AddTokenAuth(token), status)
+			}
+			createBranchReq := NewRequestWithJSON(t, http.MethodPost, fmt.Sprintf("/api/v1/repos/%s/%s/branches", user2.Name, repo.Name),
+				&api.CreateBranchRepoOption{BranchName: "release/1"}).AddTokenAuth(token)
+			MakeRequest(t, createBranchReq, http.StatusCreated)
+			before := unittest.GetCount(t, &actions_model.ActionRun{RepoID: repo.ID})
+			for _, ref := range []string{"refs/heads/main~1", "refs/heads/release/1@{1}", "main^", "refs/heads/release/1~1", "refs/heads/nope", "main:README.md", "refs/heads/main^{tree}"} {
+				dispatch(ref, http.StatusBadRequest)
+			}
+			assert.Equal(t, before, unittest.GetCount(t, &actions_model.ActionRun{RepoID: repo.ID}), "none of them started a run")
+
+			// the names that exist, in their full and short form, still work; so does a commit ID
+			branch := new(api.Branch)
+			DecodeJSON(t, MakeRequest(t, NewRequest(t, http.MethodGet, fmt.Sprintf("/api/v1/repos/%s/%s/branches/main", user2.Name, repo.Name)).AddTokenAuth(token), http.StatusOK), branch)
+			for _, ref := range []string{"refs/heads/release/1", "release/1", "main", branch.Commit.ID} {
+				dispatch(ref, http.StatusNoContent)
+				runner.execTask(t, runner.fetchTask(t), &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
+			}
+		})
+
+		t.Run("deleting an environment fails the jobs that no runner took", func(t *testing.T) {
+			waiting := newEnv("del-timer", func(e *actions_model.ActionEnvironment) { e.WaitTimerMinutes = 10 })
+			released := newEnv("del-released", nil)
+			timerJobs := push("env-m", "environment: del-timer")
+			releasedJobs := push("env-m", "environment: del-released") // released, and no runner has its labels
+			require.Equal(t, actions_model.StatusBlocked, reload(timerJobs[0]).Status)
+			require.Equal(t, actions_model.StatusWaiting, reload(releasedJobs[0]).Status)
+			newEnv("del-kept", func(e *actions_model.ActionEnvironment) { e.WaitTimerMinutes = 10 })
+			keptJobs := push("env-m", "environment: del-kept")
+
+			require.NoError(t, actions_service.DeleteEnvironment(ctx, waiting))
+			require.NoError(t, actions_service.DeleteEnvironment(ctx, released))
+			for _, job := range [][]*actions_model.ActionRunJob{timerJobs, releasedJobs} {
+				j := reload(job[0])
+				assert.Equal(t, actions_model.StatusFailure, j.Status)
+				assert.NotZero(t, j.Stopped)
+				d := deployment(j, 1)
+				assert.Equal(t, actions_model.DeploymentRefused, d.Status)
+				assert.Equal(t, actions_model.DeploymentReasonEnvironmentDeleted, d.Reason)
+			}
+			assert.Equal(t, actions_model.StatusBlocked, reload(keptJobs[0]).Status, "the job of another environment is left alone")
+			assert.Equal(t, actions_model.DeploymentWaitingTimer, deployment(keptJobs[0], 1).Status)
+			assert.Nil(t, runner.maybeFetchTask(t))
+		})
+
+		t.Run("a released job whose environment is gone never stops a shared runner", func(t *testing.T) {
+			gone := newEnv("gone-env", nil)
+			goneJobs := push("env-m", "environment: gone-env")
+			require.Equal(t, actions_model.StatusWaiting, reload(goneJobs[0]).Status)
+			// the environment goes without the service that fails its jobs, as if another server had missed them
+			require.NoError(t, actions_model.DeleteEnvironment(ctx, gone))
+
+			other := createActionsTestRepo(t, token, "actions-environments-other", false)
+			token2, err := actions_model.NewRunnerToken(ctx, optional.Some(user2.ID), optional.None[int64]())
+			require.NoError(t, err)
+			shared := newMockRunner()
+			shared.doRegister(t, "shared-runner", token2.Token, []string{"env-m"})
+			createWorkflowFile(t, token, user2.Name, other.Name, ".gitea/workflows/plain.yml", getWorkflowCreateFileOptions(user2, other.DefaultBranch, "add plain", `name: plain
+on:
+  push:
+    paths:
+      - '.gitea/workflows/plain.yml'
+jobs:
+  plain:
+    runs-on: env-m
+    steps:
+      - run: echo plain
+`))
+			task := shared.fetchTask(t)
+			assert.NotEqual(t, goneJobs[0].ID, task.GetId())
+			j := reload(goneJobs[0])
+			assert.Equal(t, actions_model.StatusFailure, j.Status)
+			assert.Equal(t, actions_model.DeploymentReasonEnvironmentDeleted, deployment(j, 1).Reason)
+			var running actions_model.ActionTask
+			has, err := db.GetEngine(t.Context()).ID(task.GetId()).Get(&running)
+			require.NoError(t, err)
+			require.True(t, has)
+			assert.Equal(t, other.ID, running.RepoID, "the job of the other repository was picked")
+			shared.execTask(t, task, &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
+		})
+
+		t.Run("a rerun takes the runner labels the environment has now", func(t *testing.T) {
+			e := newEnv("relabel", func(e *actions_model.ActionEnvironment) { e.RunnerLabels = []string{"env-a"} })
+			jobs := push("env-b", "environment: relabel")
+			runner.execTask(t, runner.fetchTask(t), &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
+			assert.Equal(t, []string{"env-b", "env-a"}, reload(jobs[0]).RunsOn)
+
+			e.RunnerLabels = []string{"env-c"}
+			require.NoError(t, actions_model.UpdateEnvironment(ctx, e))
+			run, err := actions_model.GetRunByID(t.Context(), jobs[0].RunID)
+			require.NoError(t, err)
+			_, err = actions_service.RerunAllJobs(t.Context(), run)
+			require.NoError(t, err)
+			require.Eventually(t, func() bool {
+				j := new(actions_model.ActionRunJob)
+				has, err := db.GetEngine(db.DefaultContext).ID(jobs[0].ID).Get(j)
+				return err == nil && has && j.Status == actions_model.StatusWaiting
+			}, 10*time.Second, 100*time.Millisecond)
+			assert.Equal(t, []string{"env-b", "env-c"}, reload(jobs[0]).RunsOn, "the label of the first attempt is gone")
+			runner.execTask(t, runner.fetchTask(t), &mockTaskOutcome{result: runnerv1.Result_RESULT_SUCCESS})
 		})
 	})
 }
