@@ -44,7 +44,7 @@ const (
 )
 
 var (
-	ErrEnvironmentNotFound = util.NewNotExistErrorf("environment does not exist")
+	ErrEnvironmentNotFound = secret_model.ErrEnvironmentNotFound
 	ErrEnvironmentExists   = util.NewAlreadyExistErrorf("environment already exists")
 	ErrEnvironmentLimit    = util.NewInvalidArgumentErrorf("too many environments in the repository")
 )
@@ -309,7 +309,7 @@ func createEnvironment(ctx context.Context, e *ActionEnvironment, auto bool, rev
 			return err
 		}
 		*e = *stored
-		if err := insertReviewers(ctx, e.ID, reviewers); err != nil {
+		if err := insertReviewers(ctx, e.RepoID, e.ID, reviewers); err != nil {
 			return err
 		}
 		data := e.auditData()
@@ -431,7 +431,7 @@ func UpdateEnvironment(ctx context.Context, e *ActionEnvironment, reviewers []Ac
 		if _, err := db.GetEngine(ctx).Where("environment_id = ?", e.ID).Delete(new(ActionEnvironmentReviewer)); err != nil {
 			return err
 		}
-		return insertReviewers(ctx, e.ID, reviewers)
+		return insertReviewers(ctx, e.RepoID, e.ID, reviewers)
 	})
 }
 
@@ -439,13 +439,7 @@ func UpdateEnvironment(ctx context.Context, e *ActionEnvironment, reviewers []Ac
 // and returns ErrEnvironmentNotFound if it is gone. Every insert of a secret or variable of an environment and its delete
 // take it first, so a concurrent delete can't leave rows of a deleted environment behind. Call it inside a transaction.
 func LockEnvironment(ctx context.Context, repoID, id int64) error {
-	if err := secret_model.LockEnvironment(ctx, repoID, id); err != nil {
-		if errors.Is(err, util.ErrNotExist) {
-			return ErrEnvironmentNotFound
-		}
-		return err
-	}
-	return nil
+	return secret_model.LockEnvironment(ctx, repoID, id)
 }
 
 // DeleteEnvironment deletes the environment with its secrets and variables and records it. Its deployments stay as

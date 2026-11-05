@@ -38,13 +38,18 @@ type reviewFixture struct {
 	ctx context.Context
 }
 
-// setReviewers makes the users and teams the reviewers of the environment as it is stored, keeping its rules.
+// setReviewers makes the users and teams the reviewers of the environment as it is stored, keeping its rules, as the
+// site administrator.
 func setReviewers(ctx context.Context, e *actions_model.ActionEnvironment, userIDs, teamIDs []int64) error {
 	stored, err := actions_model.GetRepoEnvironmentByID(ctx, e.RepoID, e.ID)
 	if err != nil {
 		return err
 	}
-	_, err = SaveEnvironment(ctx, stored, userIDs, teamIDs)
+	admin, err := user_model.GetUserByID(ctx, 1) // sees every reviewer
+	if err != nil {
+		return err
+	}
+	_, err = SaveEnvironment(ctx, admin, stored, userIDs, teamIDs)
 	return err
 }
 

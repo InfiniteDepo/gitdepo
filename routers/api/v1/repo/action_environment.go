@@ -216,7 +216,9 @@ func CreateOrUpdateActionEnvironment(ctx *context.APIContext) {
 	// description: >
 	//   The body is the whole set of rules: a field left out is reset to no rule, so a body without reviewers removes
 	//   them and the jobs that wait for a review are released. An environment whose name differs only in case is the
-	//   same environment and keeps its name. Every change is recorded in the audit log.
+	//   same environment and keeps its name. Every change is recorded in the audit log. Only a person's own
+	//   credential changes the rules: a request under sudo, with an OAuth2 grant or with an authorized integration is a
+	//   403. An unknown reviewer, or one the caller can't see, is a 422; so is an invalid rule.
 	// consumes:
 	// - application/json
 	// produces:
@@ -250,6 +252,8 @@ func CreateOrUpdateActionEnvironment(ctx *context.APIContext) {
 	//     "$ref": "#/responses/forbidden"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
+	//   "423":
+	//     "$ref": "#/responses/repoArchivedError"
 	//   "422":
 	//     "$ref": "#/responses/validationError"
 
@@ -284,8 +288,11 @@ func CreateOrUpdateActionEnvironment(ctx *context.APIContext) {
 		}
 	}
 
-	created, err := actions_service.SaveEnvironment(ctx, env, userIDs, teamIDs)
+	created, err := actions_service.SaveEnvironment(ctx, ctx.Doer(), env, userIDs, teamIDs)
 	switch {
+	case errors.Is(err, util.ErrPermissionDenied):
+		ctx.Error(http.StatusForbidden, "SaveEnvironment", err)
+		return
 	case errors.Is(err, util.ErrInvalidArgument):
 		ctx.Error(http.StatusUnprocessableEntity, "SaveEnvironment", err)
 		return
@@ -320,7 +327,8 @@ func DeleteActionEnvironment(ctx *context.APIContext) {
 	// summary: Delete a deployment environment of a repository with its secrets, variables and reviewers
 	// description: >
 	//   Its deployments stay as history. The jobs that wait for it, or were released by it and no runner took yet,
-	//   fail. A workflow that names the environment again creates it without rules.
+	//   fail. A workflow that names the environment again creates it without rules. Only a person's own credential
+	//   deletes it: a request under sudo, with an OAuth2 grant or with an authorized integration is a 403.
 	// produces:
 	// - application/json
 	// parameters:
@@ -346,12 +354,17 @@ func DeleteActionEnvironment(ctx *context.APIContext) {
 	//     "$ref": "#/responses/forbidden"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
+	//   "423":
+	//     "$ref": "#/responses/repoArchivedError"
 
 	env := environmentOfRepo(ctx)
 	if env == nil {
 		return
 	}
-	if err := actions_service.DeleteEnvironment(ctx, env); errors.Is(err, util.ErrNotExist) {
+	if err := actions_service.DeleteEnvironment(ctx, env); errors.Is(err, util.ErrPermissionDenied) {
+		ctx.Error(http.StatusForbidden, "DeleteEnvironment", err)
+		return
+	} else if errors.Is(err, util.ErrNotExist) {
 		ctx.NotFound()
 		return
 	} else if err != nil {
@@ -363,7 +376,7 @@ func DeleteActionEnvironment(ctx *context.APIContext) {
 
 // ListActionDeployments lists the deployments of a repository
 func ListActionDeployments(ctx *context.APIContext) {
-	// swagger:operation GET /repos/{owner}/{repo}/actions/deployments repository ListActionDeployments
+	// swagger:operation GET /repos/{owner}/{repo}/actions/deployments repository repoListActionDeployments
 	// ---
 	// summary: List the deployments of a repository, newest first
 	// produces:
@@ -479,6 +492,9 @@ func CreateOrUpdateActionEnvironmentSecret(ctx *context.APIContext) {
 	// swagger:operation PUT /repos/{owner}/{repo}/actions/environments/{environment}/secrets/{secretname} repository updateRepoEnvironmentSecret
 	// ---
 	// summary: Create or update a secret of a deployment environment
+	// description: >
+	//   An invalid name is a 400, as for the secrets of a repository. Only a person's own credential changes the
+	//   secrets of an environment: a request under sudo, with an OAuth2 grant or with an authorized integration is a 403.
 	// consumes:
 	// - application/json
 	// produces:
@@ -515,8 +531,12 @@ func CreateOrUpdateActionEnvironmentSecret(ctx *context.APIContext) {
 	//     description: response when updating a secret
 	//   "400":
 	//     "$ref": "#/responses/error"
+	//   "403":
+	//     "$ref": "#/responses/forbidden"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
+	//   "423":
+	//     "$ref": "#/responses/repoArchivedError"
 	if env := environmentOfRepo(ctx); env != nil {
 		putRepoSecret(ctx, env.ID)
 	}
@@ -527,6 +547,9 @@ func DeleteActionEnvironmentSecret(ctx *context.APIContext) {
 	// swagger:operation DELETE /repos/{owner}/{repo}/actions/environments/{environment}/secrets/{secretname} repository deleteRepoEnvironmentSecret
 	// ---
 	// summary: Delete a secret of a deployment environment
+	// description: >
+	//   An invalid name is a 400, as for the secrets of a repository. Only a person's own credential changes the
+	//   secrets of an environment: a request under sudo, with an OAuth2 grant or with an authorized integration is a 403.
 	// produces:
 	// - application/json
 	// parameters:
@@ -555,8 +578,12 @@ func DeleteActionEnvironmentSecret(ctx *context.APIContext) {
 	//     description: response when deleting a secret
 	//   "400":
 	//     "$ref": "#/responses/error"
+	//   "403":
+	//     "$ref": "#/responses/forbidden"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
+	//   "423":
+	//     "$ref": "#/responses/repoArchivedError"
 	if env := environmentOfRepo(ctx); env != nil {
 		deleteRepoSecret(ctx, env.ID)
 	}
@@ -650,6 +677,9 @@ func CreateActionEnvironmentVariable(ctx *context.APIContext) {
 	// swagger:operation POST /repos/{owner}/{repo}/actions/environments/{environment}/variables/{variablename} repository createRepoEnvironmentVariable
 	// ---
 	// summary: Create a variable of a deployment environment
+	// description: >
+	//   An invalid name is a 400, as for the variables of a repository. Only a person's own credential changes the
+	//   variables of an environment: a request under sudo, with an OAuth2 grant or with an authorized integration is a 403.
 	// produces:
 	// - application/json
 	// parameters:
@@ -682,8 +712,12 @@ func CreateActionEnvironmentVariable(ctx *context.APIContext) {
 	//     description: response when creating a variable
 	//   "400":
 	//     "$ref": "#/responses/error"
+	//   "403":
+	//     "$ref": "#/responses/forbidden"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
+	//   "423":
+	//     "$ref": "#/responses/repoArchivedError"
 	//   "409":
 	//     description: a variable of that name exists
 	if env := environmentOfRepo(ctx); env != nil {
@@ -696,6 +730,9 @@ func UpdateActionEnvironmentVariable(ctx *context.APIContext) {
 	// swagger:operation PUT /repos/{owner}/{repo}/actions/environments/{environment}/variables/{variablename} repository updateRepoEnvironmentVariable
 	// ---
 	// summary: Update a variable of a deployment environment
+	// description: >
+	//   An invalid name is a 400, as for the variables of a repository. Only a person's own credential changes the
+	//   variables of an environment: a request under sudo, with an OAuth2 grant or with an authorized integration is a 403.
 	// produces:
 	// - application/json
 	// parameters:
@@ -728,8 +765,12 @@ func UpdateActionEnvironmentVariable(ctx *context.APIContext) {
 	//     description: response when updating a variable
 	//   "400":
 	//     "$ref": "#/responses/error"
+	//   "403":
+	//     "$ref": "#/responses/forbidden"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
+	//   "423":
+	//     "$ref": "#/responses/repoArchivedError"
 	if env := environmentOfRepo(ctx); env != nil {
 		updateRepoVariable(ctx, env.ID)
 	}
@@ -740,6 +781,9 @@ func DeleteActionEnvironmentVariable(ctx *context.APIContext) {
 	// swagger:operation DELETE /repos/{owner}/{repo}/actions/environments/{environment}/variables/{variablename} repository deleteRepoEnvironmentVariable
 	// ---
 	// summary: Delete a variable of a deployment environment
+	// description: >
+	//   An invalid name is a 400, as for the variables of a repository. Only a person's own credential changes the
+	//   variables of an environment: a request under sudo, with an OAuth2 grant or with an authorized integration is a 403.
 	// produces:
 	// - application/json
 	// parameters:
@@ -768,8 +812,12 @@ func DeleteActionEnvironmentVariable(ctx *context.APIContext) {
 	//     description: response when deleting a variable
 	//   "400":
 	//     "$ref": "#/responses/error"
+	//   "403":
+	//     "$ref": "#/responses/forbidden"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
+	//   "423":
+	//     "$ref": "#/responses/repoArchivedError"
 	if env := environmentOfRepo(ctx); env != nil {
 		deleteRepoVariable(ctx, env.ID)
 	}

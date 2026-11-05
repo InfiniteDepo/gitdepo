@@ -554,8 +554,12 @@ func notifyFailedJobs(ctx context.Context, failures []*jobFailure) {
 
 // DeleteEnvironment deletes the environment (see actions_model.DeleteEnvironment) and, in the same transaction, fails
 // the jobs of it that no runner took yet, whether their deployment waits or was released: the environment can't
-// release them any more, and a job never runs without its gate.
+// release them any more, and a job never runs without its gate. Like a change of its rules, only the doer's own act
+// deletes it (audit_model.ErrNotOwnAct otherwise).
 func DeleteEnvironment(ctx context.Context, e *actions_model.ActionEnvironment) error {
+	if err := audit_model.CheckOwnAct(ctx); err != nil {
+		return err
+	}
 	var failures []*jobFailure
 	if err := actions_model.DeleteEnvironment(ctx, e, func(ctx context.Context) error {
 		failures = failures[:0]

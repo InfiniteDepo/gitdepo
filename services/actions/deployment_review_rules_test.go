@@ -478,3 +478,25 @@ func TestReviewRefusesEmptyJobsAndNoActor(t *testing.T) {
 	_, err = ReviewDeployments(f.ctx, doer, f.run, []int64{f.job.ID}, true, "")
 	require.NoError(t, err)
 }
+
+// The model checks the reviewers again in the transaction that inserts them, after the services' checks: a user or team
+// deleted meanwhile, or a team of an organization that no longer owns the repository, is refused there.
+func TestReviewerTeamsCheckedInTransaction(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := audit_model.WithSystem(t.Context(), "test")
+	e := &actions_model.ActionEnvironment{RepoID: 3, Name: "prod"} // repository 3 belongs to organization 3, team 1 too
+	require.NoError(t, actions_model.CreateEnvironment(ctx, e, []actions_model.ActionEnvironmentReviewer{{TeamID: 1}}))
+	for name, list := range map[string][]actions_model.ActionEnvironmentReviewer{
+		"a team of another organization": {{TeamID: 5}},
+		"a team that is gone":            {{TeamID: 99999}},
+		"a user that is gone":            {{TeamID: 1}, {UserID: 99999}},
+	} {
+		require.ErrorIs(t, actions_model.UpdateEnvironment(ctx, e, list), util.ErrInvalidArgument, name)
+		require.ErrorIs(t, actions_model.CreateEnvironment(ctx, &actions_model.ActionEnvironment{RepoID: 3, Name: "other"}, list), util.ErrInvalidArgument, name)
+	}
+	rs, err := actions_model.FindEnvironmentReviewers(ctx, e.ID)
+	require.NoError(t, err)
+	require.Len(t, rs, 1, "a refused list changes nothing")
+	assert.EqualValues(t, 1, rs[0].TeamID)
+	unittest.AssertNotExistsBean(t, &actions_model.ActionEnvironment{RepoID: 3, LowerName: "other"})
+}

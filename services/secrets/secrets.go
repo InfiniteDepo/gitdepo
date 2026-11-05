@@ -6,13 +6,19 @@ package secrets
 import (
 	"context"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	secret_model "forgejo.org/models/secret"
 )
 
 // CreateOrUpdateSecret creates or updates a secret of an owner, a project, a repository, or (environmentID not 0) an
-// environment of the repository.
+// environment of the repository; the secret of an environment only by the doer's own act (audit_model.CheckOwnAct).
 func CreateOrUpdateSecret(ctx context.Context, ownerID, groupID, repoID, environmentID int64, name, data string) (*secret_model.Secret, bool, error) {
+	if environmentID != 0 { // an environment's secrets are part of its deployment protection, like its rules
+		if err := audit_model.CheckOwnAct(ctx); err != nil {
+			return nil, false, err
+		}
+	}
 	if err := secret_model.ValidateName(name); err != nil {
 		return nil, false, err
 	}
@@ -67,6 +73,11 @@ func DeleteSecretByID(ctx context.Context, ownerID, groupID, repoID, secretID in
 }
 
 func DeleteSecretByName(ctx context.Context, ownerID, groupID, repoID, environmentID int64, name string) error {
+	if environmentID != 0 {
+		if err := audit_model.CheckOwnAct(ctx); err != nil {
+			return err
+		}
+	}
 	s, err := db.Find[secret_model.Secret](ctx, secret_model.FindSecretsOptions{
 		OwnerID:       ownerID,
 		GroupID:       groupID,

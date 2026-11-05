@@ -355,6 +355,8 @@ func putRepoSecret(ctx *context.APIContext, environmentID int64) {
 	if err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusBadRequest, "CreateOrUpdateSecret", err)
+		} else if errors.Is(err, util.ErrPermissionDenied) {
+			ctx.Error(http.StatusForbidden, "CreateOrUpdateSecret", err)
 		} else if errors.Is(err, util.ErrNotExist) {
 			ctx.Error(http.StatusNotFound, "CreateOrUpdateSecret", err)
 		} else {
@@ -377,6 +379,8 @@ func deleteRepoSecret(ctx *context.APIContext, environmentID int64) {
 	if err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusBadRequest, "DeleteSecret", err)
+		} else if errors.Is(err, util.ErrPermissionDenied) {
+			ctx.Error(http.StatusForbidden, "DeleteSecret", err)
 		} else if errors.Is(err, util.ErrNotExist) {
 			ctx.Error(http.StatusNotFound, "DeleteSecret", err)
 		} else {
@@ -417,6 +421,8 @@ func deleteRepoVariable(ctx *context.APIContext, environmentID int64) {
 	if err := actions_service.DeleteVariableByName(ctx, 0, 0, ctx.Repo().Repository.ID, environmentID, ctx.Params("variablename")); err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusBadRequest, "DeleteVariableByName", err)
+		} else if errors.Is(err, util.ErrPermissionDenied) {
+			ctx.Error(http.StatusForbidden, "DeleteVariableByName", err)
 		} else if errors.Is(err, util.ErrNotExist) {
 			ctx.Error(http.StatusNotFound, "DeleteVariableByName", err)
 		} else {
@@ -451,6 +457,10 @@ func createRepoVariable(ctx *context.APIContext, environmentID int64) {
 	if _, err := actions_service.CreateVariable(ctx, 0, 0, repoID, environmentID, variableName, opt.Value); err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusBadRequest, "CreateVariable", err)
+		} else if errors.Is(err, util.ErrPermissionDenied) {
+			ctx.Error(http.StatusForbidden, "CreateVariable", err)
+		} else if errors.Is(err, util.ErrNotExist) { // an environment deleted meanwhile
+			ctx.Error(http.StatusNotFound, "CreateVariable", err)
 		} else {
 			ctx.Error(http.StatusInternalServerError, "CreateVariable", err)
 		}
@@ -483,6 +493,10 @@ func updateRepoVariable(ctx *context.APIContext, environmentID int64) {
 	if _, err := actions_service.UpdateVariable(ctx, v.ID, 0, 0, ctx.Repo().Repository.ID, environmentID, opt.Name, opt.Value); err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusBadRequest, "UpdateVariable", err)
+		} else if errors.Is(err, util.ErrPermissionDenied) {
+			ctx.Error(http.StatusForbidden, "UpdateVariable", err)
+		} else if errors.Is(err, util.ErrNotExist) { // an environment deleted meanwhile
+			ctx.Error(http.StatusNotFound, "UpdateVariable", err)
 		} else {
 			ctx.Error(http.StatusInternalServerError, "UpdateVariable", err)
 		}

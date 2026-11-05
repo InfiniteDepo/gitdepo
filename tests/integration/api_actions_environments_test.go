@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -254,6 +255,110 @@ func TestAPIActionsEnvironments(t *testing.T) {
 			assert.Equal(t, 3, unittest.AssertExistsAndLoadBean(t, &actions_model.ActionEnvironment{RepoID: repo.ID, LowerName: "guarded"}).WaitTimerMinutes)
 		})
 
+		t.Run("delegated credentials and sudo change no protection", func(t *testing.T) {
+			put(ownerToken, "shielded", api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 4}}}, http.StatusCreated)
+			MakeRequest(t, NewRequestWithJSON(t, "PUT", base+"/shielded/secrets/DEPLOY", api.CreateOrUpdateSecretOption{Data: "the-owners-value"}).AddTokenAuth(ownerToken), http.StatusCreated)
+			MakeRequest(t, NewRequestWithJSON(t, "POST", base+"/shielded/variables/TARGET", api.CreateVariableOption{Value: "prod"}).AddTokenAuth(ownerToken), http.StatusNoContent)
+
+			ait := newAITester(t)
+			defer ait.close()
+			sudoToken := getUserToken(t, "user1", auth_model.AccessTokenScopeWriteRepository, auth_model.AccessTokenScopeWriteAdmin)
+			credentials := map[string]func(*RequestWrapper) *RequestWrapper{
+				"authorized integration": func(r *RequestWrapper) *RequestWrapper { return r.AddTokenAuth(ait.signedJWT()) },
+				"OAuth2 grant": func(r *RequestWrapper) *RequestWrapper {
+					return r.AddTokenAuth(createOAuth2Token(t, loginUser(t, user2.Name), []auth_model.AccessTokenScope{auth_model.AccessTokenScopeWriteRepository}))
+				},
+				"sudo": func(r *RequestWrapper) *RequestWrapper {
+					return r.AddTokenAuth(sudoToken).SetHeader("Sudo", user2.Name)
+				},
+			}
+			for name, auth := range credentials {
+				since := auditNow()
+				// the credential reaches the owner's environments: reads work
+				MakeRequest(t, auth(NewRequest(t, "GET", base+"/shielded")), http.StatusOK)
+				for _, req := range []*RequestWrapper{
+					NewRequestWithJSON(t, "PUT", base+"/shielded", api.CreateOrUpdateEnvironmentOption{}),
+					NewRequestWithJSON(t, "PUT", base+"/unshielded", api.CreateOrUpdateEnvironmentOption{}),
+					NewRequest(t, "DELETE", base+"/shielded"),
+					NewRequestWithJSON(t, "PUT", base+"/shielded/secrets/DEPLOY", api.CreateOrUpdateSecretOption{Data: "replaced"}),
+					NewRequestWithJSON(t, "PUT", base+"/shielded/secrets/OTHER", api.CreateOrUpdateSecretOption{Data: "added"}),
+					NewRequest(t, "DELETE", base+"/shielded/secrets/DEPLOY"),
+					NewRequestWithJSON(t, "POST", base+"/shielded/variables/OTHER", api.CreateVariableOption{Value: "added"}),
+					NewRequestWithJSON(t, "PUT", base+"/shielded/variables/TARGET", api.UpdateVariableOption{Value: "staging"}),
+					NewRequest(t, "DELETE", base+"/shielded/variables/TARGET"),
+				} {
+					MakeRequest(t, auth(req), http.StatusForbidden)
+				}
+				e := unittest.AssertExistsAndLoadBean(t, &actions_model.ActionEnvironment{RepoID: repo.ID, LowerName: "shielded"})
+				assert.True(t, e.ReviewsRequired, name)
+				unittest.AssertExistsAndLoadBean(t, &actions_model.ActionEnvironmentReviewer{EnvironmentID: e.ID, UserID: 4})
+				assert.False(t, unittest.BeanExists(t, &actions_model.ActionEnvironment{RepoID: repo.ID, LowerName: "unshielded"}), name)
+				rows, err := db.Find[secret_model.Secret](ctx, secret_model.FindSecretsOptions{RepoID: repo.ID, EnvironmentID: e.ID})
+				require.NoError(t, err)
+				require.Len(t, rows, 1, name)
+				value, err := rows[0].GetDecryptedData()
+				require.NoError(t, err)
+				assert.Equal(t, "the-owners-value", value, name)
+				v := unittest.AssertExistsAndLoadBean(t, &actions_model.ActionVariable{RepoID: repo.ID, EnvironmentID: e.ID, Name: "TARGET"})
+				assert.Equal(t, "prod", v.Data, name)
+				unittest.AssertNotExistsBean(t, &actions_model.ActionVariable{RepoID: repo.ID, EnvironmentID: e.ID, Name: "OTHER"})
+				assert.Empty(t, auditSince(since, "repo.actions_env"), name)
+			}
+
+			// repository secrets keep their rules: the same credentials may write them
+			MakeRequest(t, credentials["OAuth2 grant"](NewRequestWithJSON(t, "PUT", fmt.Sprintf("/api/v1/repos/%s/%s/actions/secrets/DELEGATED", user2.Name, repo.Name),
+				api.CreateOrUpdateSecretOption{Data: "x"})), http.StatusCreated)
+			MakeRequest(t, NewRequest(t, "DELETE", fmt.Sprintf("/api/v1/repos/%s/%s/actions/secrets/DELEGATED", user2.Name, repo.Name)).AddTokenAuth(ownerToken), http.StatusNoContent)
+
+			// the owner's own token still changes them
+			MakeRequest(t, NewRequestWithJSON(t, "PUT", base+"/shielded/secrets/DEPLOY", api.CreateOrUpdateSecretOption{Data: "rotated"}).AddTokenAuth(ownerToken), http.StatusNoContent)
+			put(ownerToken, "shielded", api.CreateOrUpdateEnvironmentOption{}, http.StatusOK)
+			MakeRequest(t, NewRequest(t, "DELETE", base+"/shielded").AddTokenAuth(ownerToken), http.StatusNoContent)
+		})
+
+		t.Run("a reviewer the doer can't see is unknown", func(t *testing.T) {
+			// user31 is private and shares no organization with user2; user3 is an organization, -2 the Actions user,
+			// team 2 belongs to another owner
+			messages := map[string]bool{}
+			for _, r := range []*api.ActionEnvironmentReviewer{{Type: "user", ID: 31}, {Type: "user", ID: 99999}, {Type: "user", ID: 3}, {Type: "user", ID: -2}, {Type: "team", ID: 2}, {Type: "team", ID: 99999}} {
+				resp := MakeRequest(t, NewRequestWithJSON(t, "PUT", base+"/hidden-reviewer", api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{r}}).AddTokenAuth(ownerToken), http.StatusUnprocessableEntity)
+				messages[resp.Body.String()] = true
+			}
+			assert.Len(t, messages, 1, "one answer for unknown, hidden and wrong-type reviewers")
+			assert.False(t, unittest.BeanExists(t, &actions_model.ActionEnvironment{RepoID: repo.ID, LowerName: "hidden-reviewer"}))
+			// a site administrator sees user31
+			put(siteAdminToken, "hidden-reviewer", api.CreateOrUpdateEnvironmentOption{Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 31}}}, http.StatusCreated)
+			MakeRequest(t, NewRequest(t, "DELETE", base+"/hidden-reviewer").AddTokenAuth(ownerToken), http.StatusNoContent)
+		})
+
+		t.Run("concurrent creates of one name make one environment", func(t *testing.T) {
+			since := auditNow()
+			var wg sync.WaitGroup
+			codes := make([]int, 8)
+			for i := range codes {
+				wg.Go(func() {
+					codes[i] = MakeRequest(t, NewRequestWithJSON(t, "PUT", base+"/race", api.CreateOrUpdateEnvironmentOption{
+						Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 4}},
+					}).AddTokenAuth(ownerToken), NoExpectedStatus).Code
+				})
+			}
+			wg.Wait()
+			created := 0
+			for _, code := range codes {
+				if code == http.StatusCreated {
+					created++
+				} else {
+					assert.Equal(t, http.StatusOK, code)
+				}
+			}
+			assert.Equal(t, 1, created, codes)
+			e := unittest.AssertExistsAndLoadBean(t, &actions_model.ActionEnvironment{RepoID: repo.ID, LowerName: "race"})
+			assert.Equal(t, 1, unittest.GetCount(t, &actions_model.ActionEnvironmentReviewer{EnvironmentID: e.ID}))
+			assert.Len(t, auditSince(since, "repo.actions_env.created"), 1)
+			assert.Empty(t, auditSince(since, "repo.actions_env.updated"))
+			MakeRequest(t, NewRequest(t, "DELETE", base+"/race").AddTokenAuth(ownerToken), http.StatusNoContent)
+		})
+
 		t.Run("secrets and variables of an environment", func(t *testing.T) {
 			env := put(ownerToken, "vault", api.CreateOrUpdateEnvironmentOption{}, http.StatusCreated)
 			since := auditNow()
@@ -323,7 +428,7 @@ func TestAPIActionsEnvironments(t *testing.T) {
 			_, _, err = secrets_service.CreateOrUpdateSecret(ctx, 0, 0, repo.ID, env.ID, "LATE", "late-value")
 			require.ErrorIs(t, err, util.ErrNotExist)
 			_, err = actions_service.CreateVariable(ctx, 0, 0, repo.ID, env.ID, "LATE", "late")
-			require.Error(t, err)
+			require.ErrorIs(t, err, util.ErrNotExist)
 			unittest.AssertNotExistsBean(t, &secret_model.Secret{EnvironmentID: env.ID})
 			unittest.AssertNotExistsBean(t, &actions_model.ActionVariable{EnvironmentID: env.ID})
 		})

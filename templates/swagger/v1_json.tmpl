@@ -10649,7 +10649,7 @@
           "repository"
         ],
         "summary": "List the deployments of a repository, newest first",
-        "operationId": "ListActionDeployments",
+        "operationId": "repoListActionDeployments",
         "parameters": [
           {
             "type": "string",
@@ -10794,7 +10794,7 @@
         }
       },
       "put": {
-        "description": "The body is the whole set of rules: a field left out is reset to no rule, so a body without reviewers removes them and the jobs that wait for a review are released. An environment whose name differs only in case is the same environment and keeps its name. Every change is recorded in the audit log.\n",
+        "description": "The body is the whole set of rules: a field left out is reset to no rule, so a body without reviewers removes them and the jobs that wait for a review are released. An environment whose name differs only in case is the same environment and keeps its name. Every change is recorded in the audit log. Only a person's own credential changes the rules: a request under sudo, with an OAuth2 grant or with an authorized integration is a 403. An unknown reviewer, or one the caller can't see, is a 422; so is an invalid rule.\n",
         "consumes": [
           "application/json"
         ],
@@ -10851,11 +10851,14 @@
           },
           "422": {
             "$ref": "#/responses/validationError"
+          },
+          "423": {
+            "$ref": "#/responses/repoArchivedError"
           }
         }
       },
       "delete": {
-        "description": "Its deployments stay as history. The jobs that wait for it, or were released by it and no runner took yet, fail. A workflow that names the environment again creates it without rules.\n",
+        "description": "Its deployments stay as history. The jobs that wait for it, or were released by it and no runner took yet, fail. A workflow that names the environment again creates it without rules. Only a person's own credential deletes it: a request under sudo, with an OAuth2 grant or with an authorized integration is a 403.\n",
         "produces": [
           "application/json"
         ],
@@ -10896,6 +10899,9 @@
           },
           "404": {
             "$ref": "#/responses/notFound"
+          },
+          "423": {
+            "$ref": "#/responses/repoArchivedError"
           }
         }
       }
@@ -10957,6 +10963,7 @@
     },
     "/repos/{owner}/{repo}/actions/environments/{environment}/secrets/{secretname}": {
       "put": {
+        "description": "An invalid name is a 400, as for the secrets of a repository. Only a person's own credential changes the secrets of an environment: a request under sudo, with an OAuth2 grant or with an authorized integration is a 403.\n",
         "consumes": [
           "application/json"
         ],
@@ -11015,12 +11022,19 @@
           "400": {
             "$ref": "#/responses/error"
           },
+          "403": {
+            "$ref": "#/responses/forbidden"
+          },
           "404": {
             "$ref": "#/responses/notFound"
+          },
+          "423": {
+            "$ref": "#/responses/repoArchivedError"
           }
         }
       },
       "delete": {
+        "description": "An invalid name is a 400, as for the secrets of a repository. Only a person's own credential changes the secrets of an environment: a request under sudo, with an OAuth2 grant or with an authorized integration is a 403.\n",
         "produces": [
           "application/json"
         ],
@@ -11066,8 +11080,14 @@
           "400": {
             "$ref": "#/responses/error"
           },
+          "403": {
+            "$ref": "#/responses/forbidden"
+          },
           "404": {
             "$ref": "#/responses/notFound"
+          },
+          "423": {
+            "$ref": "#/responses/repoArchivedError"
           }
         }
       }
@@ -11183,6 +11203,7 @@
         }
       },
       "put": {
+        "description": "An invalid name is a 400, as for the variables of a repository. Only a person's own credential changes the variables of an environment: a request under sudo, with an OAuth2 grant or with an authorized integration is a 403.\n",
         "produces": [
           "application/json"
         ],
@@ -11235,12 +11256,19 @@
           "400": {
             "$ref": "#/responses/error"
           },
+          "403": {
+            "$ref": "#/responses/forbidden"
+          },
           "404": {
             "$ref": "#/responses/notFound"
+          },
+          "423": {
+            "$ref": "#/responses/repoArchivedError"
           }
         }
       },
       "post": {
+        "description": "An invalid name is a 400, as for the variables of a repository. Only a person's own credential changes the variables of an environment: a request under sudo, with an OAuth2 grant or with an authorized integration is a 403.\n",
         "produces": [
           "application/json"
         ],
@@ -11293,15 +11321,22 @@
           "400": {
             "$ref": "#/responses/error"
           },
+          "403": {
+            "$ref": "#/responses/forbidden"
+          },
           "404": {
             "$ref": "#/responses/notFound"
           },
           "409": {
             "description": "a variable of that name exists"
+          },
+          "423": {
+            "$ref": "#/responses/repoArchivedError"
           }
         }
       },
       "delete": {
+        "description": "An invalid name is a 400, as for the variables of a repository. Only a person's own credential changes the variables of an environment: a request under sudo, with an OAuth2 grant or with an authorized integration is a 403.\n",
         "produces": [
           "application/json"
         ],
@@ -11347,8 +11382,14 @@
           "400": {
             "$ref": "#/responses/error"
           },
+          "403": {
+            "$ref": "#/responses/forbidden"
+          },
           "404": {
             "$ref": "#/responses/notFound"
+          },
+          "423": {
+            "$ref": "#/responses/repoArchivedError"
           }
         }
       }

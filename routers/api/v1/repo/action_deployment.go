@@ -56,13 +56,13 @@ func loadDeploymentData(ctx *context.APIContext, ds []*actions_model.ActionDeplo
 	}
 	data := &deploymentData{}
 	var err error
-	if data.jobs, err = db.GetByIDs(ctx, "id", slices.Compact(slices.Sorted(slices.Values(jobIDs))), &actions_model.ActionRunJob{}); err != nil {
+	if data.jobs, err = findColumns[actions_model.ActionRunJob](ctx, jobIDs, "id", "repo_id", "name"); err != nil {
 		return nil, err
 	}
-	if data.runs, err = db.GetByIDs(ctx, "id", slices.Compact(slices.Sorted(slices.Values(runIDs))), &actions_model.ActionRun{}); err != nil {
+	if data.runs, err = findColumns[actions_model.ActionRun](ctx, runIDs, "id", "repo_id", "index"); err != nil {
 		return nil, err
 	}
-	if data.envs, err = db.GetByIDs(ctx, "id", slices.Compact(slices.Sorted(slices.Values(envIDs))), &actions_model.ActionEnvironment{}); err != nil {
+	if data.envs, err = findColumns[actions_model.ActionEnvironment](ctx, envIDs, "id", "repo_id", "name"); err != nil {
 		return nil, err
 	}
 	userIDs = slices.DeleteFunc(slices.Compact(slices.Sorted(slices.Values(userIDs))), func(id int64) bool { return id == 0 })
@@ -70,6 +70,15 @@ func loadDeploymentData(ctx *context.APIContext, ds []*actions_model.ActionDeplo
 		return nil, err
 	}
 	return data, nil
+}
+
+// findColumns loads the rows of ids by ID with only the named columns (run and job rows carry large payloads).
+func findColumns[T any](ctx *context.APIContext, ids []int64, columns ...string) (map[int64]*T, error) {
+	rows := map[int64]*T{}
+	if ids = slices.Compact(slices.Sorted(slices.Values(ids))); len(ids) == 0 {
+		return rows, nil
+	}
+	return rows, db.GetEngine(ctx).In("id", ids).Cols(columns...).Find(&rows)
 }
 
 // toActionDeployment converts what every list of deployments shows of d. Everything is read from the repository of

@@ -11,6 +11,7 @@ import (
 	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
+	secret_model "forgejo.org/models/secret"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/timeutil"
 
@@ -47,24 +48,6 @@ func init() {
 	db.RegisterModel(new(ActionVariable))
 }
 
-// lockGroup locks the project row (nothing for groupID 0), so that deleting the project (which deletes its variables)
-// and adding, changing or deleting one run one after the other.
-func lockGroup(ctx context.Context, ownerID, groupID int64) error {
-	if groupID == 0 {
-		return nil
-	}
-	_, err := repo_model.LockRepoGroup(ctx, ownerID, groupID)
-	return err
-}
-
-// lockLevel takes the lock of the project or the environment of a variable, if it belongs to one.
-func lockLevel(ctx context.Context, ownerID, groupID, repoID, environmentID int64) error {
-	if environmentID != 0 {
-		return LockEnvironment(ctx, repoID, environmentID)
-	}
-	return lockGroup(ctx, ownerID, groupID)
-}
-
 func InsertVariable(ctx context.Context, ownerID, groupID, repoID int64, name, data string) (*ActionVariable, error) {
 	return insertVariable(ctx, ownerID, groupID, repoID, 0, name, data)
 }
@@ -93,7 +76,7 @@ func insertVariable(ctx context.Context, ownerID, groupID, repoID, environmentID
 		Data:          data,
 	}
 	return variable, db.WithTx(ctx, func(ctx context.Context) error {
-		if err := lockLevel(ctx, ownerID, groupID, repoID, environmentID); err != nil {
+		if err := secret_model.LockLevel(ctx, ownerID, groupID, repoID, environmentID); err != nil {
 			return err
 		}
 		if err := db.Insert(ctx, variable); err != nil {
@@ -164,7 +147,7 @@ func FindVariables(ctx context.Context, opts FindVariablesOpts) ([]*ActionVariab
 func UpdateVariable(ctx context.Context, variable *ActionVariable) (bool, error) {
 	var count int64
 	err := db.WithTx(ctx, func(ctx context.Context) (err error) {
-		if err = lockLevel(ctx, variable.OwnerID, variable.GroupID, variable.RepoID, variable.EnvironmentID); err != nil {
+		if err = secret_model.LockLevel(ctx, variable.OwnerID, variable.GroupID, variable.RepoID, variable.EnvironmentID); err != nil {
 			return err
 		}
 		stored := new(ActionVariable)
@@ -207,7 +190,7 @@ func DeleteEnvironmentVariable(ctx context.Context, variableID, repoID, environm
 func deleteVariable(ctx context.Context, variableID, ownerID, groupID, repoID, environmentID int64) (bool, error) {
 	var count int64
 	err := db.WithTx(ctx, func(ctx context.Context) (err error) {
-		if err = lockLevel(ctx, ownerID, groupID, repoID, environmentID); err != nil {
+		if err = secret_model.LockLevel(ctx, ownerID, groupID, repoID, environmentID); err != nil {
 			return err
 		}
 		stored := new(ActionVariable)

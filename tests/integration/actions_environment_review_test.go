@@ -33,13 +33,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// setEnvironmentReviewers makes the users and teams the reviewers of the environment as it is stored, keeping its rules.
+// setEnvironmentReviewers makes the users and teams the reviewers of the environment as it is stored, keeping its rules, as the
+// site administrator.
 func setEnvironmentReviewers(ctx context.Context, e *actions_model.ActionEnvironment, userIDs, teamIDs []int64) error {
 	stored, err := actions_model.GetRepoEnvironmentByID(ctx, e.RepoID, e.ID)
 	if err != nil {
 		return err
 	}
-	_, err = actions_service.SaveEnvironment(ctx, stored, userIDs, teamIDs)
+	admin, err := user_model.GetUserByID(ctx, 1) // sees every reviewer
+	if err != nil {
+		return err
+	}
+	_, err = actions_service.SaveEnvironment(ctx, admin, stored, userIDs, teamIDs)
 	return err
 }
 

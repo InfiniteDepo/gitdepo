@@ -36,7 +36,8 @@ func TestEnvironmentReviewerList(t *testing.T) {
 		}
 		return rs
 	}
-	require.NoError(t, UpdateEnvironment(ctx, e, append(users(2, 3), ActionEnvironmentReviewer{TeamID: 5})))
+	// this package has no team table: teams are checked in services/actions (TestReviewerTeamsCheckedInTransaction)
+	require.NoError(t, UpdateEnvironment(ctx, e, users(2, 3, 4)))
 	rs, err := FindEnvironmentReviewers(ctx, e.ID)
 	require.NoError(t, err)
 	assert.Len(t, rs, 3)
@@ -50,6 +51,7 @@ func TestEnvironmentReviewerList(t *testing.T) {
 		"user twice":    users(1, 1),
 		"team twice":    {{TeamID: 4}, {TeamID: 4}},
 		"negative team": {{TeamID: -1}},
+		"unknown user":  users(2, 99999),
 	} {
 		require.ErrorIs(t, UpdateEnvironment(ctx, e, list), util.ErrInvalidArgument, name)
 	}

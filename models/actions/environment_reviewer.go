@@ -77,8 +77,35 @@ func reviewerListKeys(reviewers []ActionEnvironmentReviewer) ([]string, error) {
 	return keys, nil
 }
 
-// insertReviewers inserts the reviewers of the environment, in the caller's transaction.
-func insertReviewers(ctx context.Context, environmentID int64, reviewers []ActionEnvironmentReviewer) error {
+// insertReviewers inserts the reviewers of the environment of repository repoID, in the caller's transaction after the
+// environment's lock, which the deletion of a user or team and a transfer take to remove their rows: a user or team
+// that is gone by now, or a team the repository's owner doesn't have, is an invalid argument, so no row is left that
+// nobody can be.
+func insertReviewers(ctx context.Context, repoID, environmentID int64, reviewers []ActionEnvironmentReviewer) error {
+	var userIDs, teamIDs []int64
+	for _, r := range reviewers {
+		if r.TeamID > 0 {
+			teamIDs = append(teamIDs, r.TeamID)
+		} else {
+			userIDs = append(userIDs, r.UserID)
+		}
+	}
+	users, teams := int64(0), int64(0)
+	var err error
+	if len(userIDs) > 0 {
+		if users, err = db.GetEngine(ctx).Table("user").In("id", userIDs).Count(); err != nil {
+			return err
+		}
+	}
+	if len(teamIDs) > 0 {
+		if teams, err = db.GetEngine(ctx).Table("team").In("id", teamIDs).
+			And("org_id = (SELECT owner_id FROM repository WHERE id = ?)", repoID).Count(); err != nil {
+			return err
+		}
+	}
+	if users != int64(len(userIDs)) || teams != int64(len(teamIDs)) {
+		return util.NewInvalidArgumentErrorf("unknown reviewer")
+	}
 	for _, r := range reviewers {
 		if err := db.Insert(ctx, &ActionEnvironmentReviewer{EnvironmentID: environmentID, UserID: r.UserID, TeamID: r.TeamID}); err != nil {
 			return err
