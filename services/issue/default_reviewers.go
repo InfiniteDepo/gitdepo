@@ -26,7 +26,8 @@ import (
 // the changed files. With oldHead (the head commit before a push) only a rule with path patterns that did not apply to
 // the files at oldHead is used. The requests are advisory: nobody who is the author, can't sign in, is blocked by the
 // organization's two-factor requirement, can't read pull requests or already has a review or request is asked, and a
-// failure for one reviewer is logged and doesn't stop the others.
+// failure for one reviewer is logged and doesn't stop the others. A user or team whose request on this pull request
+// someone removed is never asked again.
 func DefaultReviewerRequests(ctx context.Context, issue *issues_model.Issue, pr *issues_model.PullRequest, oldHead string) ([]*ReviewRequestNotifier, error) {
 	if issue.IsClosed || pr.HasMerged || pr.IsWorkInProgress(ctx) {
 		return nil, nil
@@ -62,11 +63,7 @@ func DefaultReviewerRequests(ctx context.Context, issue *issues_model.Issue, pr 
 	// the value says whether a rule with a count asks: only then the request is official and can block
 	userIDs, teamIDs := map[int64]bool{}, map[int64]bool{}
 	for _, r := range rules {
-		// after a push only a rule that newly applies asks: a rule without paths when the old head changed nothing
-		if !r.AppliesTo(files) || (oldHead != "" && (len(oldFiles) > 0 || r.PathPatterns != "") && r.AppliesTo(oldFiles)) {
-			continue
-		}
-		if oldHead != "" && r.PathPatterns == "" && len(files) == 0 {
+		if !newlyApplies(r, files, oldFiles, oldHead != "") {
 			continue
 		}
 		for _, id := range r.UserIDs {
@@ -75,6 +72,16 @@ func DefaultReviewerRequests(ctx context.Context, issue *issues_model.Issue, pr 
 		for _, id := range r.TeamIDs {
 			teamIDs[id] = teamIDs[id] || r.RequiredCount > 0
 		}
+	}
+	// a person removed these requests: they are never made again on this pull request
+	var removed []*issues_model.Comment
+	if err := db.GetEngine(ctx).Cols("assignee_id", "assignee_team_id").Where("issue_id = ? AND type = ? AND removed_assignee = ?",
+		issue.ID, issues_model.CommentTypeReviewRequest, true).Find(&removed); err != nil {
+		return nil, err
+	}
+	for _, c := range removed {
+		delete(userIDs, c.AssigneeID)
+		delete(teamIDs, c.AssigneeTeamID)
 	}
 	if len(userIDs)+len(teamIDs) == 0 {
 		return nil, nil
@@ -137,6 +144,22 @@ func DefaultReviewerRequests(ctx context.Context, issue *issues_model.Issue, pr 
 		}
 	}
 	return notifiers, nil
+}
+
+// newlyApplies returns whether the rule asks now: when the pull request opens or is retargeted (push false) if it
+// applies to the files, and after a push only if it starts to apply:
+//
+//	rule with paths:    applies to files && !applies to oldFiles
+//	rule without paths: files changed now && no files changed at the old head (a pull request that opened empty)
+func newlyApplies(r *git_model.ApprovalRule, files, oldFiles []string, push bool) bool {
+	switch {
+	case !push:
+		return r.AppliesTo(files)
+	case r.PathPatterns == "":
+		return len(files) > 0 && len(oldFiles) == 0
+	default:
+		return r.AppliesTo(files) && !r.AppliesTo(oldFiles)
+	}
 }
 
 // requestUnofficially adds a review request with add and, unless official, makes it advisory, in one transaction.

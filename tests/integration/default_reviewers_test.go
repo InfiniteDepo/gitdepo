@@ -664,3 +664,32 @@ func TestDefaultReviewersAdvisoryOrgAndProject(t *testing.T) {
 		})
 	})
 }
+
+// A user whose request someone removed is not asked again on that pull request, also when the author makes the rule
+// apply again with two pushes.
+func TestDefaultReviewersRemovedNotAskedAgain(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		e := newDREnv(t, 1)
+		e.collaborator("user4", "write")
+		e.branch("dr-removed")
+		rule := requestRule("DB", 0, "", "user4")
+		rule.PathPatterns = "db/**"
+		e.protect("dr-removed", rule)
+		index := e.pr("dr-removed", "head-removed", "rm", create("db/x.txt", "x"))
+		require.Equal(t, []string{"user4"}, e.requested(index))
+		e.do("DELETE", fmt.Sprintf("/pulls/%d/requested_reviewers", index), &api.PullReviewRequestOptions{Reviewers: []string{"user4"}}, http.StatusNoContent)
+		comments := e.requestComments(index)
+
+		push := func(op *api.ChangeFileOperation) {
+			before := e.pushComments(index)
+			e.change("head-removed", "", op)
+			require.Eventually(t, func() bool { return e.pushComments(index) > before && !pullTaskRunning() }, 15*time.Second, 50*time.Millisecond)
+		}
+		var c api.ContentsResponse
+		DecodeJSON(t, e.do("GET", "/contents/db/x.txt?ref=head-removed", nil, http.StatusOK), &c)
+		push(&api.ChangeFileOperation{Operation: "delete", Path: "db/x.txt", SHA: c.SHA})
+		push(create("db/z.txt", "z"))
+		assert.Empty(t, e.requested(index))
+		assert.Equal(t, comments, e.requestComments(index))
+	})
+}
