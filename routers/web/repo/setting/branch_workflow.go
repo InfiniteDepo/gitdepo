@@ -158,6 +158,9 @@ func prepareBranchWorkflow(ctx *context.Context) bool {
 	ctx.Data["ProductionBranch"] = shownModel.ProductionBranch
 	ctx.Data["ModelTypes"] = shownModel.Types
 	ctx.Data["DefaultPRTarget"] = shownModel.DefaultPRTarget
+	if !SetNamingData(ctx, &shownModel) {
+		return false
+	}
 	if model.Locked && ctx.Doer != nil {
 		isOwner, err := organization.OrgFromUser(ctx.Repo.Owner).IsActingOwner(ctx, ctx.Doer)
 		if err != nil {
@@ -204,6 +207,20 @@ func prepareBranchWorkflow(ctx *context.Context) bool {
 	return true
 }
 
+// SetNamingData sets the "new branch names" fields of the settings pages from the model shown.
+func SetNamingData(ctx *context.Context, m *repo_model.BranchingModel) bool {
+	naming, err := branchworkflow.NamingToAPI(ctx, m)
+	if err != nil {
+		ctx.ServerError("NamingToAPI", err)
+		return false
+	}
+	ctx.Data["RequireBranchType"] = naming.RequireBranchType
+	ctx.Data["BranchExceptions"] = strings.Join(naming.Exceptions, "\n")
+	ctx.Data["ExemptUsers"] = strings.Join(naming.ExemptUsers, ", ")
+	ctx.Data["ExemptTeams"] = strings.Join(naming.ExemptTeams, ", ")
+	return true
+}
+
 // maxIgnoredShown caps the ignored branches the chain preview lists.
 const maxIgnoredShown = 20
 
@@ -215,7 +232,13 @@ func BranchingModelPost(ctx *context.Context) {
 		model = form.Model()
 	}
 	before, beforeErr := branchworkflow.GetEffectiveModel(ctx, ctx.Repo.Repository)
-	err := branchworkflow.SetRepoModel(ctx, ctx.Repo.Repository, model)
+	var err error
+	if model != nil {
+		err = branchworkflow.ApplyNaming(ctx, ctx.Repo.Owner, model, form.Naming())
+	}
+	if err == nil {
+		err = branchworkflow.SetRepoModel(ctx, ctx.Repo.Repository, model)
+	}
 	if invalid, ok := branchworkflow.IsInvalidBranchingModel(err); ok {
 		ctx.Flash.Error(InvalidModelText(ctx, invalid))
 	} else {
@@ -316,6 +339,18 @@ func InvalidModelText(ctx *context.Context, e branchworkflow.ErrInvalidBranching
 		return ctx.Tr("repo.settings.branching_model.invalid.branch_required", e.Value)
 	case branchworkflow.ReasonUnknownBase:
 		return ctx.Tr("repo.settings.branching_model.invalid.unknown_base", e.Value)
+	case branchworkflow.ReasonException:
+		return ctx.Tr("repo.settings.branching_model.invalid.exception", e.Value)
+	case branchworkflow.ReasonTooManyNaming:
+		return ctx.Tr("repo.settings.branching_model.invalid.too_many_naming")
+	case branchworkflow.ReasonExemptUser:
+		return ctx.Tr("repo.settings.branching_model.invalid.exempt_user", e.Value)
+	case branchworkflow.ReasonExemptTeam:
+		return ctx.Tr("repo.settings.branching_model.invalid.exempt_team", e.Value)
+	case branchworkflow.ReasonExemptNeedsTeam:
+		return ctx.Tr("repo.settings.branching_model.invalid.exempt_needs_team", e.Value)
+	case branchworkflow.ReasonNoUsableType:
+		return ctx.Tr("repo.settings.branching_model.invalid.no_usable_type")
 	case branchworkflow.ReasonProductionRequired:
 		return ctx.Tr("repo.settings.branching_model.invalid.production_required", e.Value)
 	}

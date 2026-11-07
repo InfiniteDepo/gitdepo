@@ -66,6 +66,7 @@ type FindBranchOptions struct {
 	IsDeletedBranch    optional.Option[bool]
 	OrderBy            string
 	Keyword            string
+	Cond               builder.Cond // an extra condition
 }
 
 func (opts FindBranchOptions) ToConds() builder.Cond {
@@ -82,6 +83,9 @@ func (opts FindBranchOptions) ToConds() builder.Cond {
 	}
 	if opts.Keyword != "" {
 		cond = cond.And(builder.Like{"name", opts.Keyword})
+	}
+	if opts.Cond != nil {
+		cond = cond.And(opts.Cond)
 	}
 	return cond
 }

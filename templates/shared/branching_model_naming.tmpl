@@ -1,0 +1,22 @@
+{{/* The names of new branches in the branching model form. Needs RequireBranchType, BranchExceptions, ExemptUsers, ExemptTeams; ModelLocked disables the fields. */}}
+<div class="field" id="branch-naming-field">
+	<div class="ui checkbox">
+		<input id="require_branch_type" name="require_branch_type" type="checkbox" {{if .RequireBranchType}}checked{{end}} {{if .ModelLocked}}disabled{{end}}>
+		<label for="require_branch_type">{{ctx.Locale.Tr "repo.settings.branching_model.require_type"}}</label>
+		<p class="help">{{ctx.Locale.Tr "repo.settings.branching_model.require_type_desc"}}</p>
+	</div>
+</div>
+<div class="field">
+	<label for="branch_exceptions">{{ctx.Locale.Tr "repo.settings.branching_model.exceptions"}}</label>
+	<textarea id="branch_exceptions" name="branch_exceptions" rows="3" placeholder="renovate/**" {{if .ModelLocked}}disabled{{end}}>{{.BranchExceptions}}</textarea>
+	<p class="help">{{ctx.Locale.Tr "repo.settings.branching_model.exceptions_desc"}}</p>
+</div>
+<div class="field">
+	<label for="exempt_users">{{ctx.Locale.Tr "repo.settings.branching_model.exempt_users"}}</label>
+	<input id="exempt_users" name="exempt_users" value="{{.ExemptUsers}}" {{if .ModelLocked}}disabled{{end}}>
+</div>
+<div class="field">
+	<label for="exempt_teams">{{ctx.Locale.Tr "repo.settings.branching_model.exempt_teams"}}</label>
+	<input id="exempt_teams" name="exempt_teams" value="{{.ExemptTeams}}" {{if .ModelLocked}}disabled{{end}}>
+	<p class="help">{{ctx.Locale.Tr "repo.settings.branching_model.exempt_desc"}}{{if .ModelLocked}} {{ctx.Locale.Tr "repo.settings.branching_model.exempt_org_only"}}{{end}}</p>
+</div>

@@ -1,0 +1,18 @@
+{{/* Branches of the issue, for viewers who can read the code; the button only for those who can write it. */}}
+{{if .ShowIssueDevelopment}}
+<div class="ui small header">{{ctx.Locale.Tr "repo.issues.development"}}</div>
+<div id="issue-development">
+	{{range .IssueBranches}}
+	<div class="flex-text-block tw-flex-wrap">
+		{{svg "octicon-git-branch"}}<a class="gt-ellipsis" href="{{$.RepoLink}}/src/branch/{{PathEscapeSegments .}}">{{.}}</a>
+		{{if $.Repository.AllowsPulls ctx}}<a class="tw-ml-auto" href="{{$.RepoLink}}/compare/{{PathEscapeSegments .}}">{{ctx.Locale.Tr "repo.issues.development.create_pull"}}</a>{{end}}
+	</div>
+	{{else}}
+	<span class="text light">{{ctx.Locale.Tr "repo.issues.development.none"}}</span>
+	{{end}}
+	{{if .BranchDialog}}
+	<button type="button" class="ui tiny basic button show-create-branch-modal tw-mt-2" data-branch-from="{{.IssueBranchFrom}}" {{with .IssueBranchSuggestion}}data-suggest-name="{{.Name}}" data-suggest-type="{{.Type}}"{{end}}>{{ctx.Locale.Tr "repo.issues.development.create_branch"}}</button>
+	{{end}}
+</div>
+<div class="divider"></div>
+{{end}}

@@ -234,6 +234,7 @@ var Actions = map[string]string{
 	"repo.branch.merged_forward":           CategoryRepo,
 	"repo.branch_workflow.changed":         CategoryRepo,
 	"repo.branch.renamed":                  CategoryRepo,
+	"repo.branch.type_exempt":              CategoryRepo,
 	"repo.collaborator.added":              CategoryRepo,
 	"repo.collaborator.mode_changed":       CategoryRepo,
 	"repo.collaborator.removed":            CategoryRepo,

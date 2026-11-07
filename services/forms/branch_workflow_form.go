@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	repo_model "forgejo.org/models/repo"
+	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/web/middleware"
 	"forgejo.org/services/context"
 
@@ -44,6 +45,19 @@ type BranchingModelForm struct {
 	TypeBranch   []string
 	TypeOn       []string
 	EnforceModel bool // organizations only
+	// the names of new branches: one exception pattern per line, user and team names separated by commas or lines
+	RequireBranchType bool
+	BranchExceptions  string
+	ExemptUsers       string
+	ExemptTeams       string
+}
+
+// Naming returns the naming fields of the form.
+func (f *BranchingModelForm) Naming() api.BranchNaming {
+	list := func(s string) []string {
+		return strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == '\n' || r == '\r' })
+	}
+	return api.BranchNaming{RequireBranchType: f.RequireBranchType, Exceptions: strings.FieldsFunc(f.BranchExceptions, func(r rune) bool { return r == '\n' || r == '\r' }), ExemptUsers: list(f.ExemptUsers), ExemptTeams: list(f.ExemptTeams)}
 }
 
 // Model builds the branching model the form describes; branchworkflow.NormalizeBranchingModel checks it.

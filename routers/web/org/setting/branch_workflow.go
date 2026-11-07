@@ -61,6 +61,12 @@ func renderBranchWorkflow(ctx *context.Context, preview bool) {
 		ctx.Data["ModelTypes"] = model.Types
 		ctx.Data["DefaultPRTarget"] = model.DefaultPRTarget
 	}
+	if model == nil {
+		model = &repo_model.BranchingModel{}
+	}
+	if !repo_setting.SetNamingData(ctx, model) {
+		return
+	}
 	ctx.Data["EnforceModel"] = modelLocked
 	if !repo_setting.PrepareMergedBranches(ctx, repo_service.MergedBranchScope{Org: ctx.Org.Organization.AsUser()}, ctx.Org.OrgLink+"/settings/branch_workflow", preview) {
 		return
@@ -92,7 +98,11 @@ func BranchWorkflowPost(ctx *context.Context) {
 // BranchingModelPost saves the organization's branching model.
 func BranchingModelPost(ctx *context.Context) {
 	form := web.GetForm(ctx).(*forms.BranchingModelForm)
-	err := branchworkflow.SetOrgModel(ctx, ctx.Org.Organization.AsUser(), form.Model(), form.EnforceModel)
+	model := form.Model()
+	err := branchworkflow.ApplyNaming(ctx, ctx.Org.Organization.AsUser(), model, form.Naming())
+	if err == nil {
+		err = branchworkflow.SetOrgModel(ctx, ctx.Org.Organization.AsUser(), model, form.EnforceModel)
+	}
 	if invalid, ok := branchworkflow.IsInvalidBranchingModel(err); ok {
 		ctx.Flash.Error(repo_setting.InvalidModelText(ctx, invalid))
 	} else {
