@@ -26,6 +26,7 @@ import (
 	"forgejo.org/services/forms"
 	repo_service "forgejo.org/services/repository"
 	"forgejo.org/tests"
+	"forgejo.org/tests/forgery"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/stretchr/testify/assert"
@@ -295,15 +296,26 @@ func TestBranchTypesOrgTokens(t *testing.T) {
 		defer tests.PrintCurrentTest(t)()
 		full := getUserToken(t, "user2", auth_model.AccessTokenScopeWriteOrganization)
 		publicOnly := getUserToken(t, "user2", auth_model.AccessTokenScopeWriteOrganization, auth_model.AccessTokenScopePublicOnly)
-		restricted := getUserToken(t, "user2", auth_model.AccessTokenScopeWriteOrganization, auth_model.AccessTokenScopeWriteRepository)
-		// a token restricted to repositories is made through the web UI; the public-only one is enough to cover the check
+		// a token restricted to one repository (the API only issues such tokens with repository scopes)
+		user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+		other := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{OwnerName: "user2", Name: "repo1"})
+		tok := forgery.CreateAccessToken(t, user2, &forgery.CreateAccessTokenOptions{Scope: "write:organization"})
+		tok.ResourceAllRepos = false
+		_, err := db.GetEngine(t.Context()).ID(tok.ID).Cols("resource_all_repos").Update(tok)
+		require.NoError(t, err)
+		resource := &auth_model.AccessTokenResourceRepo{TokenID: tok.ID, RepoID: other.ID}
+		require.NoError(t, db.Insert(t.Context(), resource))
+		t.Cleanup(func() { unittest.AssertSuccessfulDelete(t, resource) })
+		restricted := tok.Token
 		for _, p := range []string{"/api/v1/orgs/org3/branch-workflow", "/api/v1/orgs/org3/branching-model"} {
 			MakeRequest(t, NewRequest(t, "GET", p).AddTokenAuth(full), http.StatusOK)
 			MakeRequest(t, NewRequest(t, "GET", p).AddTokenAuth(publicOnly), http.StatusForbidden)
+			MakeRequest(t, NewRequest(t, "GET", p).AddTokenAuth(restricted), http.StatusForbidden)
 		}
+		MakeRequest(t, NewRequestWithJSON(t, "PUT", "/api/v1/orgs/org3/branch-workflow", map[string]string{"delete_branch_after_merge": "always"}).AddTokenAuth(restricted), http.StatusForbidden)
+		MakeRequest(t, NewRequestWithJSON(t, "PUT", "/api/v1/orgs/org3/branching-model", &api.OrgBranchingModel{ReleasePrefixes: []string{"release/"}}).AddTokenAuth(restricted), http.StatusForbidden)
 		MakeRequest(t, NewRequestWithJSON(t, "PUT", "/api/v1/orgs/org3/branch-workflow", map[string]string{"delete_branch_after_merge": "always"}).AddTokenAuth(publicOnly), http.StatusForbidden)
 		MakeRequest(t, NewRequestWithJSON(t, "PUT", "/api/v1/orgs/org3/branching-model", &api.OrgBranchingModel{ReleasePrefixes: []string{"release/"}}).AddTokenAuth(publicOnly), http.StatusForbidden)
-		_ = restricted
 	})
 }
 

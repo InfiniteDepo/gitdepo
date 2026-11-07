@@ -238,11 +238,19 @@ func TestBranchTypesKeptAfterMerge(t *testing.T) {
 		n, err := strconv.ParseInt(idx, 10, 64)
 		require.NoError(t, err)
 		ctx.ExpectedCode = http.StatusForbidden
-		doAPIMergePullRequestForm(t, ctx, "org3", repo, n, &forms.MergePullRequestForm{Do: "merge", DeleteBranchAfterMerge: true})
+		resp := doAPIMergePullRequestForm(t, ctx, "org3", repo, n, &forms.MergePullRequestForm{Do: "merge", DeleteBranchAfterMerge: true})
 		ctx.ExpectedCode = 0
+		assert.Equal(t, "release", resp.Header().Get("X-Branch-Kept"))
 		assert.True(t, bwBranchExists("org3", repo, "release/2.0"))
 		pr := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{BaseRepoID: unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{OwnerName: "org3", Name: repo}).ID, HeadBranch: "release/2.0"})
 		assert.True(t, pr.HasMerged)
+
+		// under Always the merge answers 200 and names the reason in the header
+		idx = bwPR(t, owner, "org3", repo, "master", "release/2.5")
+		n, _ = strconv.ParseInt(idx, 10, 64)
+		resp = doAPIMergePullRequestForm(t, ctx, "org3", repo, n, &forms.MergePullRequestForm{Do: "merge"})
+		assert.Equal(t, "release", resp.Header().Get("X-Branch-Kept"))
+		assert.True(t, bwBranchExists("org3", repo, "release/2.5"))
 
 		// auto merge
 		bwProtect(t, ctx, repo, "master", parameterProtectBranch{"enable_push": "true", "enable_status_check": "true", "status_check_contexts": "gitea/actions"})
