@@ -35,6 +35,10 @@ func GetBranchWorkflow(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
+	if !orgWideToken(ctx) {
+		return
+	}
+
 	mode, locked, err := branchworkflow.GetOrg(ctx, ctx.Org().Organization.AsUser())
 	if err != nil {
 		ctx.ServerError("GetOrg", err)
@@ -72,6 +76,10 @@ func EditBranchWorkflow(ctx *context.APIContext) {
 	//     "$ref": "#/responses/notFound"
 	//   "422":
 	//     "$ref": "#/responses/validationError"
+
+	if !orgWideToken(ctx) {
+		return
+	}
 
 	form := web.GetForm(ctx).(*api.OrgBranchWorkflow)
 	mode, ok := repo_model.ParseDeleteBranchMode(form.DeleteBranchAfterMerge)
@@ -131,6 +139,10 @@ func GetBranchingModel(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
+	if !orgWideToken(ctx) {
+		return
+	}
+
 	renderBranchingModel(ctx)
 }
 
@@ -163,6 +175,10 @@ func EditBranchingModel(ctx *context.APIContext) {
 	//     "$ref": "#/responses/notFound"
 	//   "422":
 	//     "$ref": "#/responses/validationError"
+
+	if !orgWideToken(ctx) {
+		return
+	}
 
 	form := web.GetForm(ctx).(*api.OrgBranchingModel)
 	err := branchworkflow.SetOrgModel(ctx, ctx.Org().Organization.AsUser(), &repo_model.BranchingModel{DevelopmentBranch: form.DevelopmentBranch, ReleasePrefixes: form.ReleasePrefixes, ProductionBranch: form.ProductionBranch, Types: branchworkflow.TypesFromAPI(form.Types), DefaultPRTarget: form.DefaultPRTarget, MergeForward: form.MergeForward, MergeForwardNeverBypass: form.MergeForwardNeverBypass, MergeForwardAnyoneMaySkip: form.MergeForwardAnyoneMaySkip}, form.Enforce)
