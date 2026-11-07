@@ -193,7 +193,7 @@ func TouchDeployment(ctx context.Context, id int64, now timeutil.TimeStamp) erro
 // it yet. Times have second resolution, so an edit in the same second as the deployment's last change isn't seen here;
 // that edit's own pass decides it.
 const staleDeployment = "(action_deployment.status IN (?, ?) AND EXISTS (SELECT 1 FROM action_environment " +
-	"WHERE action_environment.id = action_deployment.environment_id AND action_environment.repo_id = action_deployment.repo_id " +
+	"WHERE action_environment.id = action_deployment.environment_id AND action_environment.repo_id IN (0, action_deployment.repo_id) " +
 	"AND action_environment.updated > action_deployment.updated))"
 
 // MaxDueRunsPerRepo is how many runs of one repository one tick of the due-deployments task takes, so that one
@@ -251,12 +251,16 @@ func CancelOpenDeployments(ctx context.Context, jobID int64) error {
 }
 
 // FindUnpickedEnvironmentJobs returns the jobs of the environment that no runner took yet, whose current attempt waits
-// for the gate or was released by it.
+// for the gate or was released by it: of the repository, or of any repository for repoID 0 (an organization's).
 func FindUnpickedEnvironmentJobs(ctx context.Context, repoID, environmentID int64) ([]*ActionRunJob, error) {
+	cond := builder.Eq{"action_deployment.environment_id": environmentID}
+	if repoID != 0 {
+		cond["action_deployment.repo_id"] = repoID
+	}
 	var jobs []*ActionRunJob
 	return jobs, db.GetEngine(ctx).Table("action_run_job").Select("action_run_job.*").
 		Join("INNER", "action_deployment", "action_run_job.id = action_deployment.job_id AND action_run_job.attempt = action_deployment.attempt").
-		Where("action_deployment.repo_id = ? AND action_deployment.environment_id = ?", repoID, environmentID).
+		Where(cond).
 		And(builder.In("action_deployment.status", DeploymentWaitingTimer, DeploymentWaitingReview, DeploymentReleased)).
 		And(builder.In("action_run_job.status", StatusBlocked, StatusWaiting)).
 		And("action_run_job.task_id = 0").

@@ -37,7 +37,7 @@ import (
 // setEnvironmentReviewers makes the users and teams the reviewers of the environment as it is stored, keeping its rules, as the
 // site administrator.
 func setEnvironmentReviewers(ctx context.Context, e *actions_model.ActionEnvironment, userIDs, teamIDs []int64) error {
-	stored, err := actions_model.GetRepoEnvironmentByID(ctx, e.RepoID, e.ID)
+	stored, err := actions_model.GetEnvironmentByID(ctx, e.OwnerID, e.RepoID, e.ID)
 	if err != nil {
 		return err
 	}
@@ -170,9 +170,9 @@ func TestActionsEnvironmentReviews(t *testing.T) {
 
 		t.Run("an approval through the API releases the job, which then gets its environment's secret", func(t *testing.T) {
 			e := newEnv("prod", []int64{user4.ID}, nil)
-			_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, repo.ID, e.ID, "ENV_KEY", "prod-key")
+			_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, repo.ID, e.ID, "ENV_KEY", "prod-key")
 			require.NoError(t, err)
-			_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, repo.ID, e.ID, "UNUSED", "never-asked-for")
+			_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, repo.ID, e.ID, "UNUSED", "never-asked-for")
 			require.NoError(t, err)
 			run, job := pushJob("", "rv-a", "    environment: prod\n", secretStep)
 			assert.Equal(t, actions_model.DeploymentWaitingReview, deployment(job, 1).Status)
@@ -226,7 +226,7 @@ func TestActionsEnvironmentReviews(t *testing.T) {
 
 		t.Run("a rejection needs a comment, fails the job and runs nothing", func(t *testing.T) {
 			e := newEnv("rejecting", []int64{user4.ID}, nil)
-			_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, repo.ID, e.ID, "ENV_KEY", "never")
+			_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, repo.ID, e.ID, "ENV_KEY", "never")
 			require.NoError(t, err)
 			run, job := pushJob("", "rv-b", "    environment: rejecting\n", secretStep)
 			since := auditNow()
@@ -501,7 +501,7 @@ func TestActionsEnvironmentReviews(t *testing.T) {
 
 		t.Run("allowed workflows", func(t *testing.T) {
 			e := newEnv("wf-locked", nil, func(e *actions_model.ActionEnvironment) { e.AllowedWorkflows = []string{"deploy-*.yml"} })
-			_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, repo.ID, e.ID, "ENV_KEY", "locked-key")
+			_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, repo.ID, e.ID, "ENV_KEY", "locked-key")
 			require.NoError(t, err)
 			since := auditNow()
 			_, refused := pushJob("", "rv-i", "    environment: wf-locked\n", secretStep)
@@ -522,7 +522,7 @@ func TestActionsEnvironmentReviews(t *testing.T) {
 		t.Run("only the secrets a job names are given", func(t *testing.T) {
 			e := newEnv("named-secrets", nil, nil)
 			for k, v := range map[string]string{"ENV_KEY": "env-key", "OTHER_KEY": "other-key"} {
-				_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, repo.ID, e.ID, k, v)
+				_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, repo.ID, e.ID, k, v)
 				require.NoError(t, err)
 			}
 			for name, tc := range map[string]struct {
@@ -623,7 +623,7 @@ jobs:
 
 			// the reviewers are removed and the change is committed, but its own pass of the gate never runs (what
 			// SaveEnvironment leaves behind when emitEnvironmentRuns fails): the job still waits
-			stored, err := actions_model.GetRepoEnvironmentByID(ctx, repo.ID, e.ID)
+			stored, err := actions_model.GetEnvironmentByID(ctx, 0, repo.ID, e.ID)
 			require.NoError(t, err)
 			require.NoError(t, actions_model.UpdateEnvironment(ctx, stored, nil))
 			assert.Equal(t, actions_model.StatusBlocked, reload(job).Status)

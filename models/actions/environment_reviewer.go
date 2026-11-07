@@ -20,7 +20,7 @@ import (
 const MaxEnvironmentReviewers = 6
 
 // ActionEnvironmentReviewer is one required reviewer of an environment: a user, or a team of the organization that
-// owns the repository. Exactly one of UserID and TeamID is set. Who may review is decided when somebody reviews, not
+// owns the environment or its repository. Exactly one of UserID and TeamID is set. Who may review is decided when somebody reviews, not
 // here: a team member is read at that time.
 type ActionEnvironmentReviewer struct {
 	ID            int64
@@ -77,11 +77,11 @@ func reviewerListKeys(reviewers []ActionEnvironmentReviewer) ([]string, error) {
 	return keys, nil
 }
 
-// insertReviewers inserts the reviewers of the environment of repository repoID, in the caller's transaction after the
-// environment's lock, which the deletion of a user or team and a transfer take to remove their rows: a user or team
-// that is gone by now, or a team the repository's owner doesn't have, is an invalid argument, so no row is left that
-// nobody can be.
-func insertReviewers(ctx context.Context, repoID, environmentID int64, reviewers []ActionEnvironmentReviewer) error {
+// insertReviewers inserts the reviewers of the environment, in the caller's transaction after the environment's lock,
+// which the deletion of a user or team and a transfer take to remove their rows: a user or team that is gone by now,
+// or a team of another organization than the environment's (or its repository's owner), is an invalid argument, so
+// no row is left that nobody can be.
+func insertReviewers(ctx context.Context, env *ActionEnvironment, reviewers []ActionEnvironmentReviewer) error {
 	var userIDs, teamIDs []int64
 	for _, r := range reviewers {
 		if r.TeamID > 0 {
@@ -98,8 +98,11 @@ func insertReviewers(ctx context.Context, repoID, environmentID int64, reviewers
 		}
 	}
 	if len(teamIDs) > 0 {
-		if teams, err = db.GetEngine(ctx).Table("team").In("id", teamIDs).
-			And("org_id = (SELECT owner_id FROM repository WHERE id = ?)", repoID).Count(); err != nil {
+		org := builder.Expr("org_id = (SELECT owner_id FROM repository WHERE id = ?)", env.RepoID)
+		if env.RepoID == 0 {
+			org = builder.Expr("org_id = ?", env.OwnerID)
+		}
+		if teams, err = db.GetEngine(ctx).Table("team").In("id", teamIDs).And(org).Count(); err != nil {
 			return err
 		}
 	}
@@ -107,7 +110,7 @@ func insertReviewers(ctx context.Context, repoID, environmentID int64, reviewers
 		return util.NewInvalidArgumentErrorf("unknown reviewer")
 	}
 	for _, r := range reviewers {
-		if err := db.Insert(ctx, &ActionEnvironmentReviewer{EnvironmentID: environmentID, UserID: r.UserID, TeamID: r.TeamID}); err != nil {
+		if err := db.Insert(ctx, &ActionEnvironmentReviewer{EnvironmentID: env.ID, UserID: r.UserID, TeamID: r.TeamID}); err != nil {
 			return err
 		}
 	}
@@ -151,7 +154,7 @@ func RemoveReviewers(ctx context.Context, cond builder.Cond) error {
 		if env, has, err := db.GetByID[ActionEnvironment](ctx, r.EnvironmentID); err != nil {
 			return err
 		} else if has {
-			if err := LockEnvironment(ctx, env.RepoID, env.ID); err != nil && !errors.Is(err, ErrEnvironmentNotFound) {
+			if err := LockEnvironment(ctx, env.OwnerID, env.RepoID, env.ID); err != nil && !errors.Is(err, ErrEnvironmentNotFound) {
 				return err
 			}
 		}
@@ -175,7 +178,7 @@ func RemoveReviewers(ctx context.Context, cond builder.Cond) error {
 			return err
 		}
 		if has {
-			if err := recordEnvironment(ctx, audit_model.LevelActions{Repo: "repo.actions_env.updated"}, env,
+			if err := recordEnvironment(ctx, audit_model.LevelActions{Repo: "repo.actions_env.updated", Org: "org.actions_env.updated"}, env,
 				map[string]any{"reviewers_removed": reviewerKeys(byEnv[envID])}); err != nil {
 				return err
 			}

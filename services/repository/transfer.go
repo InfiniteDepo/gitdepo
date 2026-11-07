@@ -224,6 +224,9 @@ func transferOwnership(ctx context.Context, doer *user_model.User, newOwnerName 
 	if err := actions_model.RemoveReviewers(ctx, actions_model.ForeignTeamReviewerCond(repo.ID, newOwner.ID)); err != nil {
 		return fmt.Errorf("RemoveReviewers: %w", err)
 	}
+	if err := actions_model.RefuseTwinsOnTransfer(ctx, repo.ID, newOwner.ID); err != nil {
+		return err
+	}
 
 	// Remove redundant collaborators.
 	collaborators, err := repo_model.GetCollaborators(ctx, repo.ID, db.ListOptions{})

@@ -14,7 +14,7 @@ import (
 )
 
 // DeploymentData holds what a page of deployments of one repository refers to, loaded with one query per table and
-// only from that repository: a run, job or environment of another one is missing. Users holds the ghost for a user
+// only from that repository (and its organization's environments): a run, job or environment of another one is missing. Users holds the ghost for a user
 // the doer can't see.
 type DeploymentData struct {
 	Jobs  map[int64]*actions_model.ActionRunJob
@@ -38,8 +38,13 @@ func LoadDeploymentData(ctx context.Context, doer *user_model.User, repoID int64
 	if data.Runs, err = findColumns[actions_model.ActionRun](ctx, repoID, runIDs, "id", "repo_id", "index", "title", "workflow_id"); err != nil {
 		return nil, err
 	}
-	if data.Envs, err = findColumns[actions_model.ActionEnvironment](ctx, repoID, envIDs, "id", "repo_id", "name"); err != nil {
-		return nil, err
+	// the environments that apply to the repository: its own and those of its organization
+	data.Envs = map[int64]*actions_model.ActionEnvironment{}
+	if len(ds) > 0 {
+		if err := db.GetEngine(ctx).In("id", envIDs).And(actions_model.EnvironmentsOfRepoCond(repoID)).
+			Cols("id", "owner_id", "repo_id", "name").Find(&data.Envs); err != nil {
+			return nil, err
+		}
 	}
 	data.Users, err = VisibleUsers(ctx, doer, userIDs)
 	return data, err

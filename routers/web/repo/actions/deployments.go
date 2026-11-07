@@ -439,9 +439,9 @@ func Deployments(ctx *app_context.Context) {
 	ctx.Data["PageIsActions"] = true
 	ctx.Data["PageIsDeployments"] = true
 	repo := ctx.Repo.Repository
-	envs, _, err := actions_model.FindRepoEnvironments(ctx, repo.ID, db.ListOptions{ListAll: true})
+	envs, _, err := actions_model.FindEnvironmentsOfRepo(ctx, repo.ID, db.ListOptions{ListAll: true})
 	if err != nil {
-		ctx.ServerError("FindRepoEnvironments", err)
+		ctx.ServerError("FindEnvironmentsOfRepo", err)
 		return
 	}
 	ctx.Data["DeploymentEnvironments"] = envs
@@ -456,11 +456,11 @@ func Deployments(ctx *app_context.Context) {
 	name := ctx.FormString("environment")
 	var env *actions_model.ActionEnvironment
 	if name != "" {
-		env, err = actions_model.GetRepoEnvironmentByName(ctx, repo.ID, name)
+		env, err = actions_model.ResolveEnvironment(ctx, repo.ID, name)
 		if errors.Is(err, actions_model.ErrEnvironmentNotFound) {
 			ctx.Data["UnknownEnvironment"] = name
 		} else if err != nil {
-			ctx.ServerError("GetRepoEnvironmentByName", err)
+			ctx.ServerError("ResolveEnvironment", err)
 			return
 		}
 	}

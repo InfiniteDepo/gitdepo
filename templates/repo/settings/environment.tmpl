@@ -1,7 +1,7 @@
-{{template "repo/settings/layout_head" (dict "ctxData" . "pageClass" "repository settings actions environments")}}
-	<div class="repo-setting-content">
-		{{$archived := .Repository.IsArchived}}
-		{{if $archived}}
+{{if .Repository}}{{template "repo/settings/layout_head" (dict "ctxData" . "pageClass" "repository settings actions environments")}}{{else}}{{template "org/settings/layout_head" (dict "ctxData" . "pageClass" "organization settings actions environments")}}{{end}}
+	<div class="{{if .Repository}}repo{{else}}org{{end}}-setting-content">
+		{{$archived := .EnvironmentsArchived}}
+		{{if and $archived .Repository}}
 			<div class="ui warning message" id="environment-archived">{{ctx.Locale.Tr "actions.environments.archived"}}</div>
 		{{end}}
 		{{if .NoReviewer}}
@@ -11,6 +11,7 @@
 			{{if .Environment}}{{ctx.Locale.Tr "actions.environments.edit_title" .Environment.Name}}{{else}}{{ctx.Locale.Tr "actions.environments.new"}}{{end}}
 		</h4>
 		<div class="ui attached segment">
+			{{if not .Repository}}<div class="ui info message" id="environment-org-note">{{ctx.Locale.Tr "actions.environments.org.edit_desc" .EnvironmentOwner.Name}}</div>{{end}}
 			<form class="ui form" id="environment-form" method="post" action="{{if .Environment}}{{.EnvironmentLink}}{{else}}{{.EnvironmentsLink}}/new{{end}}">
 				{{if $archived}}<fieldset class="tw-contents" disabled>{{end}}
 				<div class="field">
@@ -30,7 +31,7 @@
 								<div class="item{{if or .Unknown (and .Reason (ne .Reason "outsider"))}} environment-reviewer-ineligible{{end}}" data-value="{{.Key}}">
 									{{if .Unknown}}{{svg "octicon-question"}} {{ctx.Locale.Tr "actions.environments.reviewer.unknown"}} <span class="help">{{ctx.Locale.Tr "actions.environments.reviewer.unknown.desc"}}</span>
 									{{- else if .User}}{{ctx.AvatarUtils.Avatar .User 20 "mini"}}@{{.User.Name}}{{if .User.FullName}} <span class="text grey">{{.User.FullName}}</span>{{end}}
-									{{- else}}{{svg "octicon-people"}} {{$.Repository.Owner.Name}}/{{.Team.Name}}{{end}}
+									{{- else}}{{svg "octicon-people"}} {{$.EnvironmentOwner.Name}}/{{.Team.Name}}{{end}}
 									{{if .Reason}}
 										<span class="help">
 											{{if eq .Reason "not_usable"}}{{ctx.Locale.Tr "actions.environments.reviewer.not_usable"}}
@@ -144,10 +145,12 @@
 					<form class="ui form" method="post" action="{{.EnvironmentLink}}/delete">
 						<div class="content">
 							<p>{{ctx.Locale.Tr "actions.environments.delete.confirm" .Environment.Name}}</p>
+							{{if .Repository}}
 							<p>
 								{{ctx.Locale.Tr "actions.environments.delete.last"}}
 								{{if .LastDeployment}}{{template "repo/settings/environment_deployment" .LastDeployment}}{{else}}{{ctx.Locale.Tr "actions.environments.delete.never"}}{{end}}
 							</p>
+							{{end}}
 							<div class="field">
 								<label for="environment-delete-confirm">{{ctx.Locale.Tr "actions.environments.delete.type_name"}}</label>
 								<input id="environment-delete-confirm" name="confirm_name" autocomplete="off" required data-name="{{.Environment.Name}}">
@@ -163,4 +166,4 @@
 			{{end}}
 		{{end}}
 	</div>
-{{template "repo/settings/layout_footer" .}}
+{{if .Repository}}{{template "repo/settings/layout_footer" .}}{{else}}{{template "org/settings/layout_footer" .}}{{end}}

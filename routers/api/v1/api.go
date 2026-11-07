@@ -1505,6 +1505,25 @@ func Routes() *web.Route {
 				}
 			}
 			addActionsRoutes(m, reqOrgActions, org.NewAction())
+			// environments its repositories inherit: acting owners only, with their own organization-wide credential
+			m.Group("/actions/environments", func() {
+				m.Get("", org.ListActionEnvironments)
+				m.Group("/{environment}", func() {
+					m.Combo("").Get(org.GetActionEnvironment).
+						Put(bind(api.CreateOrUpdateEnvironmentOption{}), org.CreateOrUpdateActionEnvironment).
+						Delete(org.DeleteActionEnvironment)
+					m.Get("/secrets", org.ListActionEnvironmentSecrets)
+					m.Combo("/secrets/{secretname}").
+						Put(bind(api.CreateOrUpdateSecretOption{}), org.CreateOrUpdateActionEnvironmentSecret).
+						Delete(org.DeleteActionEnvironmentSecret)
+					m.Get("/variables", org.ListActionEnvironmentVariables)
+					m.Combo("/variables/{variablename}").
+						Get(org.GetActionEnvironmentVariable).
+						Delete(org.DeleteActionEnvironmentVariable).
+						Post(bind(api.CreateVariableOption{}), org.CreateActionEnvironmentVariable).
+						Put(bind(api.UpdateVariableOption{}), org.UpdateActionEnvironmentVariable)
+				})
+			}, reqToken(), org.HideInvisibleOrg, reqOrgActions, org.EnvironmentToken)
 			m.Group("/public_members", func() {
 				m.Get("", org.ListPublicMembers)
 				m.Combo("/{username}").Get(org.IsPublicMember).

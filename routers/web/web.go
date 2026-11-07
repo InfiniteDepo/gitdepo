@@ -635,6 +635,30 @@ func registerRoutes(m *web.Route) {
 		})
 	}
 
+	// the environments of a repository and of an organization share the handlers (repo_setting.RequireEnvironmentManager)
+	addSettingsEnvironmentsRoutes := func(notArchived func(*context.Context)) {
+		m.Group("/environments", func() {
+			m.Get("", repo_setting.Environments)
+			m.Combo("/new").Get(repo_setting.EnvironmentNew).
+				Post(notArchived, web.Bind(forms.EnvironmentForm{}), repo_setting.EnvironmentNewPost)
+			m.Group("/{environment_id}", func() {
+				m.Combo("").Get(repo_setting.EnvironmentEdit).
+					Post(notArchived, web.Bind(forms.EnvironmentForm{}), repo_setting.EnvironmentEditPost)
+				m.Post("/delete", notArchived, repo_setting.EnvironmentDeletePost)
+				m.Group("/secrets", func() {
+					m.Post("", web.Bind(forms.CreateSecretForm{}), repo_setting.EnvironmentSecretCreate)
+					m.Post("/{secret_id}/edit", web.Bind(forms.EditSecretForm{}), repo_setting.EnvironmentSecretEdit)
+					m.Post("/{secret_id}/delete", repo_setting.EnvironmentSecretDelete)
+				}, notArchived)
+				m.Group("/variables", func() {
+					m.Post("/new", web.Bind(forms.EditVariableForm{}), repo_setting.EnvironmentVariableCreate)
+					m.Post("/{variable_id}/edit", web.Bind(forms.EditVariableForm{}), repo_setting.EnvironmentVariableUpdate)
+					m.Post("/{variable_id}/delete", repo_setting.EnvironmentVariableDelete)
+				}, notArchived)
+			}, repo_setting.EnvironmentAssignment)
+		}, repo_setting.RequireEnvironmentManager)
+	}
+
 	addSettingsRunnersRoutes := func() {
 		m.Group("/runners", func() {
 			m.Get("", shared_actions.RunnersList)
@@ -1375,6 +1399,8 @@ func registerRoutes(m *web.Route) {
 					addSettingsRunnersRoutes()
 					addSettingsSecretsRoutes()
 					addSettingsVariablesRoutes()
+					// writes in an archived organization are refused for every route (context.IsArchivedOrgWrite)
+					addSettingsEnvironmentsRoutes(func(*context.Context) {})
 				}, actions.MustEnableActions)
 
 				m.Methods("GET,POST", "/delete", org.SettingsDelete)
@@ -1611,26 +1637,7 @@ func registerRoutes(m *web.Route) {
 				addSettingsRunnersRoutes()
 				addSettingsSecretsRoutes()
 				addSettingsVariablesRoutes()
-				m.Group("/environments", func() {
-					m.Get("", repo_setting.Environments)
-					m.Combo("/new").Get(repo_setting.EnvironmentNew).
-						Post(context.RepoMustNotBeArchived(), web.Bind(forms.EnvironmentForm{}), repo_setting.EnvironmentNewPost)
-					m.Group("/{environment_id}", func() {
-						m.Combo("").Get(repo_setting.EnvironmentEdit).
-							Post(context.RepoMustNotBeArchived(), web.Bind(forms.EnvironmentForm{}), repo_setting.EnvironmentEditPost)
-						m.Post("/delete", context.RepoMustNotBeArchived(), repo_setting.EnvironmentDeletePost)
-						m.Group("/secrets", func() {
-							m.Post("", web.Bind(forms.CreateSecretForm{}), repo_setting.EnvironmentSecretCreate)
-							m.Post("/{secret_id}/edit", web.Bind(forms.EditSecretForm{}), repo_setting.EnvironmentSecretEdit)
-							m.Post("/{secret_id}/delete", repo_setting.EnvironmentSecretDelete)
-						}, context.RepoMustNotBeArchived())
-						m.Group("/variables", func() {
-							m.Post("/new", web.Bind(forms.EditVariableForm{}), repo_setting.EnvironmentVariableCreate)
-							m.Post("/{variable_id}/edit", web.Bind(forms.EditVariableForm{}), repo_setting.EnvironmentVariableUpdate)
-							m.Post("/{variable_id}/delete", repo_setting.EnvironmentVariableDelete)
-						}, context.RepoMustNotBeArchived())
-					}, repo_setting.EnvironmentAssignment)
-				}, repo_setting.RequireEnvironmentManager)
+				addSettingsEnvironmentsRoutes(context.RepoMustNotBeArchived())
 			}, actions.MustEnableActions)
 			// the follow handler must be under "settings", otherwise this incomplete repo can't be accessed
 			m.Group("/migrate", func() {

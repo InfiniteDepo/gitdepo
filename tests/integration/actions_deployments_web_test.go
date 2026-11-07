@@ -393,7 +393,7 @@ func TestActionsDeploymentsWebQueries(t *testing.T) {
 			require.NoError(t, db.Insert(db.DefaultContext, run))
 			job := &actions_model.ActionRunJob{RunID: run.ID, RepoID: repo.ID, OwnerID: repo.OwnerID, Name: "deploy", Attempt: 1, Status: actions_model.StatusBlocked, Handle: fmt.Sprintf("dq-%d", n)}
 			require.NoError(t, db.Insert(db.DefaultContext, job))
-			env, err := actions_model.GetRepoEnvironmentByName(ctx, repo.ID, "prod")
+			env, err := actions_model.GetEnvironmentByName(ctx, 0, repo.ID, "prod")
 			require.NoError(t, err)
 			require.NoError(t, db.Insert(db.DefaultContext, &actions_model.ActionDeployment{
 				RepoID: repo.ID, RunID: run.ID, JobID: job.ID, Attempt: 1, EnvironmentID: env.ID, Status: actions_model.DeploymentRejected,

@@ -354,6 +354,8 @@ type ActionEnvironment struct {
 	CreatedByWorkflow bool  `json:"created_by_workflow"`
 	SecretsCount      int64 `json:"secrets_count"`
 	VariablesCount    int64 `json:"variables_count"`
+	// an environment of the organization that the repository inherits; it is changed on the organization's routes
+	Inherited bool `json:"inherited"`
 	// the newest deployment to the environment
 	LastDeployment *ActionDeployment `json:"last_deployment,omitempty"`
 	// swagger:strfmt date-time

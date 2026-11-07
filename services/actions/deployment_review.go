@@ -106,7 +106,7 @@ func (c *ReviewChecker) environment(ctx context.Context, id int64) (*reviewEnvir
 		return e, nil
 	}
 	e := &reviewEnvironment{}
-	env, err := actions_model.GetRepoEnvironmentByID(ctx, c.run.RepoID, id)
+	env, err := actions_model.GetEnvironmentOfRepo(ctx, c.run.RepoID, id)
 	if err != nil && !errors.Is(err, actions_model.ErrEnvironmentNotFound) {
 		return nil, err
 	}
@@ -254,28 +254,10 @@ type EnvironmentReviewerCheck struct {
 // GetUserRepoPermission. A team counts as soon as one member can approve. Only users with a membership path are
 // decided in detail, unless the doer is a site administrator: the pages must not tell anyone else's account state.
 func CheckEnvironmentReviewers(ctx context.Context, repo *repo_model.Repository, doer *user_model.User, envs []*actions_model.ActionEnvironment, reviewers map[int64][]*actions_model.ActionEnvironmentReviewer) (*EnvironmentReviewerCheck, error) {
-	var userIDs, teamIDs, listedIDs []int64
-	for _, rs := range reviewers {
-		for _, r := range rs {
-			if r.TeamID > 0 {
-				teamIDs = append(teamIDs, r.TeamID)
-			} else {
-				userIDs = append(userIDs, r.UserID)
-				listedIDs = append(listedIDs, r.UserID)
-			}
-		}
-	}
-	members := map[int64][]int64{}
-	if len(teamIDs) > 0 {
-		var rows []*org_model.TeamUser
-		// only a team of the organization that owns the repository counts, as in May
-		if err := db.GetEngine(ctx).In("team_id", teamIDs).And("org_id = ?", repo.OwnerID).Find(&rows); err != nil {
-			return nil, err
-		}
-		for _, r := range rows {
-			members[r.TeamID] = append(members[r.TeamID], r.UID)
-			userIDs = append(userIDs, r.UID)
-		}
+	// only a team of the organization that owns the repository counts, as in May
+	listedIDs, members, userIDs, err := listedReviewers(ctx, repo.OwnerID, reviewers)
+	if err != nil {
+		return nil, err
 	}
 	if err := repo.LoadOwner(ctx); err != nil {
 		return nil, err
@@ -315,6 +297,40 @@ func CheckEnvironmentReviewers(ctx context.Context, repo *repo_model.Repository,
 			check.Users[row.User.ID] = row.User
 		}
 	}
+	check.decide(envs, reviewers, members, eligible, decided)
+	return check, nil
+}
+
+// listedReviewers returns the listed users of the reviewers, the members of their teams of the organization orgID by
+// team, and the IDs of both, with one query.
+func listedReviewers(ctx context.Context, orgID int64, reviewers map[int64][]*actions_model.ActionEnvironmentReviewer) (listed []int64, members map[int64][]int64, all []int64, err error) {
+	var teamIDs []int64
+	for _, rs := range reviewers {
+		for _, r := range rs {
+			if r.TeamID > 0 {
+				teamIDs = append(teamIDs, r.TeamID)
+			} else {
+				listed = append(listed, r.UserID)
+			}
+		}
+	}
+	all, members = slices.Clone(listed), map[int64][]int64{}
+	if len(teamIDs) > 0 {
+		var rows []*org_model.TeamUser
+		if err := db.GetEngine(ctx).In("team_id", teamIDs).And("org_id = ?", orgID).Find(&rows); err != nil {
+			return nil, nil, nil, err
+		}
+		for _, r := range rows {
+			members[r.TeamID] = append(members[r.TeamID], r.UID)
+			all = append(all, r.UID)
+		}
+	}
+	return listed, members, all, nil
+}
+
+// decide fills the reviewers of the environments into check, from the members of the listed teams, the users who can
+// approve and why the others can't (a user not in decided is no individual or no longer exists).
+func (check *EnvironmentReviewerCheck) decide(envs []*actions_model.ActionEnvironment, reviewers map[int64][]*actions_model.ActionEnvironmentReviewer, members map[int64][]int64, eligible container.Set[int64], decided map[int64]string) {
 	reason := func(id int64) string {
 		if why, ok := decided[id]; ok {
 			return why
@@ -355,6 +371,51 @@ func CheckEnvironmentReviewers(ctx context.Context, repo *repo_model.Repository,
 		check.NoReviewer[env.ID] = env.ReviewsRequired && !possible
 		check.Approvers[env.ID] = slices.Sorted(maps.Keys(approvers))
 	}
+}
+
+// CheckOrgEnvironmentReviewers is CheckEnvironmentReviewers for the settings pages of environments of the organization
+// org, by the rules that don't depend on a repository (who approves a run is decided for its repository by
+// approverReason): a listed user is a usable member of the organization (ReviewerOutsider for anyone else, whatever
+// their account), with two-factor authentication if the organization requires it. Readers are its members who pass.
+func CheckOrgEnvironmentReviewers(ctx context.Context, org *user_model.User, envs []*actions_model.ActionEnvironment, reviewers map[int64][]*actions_model.ActionEnvironmentReviewer) (*EnvironmentReviewerCheck, error) {
+	listedIDs, members, userIDs, err := listedReviewers(ctx, org.ID, reviewers)
+	if err != nil {
+		return nil, err
+	}
+	var memberIDs []int64
+	if err := db.GetEngine(ctx).Table("org_user").Where("org_id = ?", org.ID).Cols("uid").Find(&memberIDs); err != nil {
+		return nil, err
+	}
+	users, err := user_model.GetUsersByIDs(ctx, slices.Compact(slices.Sorted(slices.Values(append(userIDs, memberIDs...)))))
+	if err != nil {
+		return nil, err
+	}
+	missing, err := withoutTwoFactor(ctx, org, users.GetUserIDs())
+	if err != nil {
+		return nil, err
+	}
+	slices.SortFunc(users, func(a, b *user_model.User) int { return strings.Compare(a.LowerName, b.LowerName) })
+	check := &EnvironmentReviewerCheck{Ineligible: map[string]string{}, NoReviewer: map[int64]bool{}, Users: map[int64]*user_model.User{}, Approvers: map[int64][]int64{}}
+	isMember, listed := container.SetOf(memberIDs...), container.SetOf(listedIDs...)
+	decided, eligible := map[int64]string{}, container.Set[int64]{}
+	for _, u := range users {
+		switch {
+		case !isMember.Contains(u.ID):
+			decided[u.ID] = ReviewerOutsider
+		case !usableReviewer(u):
+			decided[u.ID] = ReviewerNotUsable
+		case missing.Contains(u.ID):
+			decided[u.ID] = ReviewerTwoFactor
+		default:
+			decided[u.ID] = ""
+			eligible.Add(u.ID)
+			check.Readers = append(check.Readers, u)
+		}
+		if listed.Contains(u.ID) {
+			check.Users[u.ID] = u
+		}
+	}
+	check.decide(envs, reviewers, members, eligible, decided)
 	return check, nil
 }
 
@@ -578,7 +639,7 @@ func expireDeployment(ctx context.Context, d *actions_model.ActionDeployment) er
 	if err != nil {
 		return err
 	}
-	env, err := actions_model.GetRepoEnvironmentByID(ctx, d.RepoID, d.EnvironmentID)
+	env, err := actions_model.GetEnvironmentOfRepo(ctx, d.RepoID, d.EnvironmentID)
 	if err != nil && !errors.Is(err, util.ErrNotExist) {
 		return err
 	}

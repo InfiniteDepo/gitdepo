@@ -75,9 +75,9 @@ func List(ctx *context.Context) {
 
 	curWorkflow := ctx.FormString("workflow")
 	ctx.Data["CurWorkflow"] = curWorkflow
-	envs, _, err := actions_model.FindRepoEnvironments(ctx, ctx.Repo.Repository.ID, db.ListOptions{ListAll: true})
+	envs, _, err := actions_model.FindEnvironmentsOfRepo(ctx, ctx.Repo.Repository.ID, db.ListOptions{ListAll: true})
 	if err != nil {
-		ctx.ServerError("FindRepoEnvironments", err)
+		ctx.ServerError("FindEnvironmentsOfRepo", err)
 		return
 	}
 	ctx.Data["DeploymentEnvironments"] = envs

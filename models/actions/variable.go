@@ -26,7 +26,8 @@ import (
 //  2. org/user level variable, OwnerID is org/user ID, GroupID and RepoID are 0
 //  3. repo level variable, OwnerID is 0 and RepoID is repo ID
 //  4. project level variable, OwnerID is the org ID, GroupID the project (repo_group) ID and RepoID is 0
-//  5. environment variable, OwnerID and GroupID are 0, RepoID is the repo ID and EnvironmentID the environment
+//  5. environment variable, GroupID is 0 and EnvironmentID the environment, with RepoID the repo ID (OwnerID 0) for an
+//     environment of a repository, OwnerID the org ID (RepoID 0) for an environment of an organization
 //
 // Please note that it's not acceptable to have both OwnerID and RepoID to be non-zero,
 // or it will be complicated to find variables belonging to a specific owner.
@@ -53,9 +54,10 @@ func InsertVariable(ctx context.Context, ownerID, groupID, repoID int64, name, d
 	return insertVariable(ctx, ownerID, groupID, repoID, 0, name, data)
 }
 
-// InsertEnvironmentVariable inserts a variable of an environment of the repository.
-func InsertEnvironmentVariable(ctx context.Context, repoID, environmentID int64, name, data string) (*ActionVariable, error) {
-	return insertVariable(ctx, 0, 0, repoID, environmentID, name, data)
+// InsertEnvironmentVariable inserts a variable of an environment of the repository (ownerID 0) or of the organization
+// (repoID 0).
+func InsertEnvironmentVariable(ctx context.Context, ownerID, repoID, environmentID int64, name, data string) (*ActionVariable, error) {
+	return insertVariable(ctx, ownerID, 0, repoID, environmentID, name, data)
 }
 
 func insertVariable(ctx context.Context, ownerID, groupID, repoID, environmentID int64, name, data string) (*ActionVariable, error) {
@@ -83,14 +85,14 @@ func insertVariable(ctx context.Context, ownerID, groupID, repoID, environmentID
 		if err := secret_model.LockLevel(ctx, ownerID, groupID, repoID, environmentID); err != nil {
 			return err
 		}
-		if err := secret_model.CheckEnvironmentCount(ctx, "action_variable", repoID, environmentID); err != nil {
+		if err := secret_model.CheckEnvironmentCount(ctx, "action_variable", ownerID, repoID, environmentID); err != nil {
 			return err
 		}
 		if err := db.Insert(ctx, variable); err != nil {
 			return err
 		}
 		if environmentID != 0 {
-			return recordVariable(ctx, audit_model.LevelActions{Repo: "repo.actions_env_variable.created"}, variable, nil)
+			return recordVariable(ctx, audit_model.LevelActions{Repo: "repo.actions_env_variable.created", Org: "org.actions_env_variable.created"}, variable, nil)
 		}
 		return recordVariable(ctx, audit_model.LevelActions{Repo: "repo.actions_variable.created", Org: "org.actions_variable.created", Account: "account.actions_variable.created", Admin: "admin.actions_variable.created"}, variable, nil)
 	})
@@ -180,7 +182,7 @@ func UpdateVariable(ctx context.Context, variable *ActionVariable) (bool, error)
 			data["value_changed"] = valueChanged
 			actions := audit_model.LevelActions{Repo: "repo.actions_variable.updated", Org: "org.actions_variable.updated", Account: "account.actions_variable.updated", Admin: "admin.actions_variable.updated"}
 			if variable.EnvironmentID != 0 {
-				actions = audit_model.LevelActions{Repo: "repo.actions_env_variable.updated"}
+				actions = audit_model.LevelActions{Repo: "repo.actions_env_variable.updated", Org: "org.actions_env_variable.updated"}
 			}
 			if err := recordVariable(ctx, actions, variable, data); err != nil {
 				return err
@@ -200,9 +202,10 @@ func DeleteVariable(ctx context.Context, variableID, ownerID, groupID, repoID in
 	return deleteVariable(ctx, variableID, ownerID, groupID, repoID, 0)
 }
 
-// DeleteEnvironmentVariable deletes a variable of an environment of the repository.
-func DeleteEnvironmentVariable(ctx context.Context, variableID, repoID, environmentID int64) (bool, error) {
-	return deleteVariable(ctx, variableID, 0, 0, repoID, environmentID)
+// DeleteEnvironmentVariable deletes a variable of an environment of the repository (ownerID 0) or of the organization
+// (repoID 0).
+func DeleteEnvironmentVariable(ctx context.Context, variableID, ownerID, repoID, environmentID int64) (bool, error) {
+	return deleteVariable(ctx, variableID, ownerID, 0, repoID, environmentID)
 }
 
 func deleteVariable(ctx context.Context, variableID, ownerID, groupID, repoID, environmentID int64) (bool, error) {
@@ -217,7 +220,7 @@ func deleteVariable(ctx context.Context, variableID, ownerID, groupID, repoID, e
 		}
 		actions := audit_model.LevelActions{Repo: "repo.actions_variable.deleted", Org: "org.actions_variable.deleted", Account: "account.actions_variable.deleted", Admin: "admin.actions_variable.deleted"}
 		if environmentID != 0 {
-			actions = audit_model.LevelActions{Repo: "repo.actions_env_variable.deleted"}
+			actions = audit_model.LevelActions{Repo: "repo.actions_env_variable.deleted", Org: "org.actions_env_variable.deleted"}
 		}
 		if err := recordVariable(ctx, actions, stored, nil); err != nil {
 			return err

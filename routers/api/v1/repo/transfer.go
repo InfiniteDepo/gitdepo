@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"forgejo.org/models"
+	actions_model "forgejo.org/models/actions"
 	"forgejo.org/models/organization"
 	"forgejo.org/models/perm"
 	access_model "forgejo.org/models/perm/access"
@@ -130,7 +131,7 @@ func Transfer(ctx *context.APIContext) {
 			return
 		}
 
-		if repo_model.IsErrRepoAlreadyExist(err) {
+		if repo_model.IsErrRepoAlreadyExist(err) || errors.Is(err, actions_model.ErrEnvironmentTwin) {
 			ctx.Error(http.StatusUnprocessableEntity, "StartRepositoryTransfer", err)
 			return
 		}

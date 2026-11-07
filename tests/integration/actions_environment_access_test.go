@@ -172,11 +172,11 @@ func TestActionsEnvironmentAccess(t *testing.T) {
 			env := unittest.AssertExistsAndLoadBean(t, &actions_model.ActionEnvironment{RepoID: repo.ID, LowerName: "vars"})
 			ctx := audit_model.WithSystem(t.Context(), "test")
 			for i := unittest.GetCount(t, &actions_model.ActionVariable{EnvironmentID: env.ID}); i < secret_model.MaxPerEnvironment; i++ {
-				_, err := actions_model.InsertEnvironmentVariable(ctx, repo.ID, env.ID, fmt.Sprintf("V%d", i), "x")
+				_, err := actions_model.InsertEnvironmentVariable(ctx, 0, repo.ID, env.ID, fmt.Sprintf("V%d", i), "x")
 				require.NoError(t, err)
 			}
 			for i := unittest.GetCount(t, &secret_model.Secret{EnvironmentID: env.ID}); i < secret_model.MaxPerEnvironment; i++ {
-				_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, repo.ID, env.ID, fmt.Sprintf("S%d", i), "x")
+				_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, repo.ID, env.ID, fmt.Sprintf("S%d", i), "x")
 				require.NoError(t, err)
 			}
 			MakeRequest(t, NewRequestWithJSON(t, "POST", base+"/vars/variables/ONE_MORE", api.CreateVariableOption{Value: "x"}).AddTokenAuth(owner), http.StatusBadRequest)

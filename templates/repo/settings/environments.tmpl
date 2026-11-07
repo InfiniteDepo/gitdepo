@@ -1,7 +1,7 @@
-{{template "repo/settings/layout_head" (dict "ctxData" . "pageClass" "repository settings actions environments")}}
-	<div class="repo-setting-content">
-		{{$archived := .Repository.IsArchived}}
-		{{if $archived}}
+{{if .Repository}}{{template "repo/settings/layout_head" (dict "ctxData" . "pageClass" "repository settings actions environments")}}{{else}}{{template "org/settings/layout_head" (dict "ctxData" . "pageClass" "organization settings actions environments")}}{{end}}
+	<div class="{{if .Repository}}repo{{else}}org{{end}}-setting-content">
+		{{$archived := .EnvironmentsArchived}}
+		{{if and $archived .Repository}}
 			<div class="ui warning message" id="environment-archived">{{ctx.Locale.Tr "actions.environments.archived"}}</div>
 		{{end}}
 		<h4 class="ui top attached header">
@@ -17,6 +17,7 @@
 		</h4>
 		<div class="ui attached segment">
 			<p>{{ctx.Locale.Tr "actions.environments.desc" (HTMLFormat "<code>%s</code>" "environment: production")}}</p>
+			{{if not .Repository}}<div class="ui info message" id="environment-org-note">{{ctx.Locale.Tr "actions.environments.org.desc" .EnvironmentOwner.Name}} {{ctx.Locale.Tr "actions.environments.org.never_auto"}}</div>{{end}}
 			{{if .Environments}}
 				<div class="flex-list" id="environment-list">
 					{{range .Environments}}
@@ -55,6 +56,34 @@
 					{{if not $archived}}<a class="ui primary button" href="{{.EnvironmentsLink}}/new">{{ctx.Locale.Tr "actions.environments.new"}}</a>{{end}}
 				</div>
 			{{end}}
+			{{if .InheritedEnvironments}}
+				<h5 class="ui header tw-mt-4">{{ctx.Locale.Tr "actions.environments.inherited" .EnvironmentOwner.Name}}</h5>
+				<p class="help">{{if .CanEditInherited}}{{ctx.Locale.Tr "actions.environments.inherited.desc_owner" .EnvironmentOwner.Name}}{{else}}{{ctx.Locale.Tr "actions.environments.inherited.desc" .EnvironmentOwner.Name}}{{end}}</p>
+				<div class="flex-list" id="environment-inherited-list">
+					{{range .InheritedEnvironments}}
+						<div class="flex-item tw-items-center">
+							<div class="flex-item-leading">{{svg "octicon-rocket"}}</div>
+							<div class="flex-item-main">
+								<div class="flex-item-title">
+									<span class="environment-name">{{.Name}}</span>
+									<span class="ui tiny blue label">{{svg "octicon-organization" 12}} {{ctx.Locale.Tr "actions.environments.from_org" $.EnvironmentOwner.Name}}</span>
+								</div>
+								<div class="flex-item-body">
+									<span>{{if .HasRules}}{{svg "octicon-shield"}} {{.Summary}}{{else}}{{ctx.Locale.Tr "actions.environments.no_rules"}}{{end}} ·</span>
+									<span>{{ctx.Locale.TrN .Secrets "actions.environments.secrets_count_1" "actions.environments.secrets_count_n" .Secrets}} · {{ctx.Locale.TrN .Variables "actions.environments.variables_count_1" "actions.environments.variables_count_n" .Variables}}</span>
+								</div>
+								{{if .NoReviewer}}
+									<div class="ui warning message tw-mt-2 tw-mb-0 environment-no-reviewer">{{svg "octicon-alert"}} {{ctx.Locale.Tr "actions.environments.no_eligible_reviewer"}}</div>
+								{{end}}
+							</div>
+							<div class="flex-item-trailing">
+								{{template "repo/settings/environment_deployment" .Last}}
+								{{if $.CanEditInherited}}<a class="ui small basic button" href="{{$.OrgEnvironmentsLink}}/{{.ID}}">{{ctx.Locale.Tr "actions.environments.edit_in" $.EnvironmentOwner.Name}}</a>{{end}}
+							</div>
+						</div>
+					{{end}}
+				</div>
+			{{end}}
 		</div>
 	</div>
-{{template "repo/settings/layout_footer" .}}
+{{if .Repository}}{{template "repo/settings/layout_footer" .}}{{else}}{{template "org/settings/layout_footer" .}}{{end}}

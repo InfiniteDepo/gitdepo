@@ -28,10 +28,21 @@ var refPolicies = []string{
 	actions_model.EnvironmentRefPatterns:          "patterns",
 }
 
-// environmentOfRepo returns the environment of the path, looked up by name (ignoring case) in the repository of the
-// request; it answers the request itself if there is none.
+// environmentScope returns the owner and repository of the environments of the request: those of the repository,
+// or those of the organization on the organization routes.
+func environmentScope(ctx *context.APIContext) (ownerID, repoID int64) {
+	if ctx.Repo() != nil && ctx.Repo().Repository != nil {
+		return 0, ctx.Repo().Repository.ID
+	}
+	return ctx.Org().Organization.ID, 0
+}
+
+// environmentOfRepo returns the environment of the path, looked up by name (ignoring case) in the repository or
+// organization of the request; it answers the request itself if there is none. An organization environment a
+// repository inherits is not one of the repository's own: it is changed only on the organization routes.
 func environmentOfRepo(ctx *context.APIContext) *actions_model.ActionEnvironment {
-	env, err := actions_model.GetRepoEnvironmentByName(ctx, ctx.Repo().Repository.ID, ctx.Params("environment"))
+	ownerID, repoID := environmentScope(ctx)
+	env, err := actions_model.GetEnvironmentByName(ctx, ownerID, repoID, ctx.Params("environment"))
 	if errors.Is(err, actions_model.ErrEnvironmentNotFound) {
 		ctx.NotFound()
 		return nil
@@ -42,13 +53,19 @@ func environmentOfRepo(ctx *context.APIContext) *actions_model.ActionEnvironment
 	return env
 }
 
-// toActionEnvironments converts environments of the repository of the request, with one query for each of their
-// reviewers, the reviewers' users and teams, the secret and variable counts and the last deployments.
+// toActionEnvironments converts environments of the repository or organization of the request (with the
+// organization environments a repository inherits), with one query for each of their reviewers, the reviewers'
+// users and teams, the secret and variable counts of each scope and the last deployments.
 func toActionEnvironments(ctx *context.APIContext, envs []*actions_model.ActionEnvironment) ([]*api.ActionEnvironment, error) {
-	repoID := ctx.Repo().Repository.ID
-	ids := make([]int64, 0, len(envs))
+	_, repoID := environmentScope(ctx)
+	var ids, orgIDs []int64
+	var orgID int64
 	for _, e := range envs {
 		ids = append(ids, e.ID)
+		if e.RepoID == 0 {
+			orgID = e.OwnerID
+			orgIDs = append(orgIDs, e.ID)
+		}
 	}
 	reviewers, err := actions_model.FindReviewersOfEnvironments(ctx, ids)
 	if err != nil {
@@ -72,17 +89,29 @@ func toActionEnvironments(ctx *context.APIContext, envs []*actions_model.ActionE
 	if err != nil {
 		return nil, err
 	}
-	secrets, variables, err := actions_model.CountEnvironmentSecretsAndVariables(ctx, repoID, ids)
-	if err != nil {
-		return nil, err
+	secrets, variables := map[int64]int64{}, map[int64]int64{}
+	if repoID != 0 {
+		if secrets, variables, err = actions_model.CountEnvironmentSecretsAndVariables(ctx, 0, repoID, ids); err != nil {
+			return nil, err
+		}
 	}
-	last, err := actions_model.FindLastDeployments(ctx, repoID, ids)
-	if err != nil {
-		return nil, err
+	if len(orgIDs) > 0 {
+		orgSecrets, orgVariables, err := actions_model.CountEnvironmentSecretsAndVariables(ctx, orgID, 0, orgIDs)
+		if err != nil {
+			return nil, err
+		}
+		maps.Copy(secrets, orgSecrets)
+		maps.Copy(variables, orgVariables)
 	}
-	data, err := actions_service.LoadDeploymentData(ctx, ctx.Doer(), repoID, slices.Collect(maps.Values(last)))
-	if err != nil {
-		return nil, err
+	last := map[int64]*actions_model.ActionDeployment{}
+	var data *actions_service.DeploymentData
+	if repoID != 0 {
+		if last, err = actions_model.FindLastDeployments(ctx, repoID, ids); err != nil {
+			return nil, err
+		}
+		if data, err = actions_service.LoadDeploymentData(ctx, ctx.Doer(), repoID, slices.Collect(maps.Values(last))); err != nil {
+			return nil, err
+		}
 	}
 
 	out := make([]*api.ActionEnvironment, 0, len(envs))
@@ -92,7 +121,7 @@ func toActionEnvironments(ctx *context.APIContext, envs []*actions_model.ActionE
 			WaitTimer: e.WaitTimerMinutes, PreventSelfReview: e.PreventSelfReview, Reviewers: []*api.ActionEnvironmentReviewer{},
 			ReviewsRequired: e.ReviewsRequired, RunnerLabels: e.RunnerLabels, AllowedWorkflows: e.AllowedWorkflows,
 			CreatedByWorkflow: e.CreatedByWorkflow, SecretsCount: secrets[e.ID], VariablesCount: variables[e.ID],
-			Created: e.Created.AsTime(), Updated: e.Updated.AsTime(),
+			Inherited: repoID != 0 && e.RepoID == 0, Created: e.Created.AsTime(), Updated: e.Updated.AsTime(),
 		}
 		for _, p := range e.RefPatterns {
 			item.RefPatterns = append(item.RefPatterns, &api.ActionEnvironmentRefPattern{Type: p.Type, Pattern: p.Pattern})
@@ -151,7 +180,14 @@ func ListActionEnvironments(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	envs, count, err := actions_model.FindRepoEnvironments(ctx, ctx.Repo().Repository.ID, utils.GetListOptions(ctx))
+	var envs []*actions_model.ActionEnvironment
+	var count int64
+	var err error
+	if ownerID, repoID := environmentScope(ctx); repoID != 0 {
+		envs, count, err = actions_model.FindEnvironmentsOfRepo(ctx, repoID, utils.GetListOptions(ctx))
+	} else {
+		envs, count, err = actions_model.FindEnvironments(ctx, ownerID, 0, utils.GetListOptions(ctx))
+	}
 	if err != nil {
 		ctx.InternalServerError(err)
 		return
@@ -266,9 +302,10 @@ func CreateOrUpdateActionEnvironment(ctx *context.APIContext) {
 		return
 	}
 	env := &actions_model.ActionEnvironment{
-		RepoID: ctx.Repo().Repository.ID, Name: ctx.Params("environment"), WaitTimerMinutes: *form.WaitTimer,
+		Name: ctx.Params("environment"), WaitTimerMinutes: *form.WaitTimer,
 		PreventSelfReview: *form.PreventSelfReview, RunnerLabels: form.RunnerLabels, AllowedWorkflows: form.AllowedWorkflows,
 	}
+	env.OwnerID, env.RepoID = environmentScope(ctx)
 	if env.RefPolicy = slices.Index(refPolicies, form.RefPolicy); env.RefPolicy < 0 {
 		ctx.Error(http.StatusUnprocessableEntity, "ref_policy", "ref_policy must be any, protected_branches or patterns")
 		return
@@ -308,7 +345,7 @@ func CreateOrUpdateActionEnvironment(ctx *context.APIContext) {
 		ctx.InternalServerError(err)
 		return
 	}
-	stored, err := actions_model.GetRepoEnvironmentByID(ctx, env.RepoID, env.ID)
+	stored, err := actions_model.GetEnvironmentByID(ctx, env.OwnerID, env.RepoID, env.ID)
 	if err != nil {
 		ctx.InternalServerError(err)
 		return
@@ -420,7 +457,7 @@ func ListActionDeployments(ctx *context.APIContext) {
 	repoID := ctx.Repo().Repository.ID
 	var environmentID int64
 	if name := ctx.FormString("environment"); name != "" {
-		env, err := actions_model.GetRepoEnvironmentByName(ctx, repoID, name)
+		env, err := actions_model.ResolveEnvironment(ctx, repoID, name)
 		if errors.Is(err, actions_model.ErrEnvironmentNotFound) {
 			ctx.SetTotalCountHeader(0)
 			ctx.JSON(http.StatusOK, []*api.ActionDeployment{})

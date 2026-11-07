@@ -7,6 +7,7 @@ import (
 	"errors"
 	"html"
 	"html/template"
+	"maps"
 	"net/http"
 	"slices"
 	"strconv"
@@ -34,26 +35,52 @@ const (
 	tplEnvironment  base.TplName = "repo/settings/environment"
 )
 
-// environmentsLink is the list of the repository's environments.
-func environmentsLink(ctx *context.Context) string {
-	return ctx.Repo.RepoLink + "/settings/actions/environments"
+// environmentLevel is who the environments of a page belong to: a repository, or an organization (Repo nil), whose
+// settings pages share these handlers and templates.
+type environmentLevel struct {
+	Repo  *repo_model.Repository
+	Owner *user_model.User // the organization, or the owner of the repository
+	Link  string           // the list of the environments
 }
 
-// RequireEnvironmentManager lets only who may manage the environments through the API (reqOwner(unit.TypeActions))
-// reach the pages: the owner, for an organization its owners, and site administrators (their permission is Owner).
-// Admin collaborators get the 404 the other settings give to whoever can't see them.
+// levelOf returns the level of the page: the repository of the URL, else the organization of its settings.
+func levelOf(ctx *context.Context) environmentLevel {
+	if repo := ctx.Repo.Repository; repo != nil {
+		return environmentLevel{Repo: repo, Owner: repo.Owner, Link: ctx.Repo.RepoLink + "/settings/actions/environments"}
+	}
+	return environmentLevel{Owner: ctx.Org.Organization.AsUser(), Link: ctx.Org.OrgLink + "/settings/actions/environments"}
+}
+
+// scope returns the owner and repository IDs of the level's environments (one of them is 0).
+func (l environmentLevel) scope() (ownerID, repoID int64) {
+	if l.Repo != nil {
+		return 0, l.Repo.ID
+	}
+	return l.Owner.ID, 0
+}
+
+// RequireEnvironmentManager lets only who may manage the environments through the API reach the pages: for a
+// repository (reqOwner(unit.TypeActions)) the owner, for an organization its owners, and site administrators (their
+// permission is Owner); admin collaborators get the 404 the other settings give to whoever can't see them. The
+// organization's own pages are behind OrgAssignment(true, true): its acting owners and site administrators.
 func RequireEnvironmentManager(ctx *context.Context) {
-	if !ctx.Repo.IsOwner() {
+	if ctx.Repo.Repository != nil && !ctx.Repo.IsOwner() {
 		ctx.NotFound("RequireEnvironmentManager", nil)
 		return
 	}
+	l := levelOf(ctx)
 	ctx.Data["PageIsSharedSettingsEnvironments"] = true
 	ctx.Data["Title"] = ctx.Tr("actions.environments")
+	ctx.Data["EnvironmentOwner"] = l.Owner
+	ctx.Data["EnvironmentsArchived"] = l.Owner.IsArchived || l.Repo != nil && l.Repo.IsArchived
 }
 
-// EnvironmentAssignment finds the environment of the URL in the repository; one of another repository is not found.
+// EnvironmentAssignment finds the environment of the URL at the page's level; one of another repository or
+// organization, or an inherited one on a repository's page, is not found.
 func EnvironmentAssignment(ctx *context.Context) {
-	env, err := actions_model.GetRepoEnvironmentByID(ctx, ctx.Repo.Repository.ID, ctx.ParamsInt64(":environment_id"))
+	l := levelOf(ctx)
+	ownerID, repoID := l.scope()
+	env, err := actions_model.GetEnvironmentByID(ctx, ownerID, repoID, ctx.ParamsInt64(":environment_id"))
 	if errors.Is(err, actions_model.ErrEnvironmentNotFound) {
 		ctx.NotFound("GetRepoEnvironmentByID", err)
 		return
@@ -62,7 +89,7 @@ func EnvironmentAssignment(ctx *context.Context) {
 		return
 	}
 	ctx.Data["Environment"] = env
-	ctx.Data["EnvironmentLink"] = environmentsLink(ctx) + "/" + strconv.FormatInt(env.ID, 10)
+	ctx.Data["EnvironmentLink"] = l.Link + "/" + strconv.FormatInt(env.ID, 10)
 }
 
 func assignedEnvironment(ctx *context.Context) (*actions_model.ActionEnvironment, string) {
@@ -170,19 +197,44 @@ func environmentSummary(ctx *context.Context, e *actions_model.ActionEnvironment
 	return template.HTML(strings.Join(parts, " · ")) // every part is escaped above
 }
 
-// Environments lists the environments of the repository.
+// checkReviewers decides the reviewers of the environments for the page's level: for a repository by the access to it
+// (its inherited environments included), for an organization by the rules that don't depend on a repository.
+func checkReviewers(ctx *context.Context, l environmentLevel, envs []*actions_model.ActionEnvironment, reviewers map[int64][]*actions_model.ActionEnvironmentReviewer) (*actions_service.EnvironmentReviewerCheck, error) {
+	if l.Repo != nil {
+		return actions_service.CheckEnvironmentReviewers(ctx, l.Repo, ctx.Doer, envs, reviewers)
+	}
+	return actions_service.CheckOrgEnvironmentReviewers(ctx, l.Owner, envs, reviewers)
+}
+
+// Environments lists the environments of the repository, with those it inherits from its organization apart and
+// read-only, or of the organization. The number of queries doesn't depend on the number of environments.
 func Environments(ctx *context.Context) {
-	repo := ctx.Repo.Repository
-	envs, _, err := actions_model.FindRepoEnvironments(ctx, repo.ID, db.ListOptions{})
+	l := levelOf(ctx)
+	ownerID, repoID := l.scope()
+	var envs []*actions_model.ActionEnvironment
+	var err error
+	if l.Repo != nil {
+		envs, _, err = actions_model.FindEnvironmentsOfRepo(ctx, l.Repo.ID, db.ListOptions{})
+	} else {
+		envs, _, err = actions_model.FindEnvironments(ctx, ownerID, 0, db.ListOptions{})
+	}
 	if err != nil {
-		ctx.ServerError("FindRepoEnvironments", err)
+		ctx.ServerError("FindEnvironments", err)
 		return
 	}
 	ids := make([]int64, len(envs))
+	inherited := false
 	for i, e := range envs {
 		ids[i] = e.ID
+		inherited = inherited || e.RepoID != repoID
 	}
-	secrets, variables, err := actions_model.CountEnvironmentSecretsAndVariables(ctx, repo.ID, ids)
+	secrets, variables, err := actions_model.CountEnvironmentSecretsAndVariables(ctx, ownerID, repoID, ids)
+	if err == nil && inherited {
+		var s, v map[int64]int64
+		s, v, err = actions_model.CountEnvironmentSecretsAndVariables(ctx, l.Owner.ID, 0, ids)
+		maps.Copy(secrets, s)
+		maps.Copy(variables, v)
+	}
 	if err != nil {
 		ctx.ServerError("CountEnvironmentSecretsAndVariables", err)
 		return
@@ -192,25 +244,43 @@ func Environments(ctx *context.Context) {
 		ctx.ServerError("FindReviewersOfEnvironments", err)
 		return
 	}
-	check, err := actions_service.CheckEnvironmentReviewers(ctx, repo, ctx.Doer, envs, reviewers)
+	check, err := checkReviewers(ctx, l, envs, reviewers)
 	if err != nil {
 		ctx.ServerError("CheckEnvironmentReviewers", err)
 		return
 	}
-	last, err := lastDeployments(ctx, repo, ids)
-	if err != nil {
-		ctx.ServerError("lastDeployments", err)
-		return
+	last := map[int64]*environmentDeployment{}
+	if l.Repo != nil {
+		if last, err = lastDeployments(ctx, l.Repo, ids); err != nil {
+			ctx.ServerError("lastDeployments", err)
+			return
+		}
 	}
-	rows := make([]*environmentRow, len(envs))
-	for i, e := range envs {
-		rows[i] = &environmentRow{
+	var rows, inheritedRows []*environmentRow
+	for _, e := range envs {
+		row := &environmentRow{
 			ActionEnvironment: e, Secrets: secrets[e.ID], Variables: variables[e.ID], Last: last[e.ID],
 			NoReviewer: check.NoReviewer[e.ID], Summary: environmentSummary(ctx, e, len(reviewers[e.ID])),
 		}
+		if e.RepoID != repoID {
+			inheritedRows = append(inheritedRows, row)
+		} else {
+			rows = append(rows, row)
+		}
+	}
+	if len(inheritedRows) > 0 {
+		// only who may change them gets the link to the organization's page (OrgAssignment(true, true))
+		isOwner, err := org_model.OrgFromUser(l.Owner).IsActingOwner(ctx, ctx.Doer)
+		if err != nil {
+			ctx.ServerError("IsActingOwner", err)
+			return
+		}
+		ctx.Data["InheritedEnvironments"] = inheritedRows
+		ctx.Data["OrgEnvironmentsLink"] = l.Owner.OrganisationLink() + "/settings/actions/environments"
+		ctx.Data["CanEditInherited"] = isOwner || ctx.Doer.IsAdmin
 	}
 	ctx.Data["Environments"] = rows
-	ctx.Data["EnvironmentsLink"] = environmentsLink(ctx)
+	ctx.Data["EnvironmentsLink"] = l.Link
 	ctx.Data["MaxEnvironments"] = actions_model.MaxEnvironmentsPerRepo
 	ctx.HTML(http.StatusOK, tplEnvironments)
 }
@@ -269,24 +339,25 @@ func parseReviewers(keys string) (listed []*actions_model.ActionEnvironmentRevie
 
 // prepareEnvironmentForm fills the data of the new/edit page; env is nil on the new page, stored are its reviewers.
 func prepareEnvironmentForm(ctx *context.Context, env *actions_model.ActionEnvironment, stored []*actions_model.ActionEnvironmentReviewer, view *environmentFormView) {
+	l := levelOf(ctx)
+	ownerID, repoID := l.scope()
 	ctx.Data["Form"] = view
-	ctx.Data["EnvironmentsLink"] = environmentsLink(ctx)
+	ctx.Data["EnvironmentsLink"] = l.Link
 	ctx.Data["MaxReviewers"] = actions_model.MaxEnvironmentReviewers
 	ctx.Data["MaxWaitTimer"] = actions_model.MaxWaitTimerMinutes
 	ctx.Data["MaxWaitTimerDays"] = actions_model.MaxWaitTimerMinutes / (24 * 60)
 	ctx.Data["EmptyPattern"] = actions_model.EnvironmentRefPattern{}
-	repo := ctx.Repo.Repository
-	ctx.Data["ReviewerTeams"] = repo.Owner.IsOrganization()
+	ctx.Data["ReviewerTeams"] = l.Owner.IsOrganization()
 
-	// The picker offers the users who can approve through their access to the repository and the teams of its
-	// owner, and keeps the listed entries (one it can't name is an unknown reviewer, to be removed); nobody the doer
+	// The picker offers the users who can approve through their access to the repository (the members of the
+	// organization for its own environments) and the teams of the organization, and keeps the listed entries (one it can't name is an unknown reviewer, to be removed); nobody the doer
 	// can't see. One bulk check decides them all, and the stored reviewers for the warning.
 	listed, _ := parseReviewers(view.Reviewers) // the error is the page's already
 
 	var teams []*org_model.Team
-	if repo.Owner.IsOrganization() {
+	if l.Owner.IsOrganization() {
 		var err error
-		if teams, err = org_model.FindOrgTeams(ctx, repo.OwnerID); err != nil {
+		if teams, err = org_model.FindOrgTeams(ctx, l.Owner.ID); err != nil {
 			ctx.ServerError("FindOrgTeams", err)
 			return
 		}
@@ -302,7 +373,7 @@ func prepareEnvironmentForm(ctx *context.Context, env *actions_model.ActionEnvir
 		envs = append(envs, env)
 		reviewers[env.ID] = stored
 	}
-	check, err := actions_service.CheckEnvironmentReviewers(ctx, repo, ctx.Doer, envs, reviewers)
+	check, err := checkReviewers(ctx, l, envs, reviewers)
 	if err != nil {
 		ctx.ServerError("CheckEnvironmentReviewers", err)
 		return
@@ -343,32 +414,39 @@ func prepareEnvironmentForm(ctx *context.Context, env *actions_model.ActionEnvir
 		return
 	}
 	ctx.Data["NoReviewer"] = check.NoReviewer[env.ID]
-	last, err := lastDeployments(ctx, repo, []int64{env.ID})
-	if err != nil {
-		ctx.ServerError("lastDeployments", err)
-		return
+	if l.Repo != nil {
+		last, err := lastDeployments(ctx, l.Repo, []int64{env.ID})
+		if err != nil {
+			ctx.ServerError("lastDeployments", err)
+			return
+		}
+		ctx.Data["LastDeployment"] = last[env.ID]
 	}
-	ctx.Data["LastDeployment"] = last[env.ID]
 
 	link := ctx.Data["EnvironmentLink"].(string)
 	ctx.Data["SecretsLink"], ctx.Data["VariablesLink"] = link+"/secrets", link+"/variables"
-	ctx.Data["ActionsReadOnly"] = repo.IsArchived
+	ctx.Data["ActionsReadOnly"] = ctx.Data["EnvironmentsArchived"]
 	ctx.Data["SecretsTitle"], ctx.Data["VariablesTitle"] = ctx.Tr("actions.environments.secrets"), ctx.Tr("actions.environments.variables")
-	ctx.Data["SecretsDescription"] = ctx.Tr("actions.environments.secrets.desc", env.Name)
-	ctx.Data["VariablesDescription"] = ctx.Tr("actions.environments.variables.desc", template.HTML("<code>vars.NAME</code>"), env.Name)
-	shared_secrets.SetSecretsContext(ctx, 0, 0, repo.ID, env.ID)
-	shared_actions.SetVariablesContext(ctx, 0, 0, repo.ID, env.ID)
+	if l.Repo != nil {
+		ctx.Data["SecretsDescription"] = ctx.Tr("actions.environments.secrets.desc", env.Name)
+		ctx.Data["VariablesDescription"] = ctx.Tr("actions.environments.variables.desc", template.HTML("<code>vars.NAME</code>"), env.Name)
+	} else {
+		ctx.Data["SecretsDescription"] = ctx.Tr("actions.environments.org.secrets.desc", env.Name)
+		ctx.Data["VariablesDescription"] = ctx.Tr("actions.environments.org.variables.desc", template.HTML("<code>vars.NAME</code>"), env.Name)
+	}
+	shared_secrets.SetSecretsContext(ctx, ownerID, 0, repoID, env.ID)
+	shared_actions.SetVariablesContext(ctx, ownerID, 0, repoID, env.ID)
 	if ctx.Written() {
 		return
 	}
-	// the names the environment's values replace for its jobs
+	// the names the environment's values replace for its jobs, of the repository or the organization
 	overrides := map[string]bool{}
-	repoSecrets, err := db.Find[secret_model.Secret](ctx, secret_model.FindSecretsOptions{RepoID: repo.ID})
+	repoSecrets, err := db.Find[secret_model.Secret](ctx, secret_model.FindSecretsOptions{OwnerID: ownerID, RepoID: repoID})
 	if err != nil {
 		ctx.ServerError("FindSecrets", err)
 		return
 	}
-	repoVars, err := db.Find[actions_model.ActionVariable](ctx, actions_model.FindVariablesOpts{RepoID: repo.ID})
+	repoVars, err := db.Find[actions_model.ActionVariable](ctx, actions_model.FindVariablesOpts{OwnerID: ownerID, RepoID: repoID})
 	if err != nil {
 		ctx.ServerError("FindVariables", err)
 		return
@@ -379,7 +457,11 @@ func prepareEnvironmentForm(ctx *context.Context, env *actions_model.ActionEnvir
 	for _, v := range repoVars {
 		overrides[v.Name] = true
 	}
-	ctx.Data["OverridesRepo"] = overrides
+	if l.Repo != nil {
+		ctx.Data["OverridesRepo"] = overrides
+	} else {
+		ctx.Data["OverridesOrg"] = overrides
+	}
 }
 
 // EnvironmentNew shows the form of a new environment.
@@ -422,10 +504,10 @@ func lines(s string) []string {
 	return out
 }
 
-// environmentFromForm reads the posted form into the rules of an environment of the repository and the IDs of its
+// environmentFromForm reads the posted form into the rules of an environment of the level and the IDs of its
 // reviewers. A wait timer or ref policy that is no number, or a reviewer list parseReviewers refuses, is the error of
 // that rule.
-func environmentFromForm(form *forms.EnvironmentForm, repo *repo_model.Repository) (env *actions_model.ActionEnvironment, view *environmentFormView, userIDs, teamIDs []int64, err error) {
+func environmentFromForm(form *forms.EnvironmentForm, l environmentLevel) (env *actions_model.ActionEnvironment, view *environmentFormView, userIDs, teamIDs []int64, err error) {
 	view = &environmentFormView{
 		Name: form.Name, Reviewers: form.Reviewers, PreventSelfReview: form.PreventSelfReview,
 		RunnerLabels: form.RunnerLabels, AllowedWorkflows: form.AllowedWorkflows,
@@ -445,9 +527,10 @@ func environmentFromForm(form *forms.EnvironmentForm, repo *repo_model.Repositor
 		}
 	}
 	env = &actions_model.ActionEnvironment{
-		RepoID: repo.ID, Name: form.Name, PreventSelfReview: form.PreventSelfReview, WaitTimerMinutes: view.WaitTimer,
+		Name: form.Name, PreventSelfReview: form.PreventSelfReview, WaitTimerMinutes: view.WaitTimer,
 		RefPolicy: view.RefPolicy, RunnerLabels: lines(form.RunnerLabels), AllowedWorkflows: lines(form.AllowedWorkflows),
 	}
+	env.OwnerID, env.RepoID = l.scope()
 	if env.RefPolicy == actions_model.EnvironmentRefPatterns {
 		env.RefPatterns = view.Patterns // the rows of another choice are left in the page, not saved
 	}
@@ -470,6 +553,7 @@ var errBadReviewer = util.NewInvalidArgumentErrorf("a reviewer is a user or a te
 // environmentError is the message of a refused save; the values the user typed go in as arguments, which Tr escapes.
 func environmentError(ctx *context.Context, err error) template.HTML {
 	var rule actions_model.ErrInvalidEnvironmentRule
+	var usedBy actions_model.ErrEnvironmentUsedByRepos
 	switch {
 	case errors.As(err, &rule):
 		switch rule.Field {
@@ -497,6 +581,10 @@ func environmentError(ctx *context.Context, err error) template.HTML {
 		}
 	case errors.Is(err, actions_model.ErrEnvironmentExists):
 		return ctx.Tr("actions.environments.error.name_taken")
+	case errors.Is(err, actions_model.ErrEnvironmentTakenByOrg):
+		return ctx.Tr("actions.environments.error.name_taken_by_org", ctx.Repo.Owner.Name)
+	case errors.As(err, &usedBy):
+		return ctx.TrN(usedBy.N, "actions.environments.error.name_used_1", "actions.environments.error.name_used_n", usedBy.N)
 	case errors.Is(err, actions_model.ErrEnvironmentLimit):
 		return ctx.Tr("actions.environments.error.limit", actions_model.MaxEnvironmentsPerRepo)
 	case errors.Is(err, actions_service.ErrTooManyReviewers):
@@ -515,7 +603,8 @@ func environmentError(ctx *context.Context, err error) template.HTML {
 // saveEnvironment saves the posted form: a new environment when env is nil, otherwise its rules.
 func saveEnvironment(ctx *context.Context, env *actions_model.ActionEnvironment) {
 	form := web.GetForm(ctx).(*forms.EnvironmentForm)
-	e, view, userIDs, teamIDs, err := environmentFromForm(form, ctx.Repo.Repository)
+	l := levelOf(ctx)
+	e, view, userIDs, teamIDs, err := environmentFromForm(form, l)
 	if env != nil {
 		e.ID, e.Name, view.Name = env.ID, env.Name, env.Name // the name is not edited
 	}
@@ -527,7 +616,7 @@ func saveEnvironment(ctx *context.Context, env *actions_model.ActionEnvironment)
 	switch {
 	case err == nil:
 		ctx.Flash.Success(ctx.Tr("actions.environments.saved", e.Name))
-		ctx.Redirect(environmentsLink(ctx) + "/" + strconv.FormatInt(e.ID, 10))
+		ctx.Redirect(l.Link + "/" + strconv.FormatInt(e.ID, 10))
 		return
 	case errors.Is(err, util.ErrPermissionDenied):
 		ctx.Error(http.StatusForbidden)
@@ -586,7 +675,7 @@ func EnvironmentDeletePost(ctx *context.Context) {
 		return
 	}
 	ctx.Flash.Success(ctx.Tr("actions.environments.deleted", env.Name))
-	ctx.Redirect(environmentsLink(ctx))
+	ctx.Redirect(levelOf(ctx).Link)
 }
 
 // EnvironmentSecretCreate adds a secret to the environment.
@@ -596,7 +685,7 @@ func EnvironmentSecretCreate(ctx *context.Context) {
 		ctx.JSONError(ctx.GetErrMsg())
 		return
 	}
-	shared_secrets.CreateSecretPost(ctx, 0, 0, env.RepoID, env.ID, link)
+	shared_secrets.CreateSecretPost(ctx, env.OwnerID, 0, env.RepoID, env.ID, link)
 }
 
 // EnvironmentSecretEdit changes a secret of the environment.
@@ -606,13 +695,13 @@ func EnvironmentSecretEdit(ctx *context.Context) {
 		ctx.JSONError(ctx.GetErrMsg())
 		return
 	}
-	shared_secrets.EditSecretPost(ctx, 0, 0, env.RepoID, env.ID, ctx.ParamsInt64(":secret_id"), link)
+	shared_secrets.EditSecretPost(ctx, env.OwnerID, 0, env.RepoID, env.ID, ctx.ParamsInt64(":secret_id"), link)
 }
 
 // EnvironmentSecretDelete deletes a secret of the environment.
 func EnvironmentSecretDelete(ctx *context.Context) {
 	env, link := assignedEnvironment(ctx)
-	shared_secrets.DeleteSecretPost(ctx, 0, 0, env.RepoID, env.ID, ctx.ParamsInt64(":secret_id"), link)
+	shared_secrets.DeleteSecretPost(ctx, env.OwnerID, 0, env.RepoID, env.ID, ctx.ParamsInt64(":secret_id"), link)
 }
 
 // EnvironmentVariableCreate adds a variable to the environment.
@@ -622,7 +711,7 @@ func EnvironmentVariableCreate(ctx *context.Context) {
 		ctx.JSONError(ctx.GetErrMsg())
 		return
 	}
-	shared_actions.CreateVariable(ctx, 0, 0, env.RepoID, env.ID, link)
+	shared_actions.CreateVariable(ctx, env.OwnerID, 0, env.RepoID, env.ID, link)
 }
 
 // EnvironmentVariableUpdate changes a variable of the environment.
@@ -632,11 +721,11 @@ func EnvironmentVariableUpdate(ctx *context.Context) {
 		ctx.JSONError(ctx.GetErrMsg())
 		return
 	}
-	shared_actions.UpdateVariable(ctx, 0, 0, env.RepoID, env.ID, link)
+	shared_actions.UpdateVariable(ctx, env.OwnerID, 0, env.RepoID, env.ID, link)
 }
 
 // EnvironmentVariableDelete deletes a variable of the environment.
 func EnvironmentVariableDelete(ctx *context.Context) {
 	env, link := assignedEnvironment(ctx)
-	shared_actions.DeleteVariable(ctx, 0, 0, env.RepoID, env.ID, link)
+	shared_actions.DeleteVariable(ctx, env.OwnerID, 0, env.RepoID, env.ID, link)
 }
