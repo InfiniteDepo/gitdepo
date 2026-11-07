@@ -23,8 +23,8 @@ type accessTokenAuthenticationResult struct {
 	scope   auth_model.AccessTokenScope
 	reducer authz.AuthorizationReducer
 	expires timeutil.TimeStamp
-	// personal is a user's own token: only such a token can be narrower than the account it acts as (Restricted)
-	personal bool
+	// restricted is AccessToken.RestrictsAccount: a user's own token narrower than the account it acts as
+	restricted bool
 }
 
 func (r *accessTokenAuthenticationResult) User() *user_model.User {
@@ -51,8 +51,5 @@ func (r *accessTokenAuthenticationResult) ExpiresAt() optional.Option[timeutil.T
 }
 
 func (r *accessTokenAuthenticationResult) Credential() audit_model.Credential {
-	// a personal token limited to public data or to some repositories has another reducer; an organization, project or
-	// repository token acts as its own identity, which has no account to widen
-	_, all := r.reducer.(*authz.AllAccessAuthorizationReducer)
-	return audit_model.Credential{Type: audit_model.CredentialAccessToken, ID: r.id, Name: r.name, OwnerID: r.user.ID, Restricted: r.personal && !all}
+	return audit_model.Credential{Type: audit_model.CredentialAccessToken, ID: r.id, Name: r.name, OwnerID: r.user.ID, Restricted: r.restricted}
 }

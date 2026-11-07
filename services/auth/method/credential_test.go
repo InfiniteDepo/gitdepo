@@ -26,8 +26,8 @@ func TestCredential(t *testing.T) {
 	}{
 		{&accessTokenAuthenticationResult{id: 3, name: "ci", user: u, reducer: &authz.AllAccessAuthorizationReducer{}}, audit_model.Credential{Type: "access_token", ID: 3, Name: "ci", OwnerID: 7}},
 		// a token limited to public data or to some repositories is restricted: never an own act
-		{&accessTokenAuthenticationResult{id: 3, name: "ci", user: u, reducer: &authz.PublicReposAuthorizationReducer{}, personal: true}, audit_model.Credential{Type: "access_token", ID: 3, Name: "ci", OwnerID: 7, Restricted: true}},
-		{&accessTokenAuthenticationResult{id: 3, name: "ci", user: u, reducer: &authz.SpecificReposAuthorizationReducer{}, personal: true}, audit_model.Credential{Type: "access_token", ID: 3, Name: "ci", OwnerID: 7, Restricted: true}},
+		{&accessTokenAuthenticationResult{id: 3, name: "ci", user: u, reducer: &authz.PublicReposAuthorizationReducer{}, restricted: true}, audit_model.Credential{Type: "access_token", ID: 3, Name: "ci", OwnerID: 7, Restricted: true}},
+		{&accessTokenAuthenticationResult{id: 3, name: "ci", user: u, reducer: &authz.SpecificReposAuthorizationReducer{}, restricted: true}, audit_model.Credential{Type: "access_token", ID: 3, Name: "ci", OwnerID: 7, Restricted: true}},
 		// an organization, project or repository token acts as its own identity: no account to widen
 		{&accessTokenAuthenticationResult{id: 3, name: "ci", user: u, reducer: &authz.SpecificReposAuthorizationReducer{}}, audit_model.Credential{Type: "access_token", ID: 3, Name: "ci", OwnerID: 7}},
 		{&oAuth2JWTAuthenticationResult{grantID: 4, appID: 5, user: u}, audit_model.Credential{Type: "oauth2_grant", ID: 4, AppID: 5, OwnerID: 7}},

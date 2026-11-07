@@ -34,6 +34,21 @@ func (t *AccessToken) IsOwnedByUser() bool {
 	return t.OwnerType == AccessTokenOwnerUser
 }
 
+// RestrictsAccount reports whether a user's own token is narrower than the account it acts as: limited to public data
+// or to some repositories. Such a token is not the person's own act (audit Credential.Restricted). An organization,
+// project or repository token acts as its own identity, which has no account to widen. A scope that can't be read
+// counts as restricted.
+func (t *AccessToken) RestrictsAccount() bool {
+	if !t.IsOwnedByUser() {
+		return false
+	}
+	if !t.ResourceAllRepos {
+		return true
+	}
+	publicOnly, err := t.Scope.PublicOnly()
+	return err != nil || publicOnly
+}
+
 // IsRevoked reports whether the token was revoked; its row is kept without a secret so its name stays in history.
 func (t *AccessToken) IsRevoked() bool {
 	return t.RevokedUnix != 0
