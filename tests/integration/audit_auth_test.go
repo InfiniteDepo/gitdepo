@@ -254,6 +254,25 @@ func TestAuditSignInReverseProxy(t *testing.T) {
 	assertSignIn(t, entries[0], 2, "", "reverse_proxy")
 }
 
+// Package and container routes verify credentials themselves, with the request actor stored first as on web and API:
+// a reverse proxy user created there (the first one is an admin) is created by the anonymous request actor.
+func TestAuditReverseProxyContainerRegistration(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+	auditFresh(t)
+	defer test.MockVariableValue(&setting.Service.EnableReverseProxyAuth, true)()
+	defer test.MockVariableValue(&setting.Service.EnableReverseProxyAutoRegister, true)()
+	defer test.MockVariableValue(&testWebRoutes, routers.NormalRoutes())()
+
+	since := auditMaxID(t)
+	MakeRequest(t, NewRequest(t, "GET", "/v2/").SetHeader(setting.ReverseProxyAuthUser, "rp-container"), http.StatusOK)
+	u := unittest.AssertExistsAndLoadBean(t, &user_model.User{LowerName: "rp-container"})
+	entries := auditActions(t, since, "account.user.created")
+	require.Len(t, entries, 1)
+	assert.Equal(t, u.ID, entries[0].TargetID)
+	assert.Equal(t, audit_model.ActorAnonymous, entries[0].ActorType, "the request actor, not an unknown one")
+	assert.NotEmpty(t, entries[0].RequestID)
+}
+
 func TestAuditSignInResetAndActivation(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
 	auditFresh(t)

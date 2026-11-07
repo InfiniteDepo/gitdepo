@@ -64,7 +64,7 @@ func (a *AccessToken) Verify(req *http.Request, w http.ResponseWriter, _ auth.Se
 		return &auth.AuthenticationError{Error: fmt.Errorf("access token GetAuthorizationReducerForAccessToken: %w", err)}
 	}
 
-	return &auth.AuthenticationSuccess{Result: &accessTokenAuthenticationResult{id: token.ID, name: token.Name, user: u, scope: token.Scope, reducer: reducer, expires: token.ExpiresUnix}}
+	return &auth.AuthenticationSuccess{Result: &accessTokenAuthenticationResult{id: token.ID, name: token.Name, user: u, scope: token.Scope, reducer: reducer, expires: token.ExpiresUnix, personal: token.IsOwnedByUser()}}
 }
 
 func (a *AccessToken) getTokenFromRequest(req *http.Request) optional.Option[string] {

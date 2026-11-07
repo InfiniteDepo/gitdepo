@@ -36,6 +36,12 @@ func TestCredentialClaim(t *testing.T) {
 		assert.Equal(t, audit_model.Credential{Type: typ, ID: 7, OwnerID: 3}, audit_model.CredentialFromClaim(typ+":7", 3), typ)
 	}
 	assert.Equal(t, audit_model.Credential{Type: audit_model.CredentialPassword, OwnerID: 3}, audit_model.CredentialFromClaim("password:5", 3)) // ID forced to 0
+	// a restricted token keeps its flag through a JWT, so the JWT stays no own act
+	restricted := audit_model.Credential{Type: audit_model.CredentialAccessToken, ID: 7, OwnerID: 3, Restricted: true}
+	assert.Equal(t, "access_token:7:r", audit_model.CredentialClaim(restricted))
+	assert.Equal(t, restricted, audit_model.CredentialFromClaim("access_token:7:r", 3))
+	assert.False(t, audit_model.IsOwnAct(audit_model.WithActor(t.Context(), &audit_model.Actor{Type: audit_model.ActorUser, ID: 3, Credential: audit_model.CredentialFromClaim(audit_model.CredentialClaim(restricted), 3)})))
+	assert.Equal(t, audit_model.CredentialUnknown, audit_model.CredentialFromClaim("access_token:r", 3).Type)
 	for _, s := range []string{"", "x", "access_token", "access_token:0", "access_token:-1", "access_token:x", "ssh_key:1:2", "session:1", "system:1", "cli:1", "reverse_proxy:1", "unknown:1", "runner:1", "bogus:1"} {
 		assert.Equal(t, audit_model.CredentialUnknown, audit_model.CredentialFromClaim(s, 3).Type, s)
 	}
