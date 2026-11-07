@@ -33,7 +33,7 @@ func legacy(pref string, e user_model.NotifyEvent) bool {
 	case user_model.NotifyEventMention:
 		return pref == "enabled" || pref == "andyourown" || pref == "onmention"
 	case user_model.NotifyEventIssueAssigned, user_model.NotifyEventReviewRequestedMe, user_model.NotifyEventActionsFailed,
-		user_model.NotifyEventCredentialExpiry, user_model.NotifyEventSecretAlert:
+		user_model.NotifyEventCredentialExpiry, user_model.NotifyEventSecretAlert, user_model.NotifyEventDeployments:
 		return pref != "disabled"
 	}
 	return pref == "enabled" || pref == "andyourown" // thread and release mails

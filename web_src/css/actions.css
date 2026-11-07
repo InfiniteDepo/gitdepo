@@ -199,3 +199,35 @@
 .ui.vertical.menu.actions-menu .item .label {
   flex-shrink: 0;
 }
+
+.deployment-table th,
+.deployment-table td {
+  vertical-align: top;
+}
+
+.deployment-table .deployment-label {
+  display: none;
+}
+
+.deployments-menu-collapsed > summary {
+  width: 100%;
+  text-align: start;
+}
+
+.deployments-menu-collapsed > .actions-menu {
+  margin-top: 0.5rem;
+}
+
+@media (max-width: 767.98px) {
+  .ui.table.deployment-table > thead {
+    display: none !important;
+  }
+  .deployment-table .deployment-label {
+    display: block;
+    color: var(--color-text-light-2);
+    font-size: 0.85em;
+  }
+  .deployment-table .deployment-environment-cell {
+    font-weight: var(--font-weight-semibold);
+  }
+}

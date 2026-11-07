@@ -96,6 +96,8 @@ type ActionDeployment struct {
 	Updated       timeutil.TimeStamp `xorm:"updated"`
 	// the last time the due-deployments task queued, or failed to queue, a pass of the gate for it (0: never)
 	CheckedUnix timeutil.TimeStamp `xorm:"NOT NULL DEFAULT 0"`
+	// the status whose mail was sent for it (ClaimDeploymentMail); a revoked approval clears it
+	MailedStatus DeploymentStatus `xorm:"NOT NULL DEFAULT 0"`
 }
 
 func init() {
@@ -143,9 +145,33 @@ func ReviewDeployment(ctx context.Context, d *ActionDeployment, cutoff timeutil.
 // pass may have moved it).
 func RevokeDeploymentApproval(ctx context.Context, d *ActionDeployment) (bool, error) {
 	n, err := db.GetEngine(ctx).Where("id = ? AND status = ? AND reviewed_by = ?", d.ID, DeploymentWaitingTimer, d.ReviewedBy).
-		Cols("status", "release_after_unix", "reviewed_by", "reviewed_unix", "review_comment").
+		Cols("status", "release_after_unix", "reviewed_by", "reviewed_unix", "review_comment", "mailed_status").
 		Update(&ActionDeployment{Status: DeploymentWaitingReview, ReleaseAfterUnix: d.ReleaseAfterUnix})
 	return n == 1, err
+}
+
+// ClaimDeploymentMail claims the mail about d's status for its run attempt and environment (the jobs of a matrix share
+// it): it marks d mailed unless d still has another status or a deployment of the same run, environment and attempt
+// with that status is marked already. It locks the run's row first, so of the servers that try at once one sends.
+func ClaimDeploymentMail(ctx context.Context, d *ActionDeployment) (claimed bool, err error) {
+	return claimed, db.WithTx(ctx, func(ctx context.Context) error {
+		e := db.GetEngine(ctx)
+		if _, err := e.Exec("UPDATE action_run SET id = id WHERE id = ?", d.RunID); err != nil {
+			return err
+		}
+		taken, err := e.Where("run_id = ? AND environment_id = ? AND attempt = ? AND status = ? AND mailed_status = ?",
+			d.RunID, d.EnvironmentID, d.Attempt, d.Status, d.Status).Exist(new(ActionDeployment))
+		if err != nil || taken {
+			return err
+		}
+		res, err := e.Exec("UPDATE action_deployment SET mailed_status = ? WHERE id = ? AND status = ?", d.Status, d.ID, d.Status)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		claimed = n == 1
+		return err
+	})
 }
 
 // FindExpiredReviews returns at most limit deployments that have waited for a review since before the cutoff, the ones
@@ -302,14 +328,48 @@ func FindDeploymentTasks(ctx context.Context, repoID int64, ds []*ActionDeployme
 	return out, nil
 }
 
-// FindRepoDeployments returns a page of the deployments of the repository, newest first, of one environment
-// (environmentID 0: of every environment), and how many there are.
-func FindRepoDeployments(ctx context.Context, repoID, environmentID int64, opts db.ListOptions) ([]*ActionDeployment, int64, error) {
-	sess := db.GetEngine(ctx).Where("repo_id = ?", repoID)
-	if environmentID != 0 {
-		sess = sess.And("environment_id = ?", environmentID)
+// DeploymentFilter narrows FindRepoDeployments; its zero value takes every deployment of the repository.
+type DeploymentFilter struct {
+	EnvironmentID int64
+	Statuses      []DeploymentStatus
+	TriggerUserID int64
+	Refs          []string // full ref names: a deployment of any of them
+}
+
+// FindRepoDeployments returns a page of the deployments of the repository that the filter takes, newest first, and
+// how many there are.
+func FindRepoDeployments(ctx context.Context, repoID int64, f DeploymentFilter, opts db.ListOptions) ([]*ActionDeployment, int64, error) {
+	cond := builder.NewCond().And(builder.Eq{"repo_id": repoID})
+	if f.EnvironmentID != 0 {
+		cond = cond.And(builder.Eq{"environment_id": f.EnvironmentID})
+	}
+	if len(f.Statuses) > 0 {
+		cond = cond.And(builder.In("status", f.Statuses))
+	}
+	if f.TriggerUserID != 0 {
+		cond = cond.And(builder.Eq{"trigger_user_id": f.TriggerUserID})
+	}
+	if len(f.Refs) > 0 {
+		cond = cond.And(builder.In("ref", f.Refs))
 	}
 	var ds []*ActionDeployment
-	count, err := db.SetSessionPagination(sess, &opts).OrderBy("id DESC").FindAndCount(&ds)
+	count, err := db.SetSessionPagination(db.GetEngine(ctx).Where(cond), &opts).OrderBy("id DESC").FindAndCount(&ds)
 	return ds, count, err
 }
+
+// FindDeploymentTriggerUsers returns the users who triggered a deployment of the environment of the repository and
+// match visible (the users the viewer may see; nil = all), at most MaxDeploymentTriggerUsers of them (the lowest IDs):
+// the condition applies before the limit, so users the viewer can't see never take a place.
+func FindDeploymentTriggerUsers(ctx context.Context, repoID, environmentID int64, visible builder.Cond) ([]int64, error) {
+	var ids []int64
+	sess := db.GetEngine(ctx).Table("action_deployment").Join("INNER", "`user`", "`user`.id = action_deployment.trigger_user_id").
+		Distinct("action_deployment.trigger_user_id").
+		Where("action_deployment.repo_id = ? AND action_deployment.environment_id = ? AND `user`.id > 0", repoID, environmentID)
+	if visible != nil {
+		sess.And(visible)
+	}
+	return ids, sess.OrderBy("action_deployment.trigger_user_id").Limit(MaxDeploymentTriggerUsers).Find(&ids)
+}
+
+// MaxDeploymentTriggerUsers is how many users the actor filter of the deployments view offers at most.
+var MaxDeploymentTriggerUsers = 100

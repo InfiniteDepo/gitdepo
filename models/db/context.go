@@ -246,9 +246,13 @@ func WithTx(parentCtx context.Context, f func(ctx context.Context) error) error 
 
 // AfterTx registers a function to be called after the current transaction commits. If not in a transaction, the
 // function is called immediately. The hook will only be called if the transaction commits successfully; if the
-// transaction rolls back, the hook is discarded.
+// transaction rolls back, the hook is discarded. The transaction is found through the context chain, so a context
+// derived from the transaction's (context.WithValue, an audit actor, ...) still defers the hook.
 func AfterTx(ctx context.Context, hook func()) {
 	dbCtx, ok := ctx.(*Context)
+	if !ok {
+		dbCtx, ok = ctx.Value(enginedContextKey).(*Context)
+	}
 	if !ok || !dbCtx.transaction {
 		// Not in a db transaction context, run immediately
 		hook()

@@ -1,0 +1,20 @@
+<div class="ui fluid vertical menu actions-menu">
+	<a class="item{{if and (not $.CurWorkflow) (not $.PageIsDeployments)}} active{{end}}" href="{{$.RepoLink}}/actions{{if not $.PageIsDeployments}}?actor={{$.CurActor}}&status={{$.CurStatus}}{{end}}">{{ctx.Locale.Tr "actions.runs.all_workflows"}}</a>
+	{{range .workflows}}
+		<a class="item{{if eq .Entry.Name $.CurWorkflow}} active{{end}}" href="{{$.RepoLink}}/actions?workflow={{.Entry.Name}}{{if not $.PageIsDeployments}}&actor={{$.CurActor}}&status={{$.CurStatus}}{{end}}">
+			<span class="content" data-tooltip-content="{{.Entry.Name}}">
+				{{.Entry.Name}}
+			</span>
+
+			{{if .ErrMsg}}
+				<span class="error" data-tooltip-content="{{.ErrMsg}}">
+					{{svg "octicon-alert" 16 "text red"}}
+				</span>
+			{{end}}
+
+			{{if $.ActionsConfig.IsWorkflowDisabled .Entry.Name}}
+				<div class="ui red label">{{ctx.Locale.Tr "disabled"}}</div>
+			{{end}}
+		</a>
+	{{end}}
+</div>

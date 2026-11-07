@@ -228,3 +228,13 @@ func GetUserTimeZone(ctx context.Context, userID int64) (string, error) {
 	}
 	return name, nil
 }
+
+// GetUserLocation returns the time zone set by the user, else the server's.
+func GetUserLocation(ctx context.Context, userID int64) *time.Location {
+	if name, err := GetUserTimeZone(ctx, userID); err == nil && name != "" {
+		if loc, err := time.LoadLocation(name); err == nil {
+			return loc
+		}
+	}
+	return time.Local
+}

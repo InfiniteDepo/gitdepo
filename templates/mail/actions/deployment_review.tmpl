@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<style>
+		.footer { font-size:small; color:#666;}
+	</style>
+	<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+</head>
+
+<body>
+	<p>{{.locale.Tr "mail.actions.deployment_review_info" .TriggerUser .Repo .Environment}}</p>
+	<p>
+		{{.locale.Tr "mail.actions.deployment_run" .Run.Title .Run.WorkflowID .Run.Index}}<br>
+		{{.locale.Tr "mail.actions.deployment_job" .Job}}<br>
+		{{.locale.Tr "mail.actions.deployment_ref" .Ref .Commit}}<br>
+		{{.locale.Tr "mail.actions.deployment_expires" .Expires}}
+	</p>
+	<p><a href="{{.Link}}">{{.locale.Tr "mail.actions.deployment_review_button"}}</a></p>
+	<div class="footer">
+		<p>
+			---
+			<br>
+			{{.locale.Tr "mail.actions.deployment_review_footer" .Environment .Repo}}
+		</p>
+	</div>
+</body>
+</html>

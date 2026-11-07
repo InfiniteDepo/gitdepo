@@ -1,26 +1,8 @@
 {{if .HasWorkflowsOrRuns}}
 <div class="ui stackable grid">
 	<div class="four wide column">
-		<div class="ui fluid vertical menu actions-menu">
-			<a class="item{{if not $.CurWorkflow}} active{{end}}" href="?actor={{$.CurActor}}&status={{$.CurStatus}}">{{ctx.Locale.Tr "actions.runs.all_workflows"}}</a>
-			{{range .workflows}}
-				<a class="item{{if eq .Entry.Name $.CurWorkflow}} active{{end}}" href="?workflow={{.Entry.Name}}&actor={{$.CurActor}}&status={{$.CurStatus}}">
-					<span class="content" data-tooltip-content="{{.Entry.Name}}">
-						{{.Entry.Name}}
-					</span>
-
-					{{if .ErrMsg}}
-						<span class="error" data-tooltip-content="{{.ErrMsg}}">
-							{{svg "octicon-alert" 16 "text red"}}
-						</span>
-					{{end}}
-
-					{{if $.ActionsConfig.IsWorkflowDisabled .Entry.Name}}
-						<div class="ui red label">{{ctx.Locale.Tr "disabled"}}</div>
-					{{end}}
-				</a>
-			{{end}}
-		</div>
+		{{template "repo/actions/workflows_menu" .}}
+		<div id="deployments-menu">{{template "repo/actions/deployments_menu" .}}</div>
 	</div>
 	<div class="twelve wide column content">
 		<div class="ui secondary filter menu tw-justify-end tw-flex tw-items-center">

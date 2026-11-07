@@ -102,6 +102,8 @@ func TestTxContext(t *testing.T) {
 	})
 }
 
+type wrappedKey struct{}
+
 func TestAfterTx(t *testing.T) {
 	tests := []struct {
 		executionMode string
@@ -122,6 +124,16 @@ func TestAfterTx(t *testing.T) {
 		},
 		{
 			executionMode: "WithTxNested",
+			rollback:      true,
+		},
+		{
+			executionMode: "NoTxWrapped",
+		},
+		{
+			executionMode: "WithTxWrapped",
+		},
+		{
+			executionMode: "WithTxWrapped",
 			rollback:      true,
 		},
 		{
@@ -184,6 +196,20 @@ func TestAfterTx(t *testing.T) {
 						}
 						return nil
 					})
+				})
+			case "NoTxWrapped":
+				// a context derived from one outside a transaction runs the hook at once
+				sut(context.WithValue(ctx, wrappedKey{}, "x"))
+				assert.EqualValues(t, 1, hookCount, "at once")
+			case "WithTxWrapped":
+				// a context derived from the transaction's (an audit actor, a value) still waits for the commit
+				db.WithTx(ctx, func(ctx context.Context) error {
+					sut(context.WithValue(ctx, wrappedKey{}, "x"))
+					assert.EqualValues(t, 0, hookCount, "not inside the transaction")
+					if tc.rollback {
+						return errors.New("rollback")
+					}
+					return nil
 				})
 			case "TxContext":
 				txCtx, committer, err := db.TxContext(ctx)
