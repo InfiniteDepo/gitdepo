@@ -5,7 +5,6 @@ package forms
 
 import (
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -56,11 +55,15 @@ func (f *BranchingModelForm) Model() *repo_model.BranchingModel {
 		}
 		return ""
 	}
+	on := make(map[string]bool, len(f.TypeOn)) // a set: a row count the model limit refuses must not cost a scan per row
+	for _, o := range f.TypeOn {
+		on[o] = true
+	}
 	for i, name := range f.TypeName {
 		if strings.TrimSpace(name) == "" && strings.TrimSpace(at(f.TypePrefix, i)) == "" { // an empty row of the table
 			continue
 		}
-		m.Types = append(m.Types, repo_model.BranchType{Name: name, Prefix: at(f.TypePrefix, i), Base: at(f.TypeBase, i), BaseBranch: at(f.TypeBranch, i), Off: !slices.Contains(f.TypeOn, strconv.Itoa(i))})
+		m.Types = append(m.Types, repo_model.BranchType{Name: name, Prefix: at(f.TypePrefix, i), Base: at(f.TypeBase, i), BaseBranch: at(f.TypeBranch, i), Off: !on[strconv.Itoa(i)]})
 	}
 	return m
 }

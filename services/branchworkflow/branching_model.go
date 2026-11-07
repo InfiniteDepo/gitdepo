@@ -25,6 +25,8 @@ import (
 	"forgejo.org/modules/json"
 	"forgejo.org/modules/optional"
 	api "forgejo.org/modules/structs"
+
+	"code.forgejo.org/xorm/xorm/convert"
 )
 
 const (
@@ -47,7 +49,7 @@ const (
 	ReasonNameDuplicate      = "name_duplicate"      // two types with one name
 	ReasonNameReserved       = "name_reserved"       // the name of the built-in Release type
 	ReasonDuplicatePrefix    = "duplicate_prefix"    // a prefix twice
-	ReasonReleasePrefix      = "release_prefix"      // a type prefix that is a release prefix
+	ReasonReleasePrefix      = "release_prefix"      // a type prefix that is or starts with a release prefix
 	ReasonPrefixIsBranch     = "prefix_is_branch"    // a type prefix that is the development or production branch
 	ReasonMergeQueue         = "merge_queue"         // a name or prefix of the merge queue's branches
 	ReasonBranchRequired     = "branch_required"     // base "branch" without a branch
@@ -62,9 +64,31 @@ type ErrInvalidBranchingModel struct {
 	Reason string
 }
 
+// Error is the human message, without the reason code (that is the Reason field).
 func (e ErrInvalidBranchingModel) Error() string {
-	if e.Reason != "" {
-		return fmt.Sprintf("invalid branching model (%s): %q", e.Reason, e.Value)
+	switch e.Reason {
+	case ReasonName:
+		return fmt.Sprintf("%q is not a usable branch type name", e.Value)
+	case ReasonNameRequired:
+		return "a branch type needs a name"
+	case ReasonNameDuplicate:
+		return fmt.Sprintf("two branch types are named %q", e.Value)
+	case ReasonNameReserved:
+		return fmt.Sprintf("%q is the name of the built-in Release type", e.Value)
+	case ReasonDuplicatePrefix:
+		return fmt.Sprintf("the prefix %q is used by two branch types", e.Value)
+	case ReasonReleasePrefix:
+		return fmt.Sprintf("the prefix %q is or starts with a release branch prefix", e.Value)
+	case ReasonPrefixIsBranch:
+		return fmt.Sprintf("the prefix %q is the development or production branch", e.Value)
+	case ReasonMergeQueue:
+		return fmt.Sprintf("%q is reserved for the branches of the merge queue", e.Value)
+	case ReasonBranchRequired:
+		return fmt.Sprintf("the branch type %q is created from a branch, but no branch is named", e.Value)
+	case ReasonUnknownBase:
+		return fmt.Sprintf("%q is not a base: use development, production or branch", e.Value)
+	case ReasonProductionRequired:
+		return fmt.Sprintf("the branch type %q is created from the production branch, but none is set", e.Value)
 	}
 	return fmt.Sprintf("invalid branch name or prefix %q", e.Value)
 }
@@ -75,12 +99,27 @@ var ErrTooManyReleasePrefixes = fmt.Errorf("at most %d release prefixes", maxRel
 // ErrTooManyBranchTypes is returned for more than maxBranchTypes branch types.
 var ErrTooManyBranchTypes = fmt.Errorf("at most %d branch types", maxBranchTypes)
 
+// hasHiddenChar tells if s holds a control (Cc), format (Cf: bidi marks, zero-width characters) or line/paragraph
+// separator (Zl, Zp) character: nothing a name, prefix or branch of the model may hold.
+func hasHiddenChar(s string) bool {
+	return strings.ContainsFunc(s, func(r rune) bool {
+		return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
+	})
+}
+
+// hasVisibleChar tells if s has a character one can see (not a space, not a blank filler such as U+3164 or U+2800).
+func hasVisibleChar(s string) bool {
+	return strings.ContainsFunc(s, func(r rune) bool {
+		return unicode.IsGraphic(r) && !unicode.IsSpace(r) && r != 0x3164 && r != 0x2800 && r != 0x115F && r != 0x1160 && r != 0xFFA0
+	})
+}
+
 // checkBranchName is the one check of every branch the model names (development, production, type bases, default
 // pull request target): a name git accepts that can't be read as another ref (HEAD, refs/...), starts with no dash
 // and is not a merge queue branch.
 func checkBranchName(b string) error {
 	switch {
-	case b == "" || len(b) > maxDevelopmentBranch || !git.IsValidRefPattern(b) || git.IsReservedRefName(b) || strings.HasPrefix(b, "-"):
+	case b == "" || len(b) > maxDevelopmentBranch || hasHiddenChar(b) || !git.IsValidRefPattern(b) || git.IsReservedRefName(b) || strings.HasPrefix(b, "-"):
 		return ErrInvalidBranchingModel{Value: b}
 	case pull_model.IsMergeQueueBranch(b):
 		return ErrInvalidBranchingModel{Value: b, Reason: ReasonMergeQueue}
@@ -92,7 +131,7 @@ func checkBranchName(b string) error {
 // rules as checkBranchName, of at most maxLen bytes, without a comma (the web form separates release prefixes with
 // commas), and neither a merge queue branch nor the start of one ("m" and "merge-" would match them).
 func checkPrefix(p string, maxLen int) error {
-	if p == "" || len(p) > maxLen || strings.Contains(p, ",") {
+	if p == "" || len(p) > maxLen || strings.Contains(p, ",") || hasHiddenChar(p) {
 		return ErrInvalidBranchingModel{Value: p}
 	}
 	mq := pull_model.MergeQueueBranchPrefix
@@ -111,7 +150,7 @@ func checkTypeName(n string) error {
 	if n == "" {
 		return ErrInvalidBranchingModel{Value: n, Reason: ReasonNameRequired}
 	}
-	if utf8.RuneCountInString(n) > maxTypeNameLen || !utf8.ValidString(n) || strings.ContainsFunc(n, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }) {
+	if utf8.RuneCountInString(n) > maxTypeNameLen || !utf8.ValidString(n) || hasHiddenChar(n) || !hasVisibleChar(n) {
 		return ErrInvalidBranchingModel{Value: n, Reason: ReasonName}
 	}
 	if strings.EqualFold(n, "Release") {
@@ -140,7 +179,7 @@ func normalizeTypes(in []repo_model.BranchType, release []string, production str
 		if err := checkPrefix(t.Prefix, maxTypePrefixLen); err != nil {
 			return nil, err
 		}
-		if slices.Contains(release, t.Prefix) {
+		if slices.ContainsFunc(release, func(r string) bool { return strings.HasPrefix(t.Prefix, r) }) {
 			return nil, ErrInvalidBranchingModel{Value: t.Prefix, Reason: ReasonReleasePrefix}
 		}
 		if slices.Contains(prefixes, t.Prefix) {
@@ -472,17 +511,31 @@ func SetRepoModel(ctx context.Context, repo *repo_model.Repository, m *repo_mode
 	if err != nil {
 		return ErrNoPullRequests
 	}
-	before := repoAuditModel(e.Configured)
-	u.PullRequestsConfig().BranchingModel = m
-	return db.WithTx(ctx, func(ctx context.Context) error {
-		if err := repo_model.UpdateRepoUnit(ctx, u); err != nil {
+	var newConfig convert.Conversion
+	if err := db.WithTx(ctx, func(ctx context.Context) error {
+		// the stored row, not the copy cached on the repository, is what changes and what the entry compares
+		stored := &repo_model.RepoUnit{}
+		if has, err := db.GetEngine(ctx).Where("repo_id = ? AND type = ?", repo.ID, unit.TypePullRequests).Get(stored); err != nil {
+			return err
+		} else if !has {
+			return ErrNoPullRequests
+		}
+		cfg := stored.PullRequestsConfig()
+		before := repoAuditModel(cfg.BranchingModel)
+		cfg.BranchingModel = m
+		if err := repo_model.UpdateRepoUnit(ctx, stored); err != nil {
 			return err
 		}
+		newConfig = stored.Config
 		if changes := audit_model.Changes(before, repoAuditModel(m)); changes != nil {
 			return repo_model.RecordRepo(ctx, "repo.branch_workflow.changed", repo, changes)
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	u.Config = newConfig // the copy cached on the repository follows only a stored change
+	return nil
 }
 
 // typeAudit lists the branch types as objects, so that no value can pass for another field.

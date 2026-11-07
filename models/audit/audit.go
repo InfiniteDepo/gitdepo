@@ -419,15 +419,15 @@ func filterKeys(in map[string]any, allowed []string) map[string]any {
 	return out
 }
 
-// encodeData returns the JSON of data (keys sorted) cut to maxData: it halves the longest name list first, then the
-// longest ID list, and sets "truncated".
+// encodeData returns the JSON of data (keys sorted) cut to maxData: it halves the longest list of objects first, then
+// the longest name list, then the longest ID list, and sets "truncated".
 func encodeData(data map[string]any) (string, error) {
 	for {
 		b, err := json.Marshal(data)
 		if err != nil || len(b) <= maxData {
 			return string(b), err
 		}
-		if !halveLongest[string](data) && !halveLongest[int64](data) {
+		if !halveLongest[map[string]any](data) && !halveLongest[string](data) && !halveLongest[int64](data) {
 			return "", util.NewInvalidArgumentErrorf("audit data too large")
 		}
 		data["truncated"] = true

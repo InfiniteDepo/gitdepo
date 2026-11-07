@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	repo_model "forgejo.org/models/repo"
+	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/web"
 	"forgejo.org/services/branchworkflow"
@@ -182,7 +183,12 @@ func EditBranchingModel(ctx *context.APIContext) {
 
 	form := web.GetForm(ctx).(*api.OrgBranchingModel)
 	err := branchworkflow.SetOrgModel(ctx, ctx.Org().Organization.AsUser(), &repo_model.BranchingModel{DevelopmentBranch: form.DevelopmentBranch, ReleasePrefixes: form.ReleasePrefixes, ProductionBranch: form.ProductionBranch, Types: branchworkflow.TypesFromAPI(form.Types), DefaultPRTarget: form.DefaultPRTarget, MergeForward: form.MergeForward, MergeForwardNeverBypass: form.MergeForwardNeverBypass, MergeForwardAnyoneMaySkip: form.MergeForwardAnyoneMaySkip}, form.Enforce)
-	if _, ok := branchworkflow.IsInvalidBranchingModel(err); ok || errors.Is(err, branchworkflow.ErrLockWithoutValue) || errors.Is(err, branchworkflow.ErrTooManyReleasePrefixes) || errors.Is(err, branchworkflow.ErrTooManyBranchTypes) {
+	if e, ok := branchworkflow.IsInvalidBranchingModel(err); ok {
+		// the cause code is its own field, the message is for people
+		ctx.JSON(http.StatusUnprocessableEntity, map[string]string{"message": e.Error(), "reason": e.Reason, "url": setting.API.SwaggerURL})
+		return
+	}
+	if errors.Is(err, branchworkflow.ErrLockWithoutValue) || errors.Is(err, branchworkflow.ErrTooManyReleasePrefixes) || errors.Is(err, branchworkflow.ErrTooManyBranchTypes) {
 		ctx.Error(http.StatusUnprocessableEntity, "SetOrgModel", err)
 		return
 	}

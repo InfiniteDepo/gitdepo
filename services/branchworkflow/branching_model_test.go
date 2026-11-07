@@ -237,6 +237,10 @@ func TestNormalizeBranchTypes(t *testing.T) {
 		"same name":                        {Types: []repo_model.BranchType{ok, {Name: "a", Prefix: "b/", Base: repo_model.BranchTypeBaseDevelopment}}},
 		"reserved name":                    {Types: []repo_model.BranchType{{Name: "release", Prefix: "b/", Base: repo_model.BranchTypeBaseDevelopment}}},
 		"bidi name":                        {Types: []repo_model.BranchType{{Name: "a\u202eb", Prefix: "b/", Base: repo_model.BranchTypeBaseDevelopment}}},
+		"hangul filler name":               {Types: []repo_model.BranchType{{Name: "\u3164", Prefix: "b/", Base: repo_model.BranchTypeBaseDevelopment}}},
+		"line separator in name":           {Types: []repo_model.BranchType{{Name: "a\u2028b", Prefix: "b/", Base: repo_model.BranchTypeBaseDevelopment}}},
+		"bidi prefix":                      {Types: []repo_model.BranchType{{Name: "A", Prefix: "b\u202e/", Base: repo_model.BranchTypeBaseDevelopment}}},
+		"zero width prefix":                {Types: []repo_model.BranchType{{Name: "A", Prefix: "b\u200b/", Base: repo_model.BranchTypeBaseDevelopment}}},
 		"zero width name":                  {Types: []repo_model.BranchType{{Name: "\u200b", Prefix: "b/", Base: repo_model.BranchTypeBaseDevelopment}}},
 		"production without branch":        {Types: []repo_model.BranchType{{Name: "A", Prefix: "a/", Base: repo_model.BranchTypeBaseProduction}}},
 	} {
