@@ -16,6 +16,7 @@ import (
 
 	actions_model "forgejo.org/models/actions"
 	asymkey_model "forgejo.org/models/asymkey"
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/perm"
 	"forgejo.org/models/unittest"
@@ -176,7 +177,7 @@ func TestCredentialExpiryDefault(t *testing.T) {
 
 		// a row stored without an expiry, as by an import or an older policy
 		row := &auth_model.AccessToken{UID: 2, Name: "stored without expiry", Scope: auth_model.AccessTokenScopeReadUser, ResourceAllRepos: true}
-		require.NoError(t, auth_model.NewAccessToken(t.Context(), row, nil))
+		require.NoError(t, auth_model.NewAccessToken(audit_model.WithSystem(t.Context(), "test"), row, nil))
 		require.Zero(t, row.ExpiresUnix)
 		MakeRequest(t, NewRequest(t, "GET", "/api/v1/user").AddTokenAuth(row.Token), http.StatusOK)
 		MakeRequest(t, NewRequest(t, "GET", "/api/v1/repos/user5/repo4").AddTokenAuth(task.Token), http.StatusOK)

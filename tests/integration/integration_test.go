@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	"forgejo.org/models/unittest"
@@ -513,7 +514,7 @@ func createFineGrainedRepoAccessToken(t testing.TB, username string, scopes []au
 		Scope:            scope,
 		ResourceAllRepos: false,
 	}
-	err = auth.NewAccessToken(t.Context(), token, nil)
+	err = auth.NewAccessToken(audit_model.WithSystem(t.Context(), "test"), token, nil)
 	require.NoError(t, err)
 
 	for _, id := range repoIDs {

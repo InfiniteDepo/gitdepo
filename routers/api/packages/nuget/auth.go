@@ -68,5 +68,5 @@ func (a *Auth) Verify(req *http.Request, w http.ResponseWriter, sess auth.Sessio
 }
 
 func (r *nugetAuthenticationResult) Credential() audit_model.Credential {
-	return audit_model.Credential{Type: audit_model.CredentialAccessToken, ID: r.token.ID, Name: r.token.Name, OwnerID: r.user.ID}
+	return audit_model.Credential{Type: audit_model.CredentialAccessToken, ID: r.token.ID, Name: r.token.Name, OwnerID: r.user.ID, Restricted: r.token.RestrictsAccount()}
 }

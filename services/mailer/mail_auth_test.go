@@ -6,6 +6,7 @@ package mailer_test
 import (
 	"testing"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
@@ -35,7 +36,7 @@ func TestPasswordChangeMail(t *testing.T) {
 		called = true
 	})()
 
-	require.NoError(t, user_service.UpdateAuth(db.DefaultContext, user, &user_service.UpdateAuthOptions{Password: optional.Some("NewPasswordYolo!")}))
+	require.NoError(t, user_service.UpdateAuth(audit_model.WithSystem(db.DefaultContext, "test"), user, &user_service.UpdateAuthOptions{Password: optional.Some("NewPasswordYolo!")}))
 	assert.True(t, called)
 }
 

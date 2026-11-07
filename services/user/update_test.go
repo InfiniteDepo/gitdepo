@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"forgejo.org/models"
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
@@ -55,7 +56,7 @@ func TestUpdateUser(t *testing.T) {
 		EmailNotificationsPreference: optional.Some("disabled"),
 		SetLastLogin:                 true,
 	}
-	require.NoError(t, UpdateUser(db.DefaultContext, user, opts))
+	require.NoError(t, UpdateUser(ownCtx(), user, opts))
 
 	assert.Equal(t, opts.KeepEmailPrivate.ValueOrZeroValue(), user.KeepEmailPrivate)
 	assert.Equal(t, opts.FullName.ValueOrZeroValue(), user.FullName)
@@ -103,12 +104,12 @@ func TestUpdateAuth(t *testing.T) {
 	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 28})
 	userCopy := *user
 
-	require.NoError(t, UpdateAuth(db.DefaultContext, user, &UpdateAuthOptions{
+	require.NoError(t, UpdateAuth(ownCtx(), user, &UpdateAuthOptions{
 		LoginName: optional.Some("new-login"),
 	}))
 	assert.Equal(t, "new-login", user.LoginName)
 
-	require.NoError(t, UpdateAuth(db.DefaultContext, user, &UpdateAuthOptions{
+	require.NoError(t, UpdateAuth(ownCtx(), user, &UpdateAuthOptions{
 		Password:           optional.Some("%$DRZUVB576tfzgu"),
 		MustChangePassword: optional.Some(true),
 	}))
@@ -116,12 +117,12 @@ func TestUpdateAuth(t *testing.T) {
 	assert.NotEqual(t, userCopy.Passwd, user.Passwd)
 	assert.NotEqual(t, userCopy.Salt, user.Salt)
 
-	require.NoError(t, UpdateAuth(db.DefaultContext, user, &UpdateAuthOptions{
+	require.NoError(t, UpdateAuth(ownCtx(), user, &UpdateAuthOptions{
 		ProhibitLogin: optional.Some(true),
 	}))
 	assert.True(t, user.ProhibitLogin)
 
-	require.ErrorIs(t, UpdateAuth(db.DefaultContext, user, &UpdateAuthOptions{
+	require.ErrorIs(t, UpdateAuth(ownCtx(), user, &UpdateAuthOptions{
 		Password: optional.Some("aaaa"),
 	}), password_module.ErrMinLength)
 }
@@ -267,4 +268,35 @@ func TestUpdateUserFromSource(t *testing.T) {
 		assert.True(t, models.IsErrDeleteLastAdminUser(err), "%v", err)
 		unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1, IsAdmin: true, IsActive: true})
 	})
+}
+
+// Making someone a site admin or setting another user's password is only a person's own act; a login source syncing
+// the flag and a user changing their own password are unchanged.
+func TestUpdateUserOwnAct(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	grant := audit_model.WithActor(db.DefaultContext, &audit_model.Actor{Type: audit_model.ActorUser, ID: 1, Name: "user1", Credential: audit_model.Credential{Type: audit_model.CredentialOAuth2Grant}})
+	u := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 28})
+
+	require.ErrorIs(t, UpdateUser(grant, u, &UpdateOptions{IsAdmin: optional.Some(true)}), audit_model.ErrNotOwnAct)
+	assert.False(t, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 28}).IsAdmin)
+	require.ErrorIs(t, UpdateAuth(grant, u, &UpdateAuthOptions{Password: optional.Some("%$DRZUVB576tfzgu")}), audit_model.ErrNotOwnAct)
+	require.ErrorIs(t, CheckEditIsOwnAct(grant, u, &UpdateAuthOptions{}, &UpdateOptions{IsAdmin: optional.Some(true)}, ""), audit_model.ErrNotOwnAct)
+	require.ErrorIs(t, CheckEditIsOwnAct(grant, u, &UpdateAuthOptions{}, &UpdateOptions{}, "new-28@example.com"), audit_model.ErrNotOwnAct)
+	require.ErrorIs(t, AdminAddOrSetPrimaryEmailAddress(grant, u, "new-28@example.com"), audit_model.ErrNotOwnAct)
+	require.ErrorIs(t, UpdateAuth(grant, u, &UpdateAuthOptions{LoginName: optional.Some("elsewhere")}), audit_model.ErrNotOwnAct)
+	require.ErrorIs(t, CheckEditIsOwnAct(grant, u, &UpdateAuthOptions{LoginSource: optional.Some(int64(1))}, &UpdateOptions{}, ""), audit_model.ErrNotOwnAct)
+	require.NoError(t, UpdateAuth(grant, u, &UpdateAuthOptions{LoginName: optional.Some(u.LoginName)}), "an unchanged login name")
+	require.NoError(t, CheckEditIsOwnAct(grant, u, &UpdateAuthOptions{}, &UpdateOptions{}, u.Email), "an unchanged email")
+	require.NoError(t, UpdateUser(grant, u, &UpdateOptions{FullName: optional.Some("other fields")}))
+
+	self := audit_model.WithActor(db.DefaultContext, &audit_model.Actor{Type: audit_model.ActorUser, ID: 28, Name: u.Name, Credential: audit_model.Credential{Type: audit_model.CredentialSession}})
+	require.NoError(t, UpdateAuth(self, u, &UpdateAuthOptions{Password: optional.Some("%$DRZUVB576tfzgu")}))
+
+	// an activated address added under sudo is the sudoer's act, not the user's own
+	defer test.MockVariableValue(&setting.Service.RegisterEmailConfirm, false)()
+	sudo := audit_model.WithActor(db.DefaultContext, &audit_model.Actor{Type: audit_model.ActorUser, ID: 28, SudoByID: 1, Credential: audit_model.Credential{Type: audit_model.CredentialAccessToken}})
+	require.ErrorIs(t, AddEmailAddresses(sudo, u, []string{"sudo-28@example.com"}), audit_model.ErrNotOwnAct)
+	require.NoError(t, AddEmailAddresses(self, u, []string{"sudo-28@example.com"}))
+	require.NoError(t, UpdateUserFromSource(audit_model.WithLoginSource(grant, 1, "ldap"), u, &UpdateOptions{IsAdmin: optional.Some(true)}, "ldap"))
+	assert.True(t, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 28}).IsAdmin)
 }

@@ -15,6 +15,7 @@ import (
 
 	actions_model "forgejo.org/models/actions"
 	activities_model "forgejo.org/models/activities"
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	issues_model "forgejo.org/models/issues"
@@ -362,11 +363,11 @@ func TestRepoUnitPolicyTransfer(t *testing.T) {
 	session := loginUser(t, "user2")
 	repo3 := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 3})
 	session.MakeRequest(t, NewRequest(t, "GET", "/org3/repo3/issues/1"), http.StatusNotFound)
-	require.NoError(t, repo_service.TransferOwnership(db.DefaultContext, admin, user2, repo3, nil))
+	require.NoError(t, repo_service.TransferOwnership(audit_model.WithSystem(db.DefaultContext, "test"), admin, user2, repo3, nil))
 	session.MakeRequest(t, NewRequest(t, "GET", "/user2/repo3/issues/1"), http.StatusOK)
 
 	repo1 := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
-	require.NoError(t, repo_service.TransferOwnership(db.DefaultContext, admin, org3, repo1, nil))
+	require.NoError(t, repo_service.TransferOwnership(audit_model.WithSystem(db.DefaultContext, "test"), admin, org3, repo1, nil))
 	session.MakeRequest(t, NewRequest(t, "GET", "/org3/repo1/issues/1"), http.StatusNotFound)
 	unittest.AssertExistsAndLoadBean(t, &repo_model.RepoUnit{RepoID: 1, Type: unit_model.TypeIssues})
 }

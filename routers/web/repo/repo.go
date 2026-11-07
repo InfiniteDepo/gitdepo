@@ -14,6 +14,7 @@ import (
 
 	"forgejo.org/models"
 	actions_model "forgejo.org/models/actions"
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
 	"forgejo.org/models/organization"
@@ -450,6 +451,11 @@ func ActionTransfer(accept bool) func(ctx *context.Context) {
 		}
 		if errors.Is(err, actions_model.ErrEnvironmentTwin) {
 			ctx.Flash.Error(ctx.Tr("actions.environments.error.transfer_twin"))
+			ctx.Redirect(ctx.Repo.RepoLink)
+			return
+		}
+		if errors.Is(err, audit_model.ErrNotOwnAct) {
+			ctx.Flash.Error(ctx.Tr("settings.credential_not_own_act"))
 			ctx.Redirect(ctx.Repo.RepoLink)
 			return
 		}

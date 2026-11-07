@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	actions_model "forgejo.org/models/actions"
 	audit_model "forgejo.org/models/audit"
@@ -394,7 +395,9 @@ func revokeApprovalIfIneligible(ctx context.Context, run *actions_model.ActionRu
 // another server moved meanwhile is an error, so that the pass of the emitter is repeated.
 func saveDeployment(ctx context.Context, d *actions_model.ActionDeployment, isNew bool, prior actions_model.DeploymentStatus, priorRelease timeutil.TimeStamp) error {
 	if isNew { // Created is the ready time the gate set from its clock, so xorm must not stamp it again
-		d.Updated = d.Created
+		// Updated is compared with the environment's update time, which xorm stamps from the real clock (staleDeployment):
+		// stamp it the same way, or a gate clock behind the real one makes a new deployment read as stale
+		d.Updated = timeutil.TimeStamp(time.Now().Unix())
 		_, err := db.GetEngine(ctx).NoAutoTime().Insert(d)
 		return err
 	}

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	audit_model "forgejo.org/models/audit"
 	org_model "forgejo.org/models/organization"
 	user_model "forgejo.org/models/user"
 
@@ -51,7 +52,7 @@ func CreateUser(t testing.TB, opts *CreateUserOptions) *user_model.User {
 	u.Passwd = userPassword
 	u.IsAdmin = opts.IsAdmin
 
-	err := user_model.CreateUser(t.Context(), u, overwrite)
+	err := user_model.CreateUser(audit_model.WithSystem(t.Context(), "forgery"), u, overwrite) // test setup, not a request
 	require.NoError(t, err)
 	return u
 }

@@ -521,7 +521,8 @@ func AddTeamMember(ctx *context.APIContext) {
 	}
 	if err := org_service.InviteOrAddTeamMember(ctx, ctx.Doer(), u, ctx.Org().Team); err != nil {
 		if organization.IsErrTeamInviteAlreadyExist(err) {
-			ctx.Error(http.StatusConflict, "InviteOrAddTeamMember", err)
+			// an invitation that can't be accepted (see organization.CheckInviteIsOwnAct) only goes away this way
+			ctx.Error(http.StatusConflict, "InviteOrAddTeamMember", "the user already has a pending invitation to this team: delete it to invite them again")
 		} else if organization.IsErrUserNoVerifiedDomainEmail(err) || errors.Is(err, util.ErrPermissionDenied) {
 			ctx.Error(http.StatusForbidden, "InviteOrAddTeamMember", err)
 		} else {

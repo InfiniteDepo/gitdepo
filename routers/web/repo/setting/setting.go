@@ -16,6 +16,7 @@ import (
 
 	"forgejo.org/models"
 	actions_model "forgejo.org/models/actions"
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	"forgejo.org/models/organization"
 	quota_model "forgejo.org/models/quota"
@@ -1050,6 +1051,8 @@ func SettingsPost(ctx *context.Context) {
 				ctx.RenderWithErr(ctx.Tr("repo.settings.transfer_in_progress"), tplSettingsOptions, nil)
 			} else if errors.Is(err, actions_model.ErrEnvironmentTwin) {
 				ctx.RenderWithErr(ctx.Tr("actions.environments.error.transfer_twin"), tplSettingsOptions, nil)
+			} else if errors.Is(err, audit_model.ErrNotOwnAct) {
+				ctx.RenderWithErr(ctx.Tr("settings.credential_not_own_act"), tplSettingsOptions, nil)
 			} else {
 				ctx.ServerError("TransferOwnership", err)
 			}

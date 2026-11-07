@@ -10,6 +10,7 @@ import (
 
 	"forgejo.org/models"
 	activities_model "forgejo.org/models/activities"
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	"forgejo.org/models/organization"
 	access_model "forgejo.org/models/perm/access"
@@ -42,7 +43,7 @@ func TestTransferOwnership(t *testing.T) {
 	doer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
 	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 3})
 	repo.Owner = unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: repo.OwnerID})
-	require.NoError(t, TransferOwnership(db.DefaultContext, doer, doer, repo, nil))
+	require.NoError(t, TransferOwnership(audit_model.WithSystem(db.DefaultContext, "test"), doer, doer, repo, nil))
 
 	transferredRepo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 3})
 	assert.EqualValues(t, 2, transferredRepo.OwnerID)
@@ -78,7 +79,7 @@ func TestStartRepositoryTransferSetPermission(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, hasAccess)
 
-	require.NoError(t, StartRepositoryTransfer(db.DefaultContext, doer, recipient, repo, nil))
+	require.NoError(t, StartRepositoryTransfer(audit_model.WithSystem(db.DefaultContext, "test"), doer, recipient, repo, nil))
 
 	hasAccess, err = access_model.HasAccess(db.DefaultContext, recipient.ID, repo)
 	require.NoError(t, err)
@@ -127,4 +128,26 @@ func TestRepositoryTransfer(t *testing.T) {
 
 	// Cancel transfer
 	require.NoError(t, CancelRepositoryTransfer(db.DefaultContext, repo, false))
+}
+
+// The new owner gets the repository's settings, environments and secrets, so a transfer, started or accepted, is
+// only a person's own act.
+func TestTransferOwnAct(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	admin := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
+	recipient := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5})
+	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
+	for name, actor := range map[string]*audit_model.Actor{
+		"grant":       {Type: audit_model.ActorUser, ID: 1, Credential: audit_model.Credential{Type: audit_model.CredentialOAuth2Grant}},
+		"integration": {Type: audit_model.ActorUser, ID: 1, Credential: audit_model.Credential{Type: audit_model.CredentialAuthorizedIntegration}},
+	} {
+		ctx := audit_model.WithActor(db.DefaultContext, actor)
+		require.ErrorIs(t, StartRepositoryTransfer(ctx, admin, recipient, repo, nil), audit_model.ErrNotOwnAct, name)
+		require.ErrorIs(t, TransferOwnership(ctx, admin, recipient, repo, nil), audit_model.ErrNotOwnAct, name)
+		require.ErrorIs(t, MoveTrashedRepository(ctx, admin, recipient, repo, ""), audit_model.ErrNotOwnAct, name) // checked first
+	}
+	assert.Equal(t, int64(2), unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1}).OwnerID)
+	own := audit_model.WithActor(db.DefaultContext, &audit_model.Actor{Type: audit_model.ActorUser, ID: 1, Credential: audit_model.Credential{Type: audit_model.CredentialSession}})
+	require.NoError(t, StartRepositoryTransfer(own, admin, recipient, repo, nil))
+	assert.Equal(t, recipient.ID, unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1}).OwnerID)
 }

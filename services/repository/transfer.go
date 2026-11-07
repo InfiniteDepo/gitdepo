@@ -50,8 +50,13 @@ func checkNotArchivedOrg(ctx context.Context, repo *repo_model.Repository, newOw
 	return nil
 }
 
-// TransferOwnership transfers all corresponding setting from old user to new one.
+// TransferOwnership transfers all corresponding setting from old user to new one. The new owner gets the
+// repository's settings, environments and secrets, so it is only a person's own act (an admin's transfer, or the
+// recipient accepting one).
 func TransferOwnership(ctx context.Context, doer, newOwner *user_model.User, repo *repo_model.Repository, teams []*organization.Team) error {
+	if err := audit_model.CheckOwnAct(ctx); err != nil {
+		return err
+	}
 	if err := checkNotArchivedOrg(ctx, repo, newOwner); err != nil {
 		return err
 	}
@@ -510,7 +515,11 @@ func ChangeRepositoryName(ctx context.Context, doer *user_model.User, repo *repo
 
 // StartRepositoryTransfer transfer a repo from one owner to a new one.
 // it make repository into pending transfer state, if doer can not create repo for new owner.
+// Like TransferOwnership, starting one is only a person's own act.
 func StartRepositoryTransfer(ctx context.Context, doer, newOwner *user_model.User, repo *repo_model.Repository, teams []*organization.Team) error {
+	if err := audit_model.CheckOwnAct(ctx); err != nil {
+		return err
+	}
 	if err := checkNotArchivedOrg(ctx, repo, newOwner); err != nil {
 		return err
 	}

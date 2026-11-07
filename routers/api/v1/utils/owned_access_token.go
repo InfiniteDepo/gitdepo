@@ -21,6 +21,7 @@ import (
 	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/timeutil"
+	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
 	auth_service "forgejo.org/services/auth"
 	"forgejo.org/services/authz"
@@ -236,6 +237,9 @@ func CreateOwnedAccessToken(ctx *context.APIContext, owner OwnedTokenOwner) {
 		if isOwnedTokenValidationError(err) {
 			ctx.Error(http.StatusUnprocessableEntity, "", err.Error())
 			return
+		} else if errors.Is(err, util.ErrPermissionDenied) {
+			ctx.Error(http.StatusForbidden, "", err.Error())
+			return
 		}
 		ctx.InternalServerError(err)
 		return
@@ -357,6 +361,8 @@ func writeRotated(ctx *context.APIContext, t *auth_model.AccessToken, err error)
 			ctx.NotFound()
 		case isOwnedTokenValidationError(err):
 			ctx.Error(http.StatusUnprocessableEntity, "", err.Error())
+		case errors.Is(err, util.ErrPermissionDenied):
+			ctx.Error(http.StatusForbidden, "", err.Error())
 		default:
 			ctx.InternalServerError(err)
 		}

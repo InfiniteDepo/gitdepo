@@ -19,6 +19,7 @@ import (
 	"forgejo.org/modules/log"
 	repo_module "forgejo.org/modules/repository"
 	api "forgejo.org/modules/structs"
+	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
 	"forgejo.org/services/context"
 	"forgejo.org/services/convert"
@@ -121,7 +122,7 @@ func Transfer(ctx *context.APIContext) {
 			ctx.Error(http.StatusRequestEntityTooLarge, "StartRepositoryTransfer", e.MessageFor(ctx.Doer().ID, e.OwnerID))
 			return
 		}
-		if errors.Is(err, user_model.ErrBlockedByUser) || organization.IsErrOrgArchived(err) || errors.As(err, &repo_module.ErrPersonalRepoPolicy{}) {
+		if errors.Is(err, user_model.ErrBlockedByUser) || organization.IsErrOrgArchived(err) || errors.As(err, &repo_module.ErrPersonalRepoPolicy{}) || errors.Is(err, util.ErrPermissionDenied) {
 			ctx.Error(http.StatusForbidden, "StartRepositoryTransfer", err)
 			return
 		}
@@ -186,7 +187,7 @@ func AcceptTransfer(ctx *context.APIContext) {
 		ctx.Error(http.StatusRequestEntityTooLarge, "acceptOrRejectRepoTransfer", e.MessageFor(ctx.Doer().ID, e.OwnerID))
 		return
 	}
-	if organization.IsErrOrgArchived(err) || errors.As(err, &repo_module.ErrPersonalRepoPolicy{}) {
+	if organization.IsErrOrgArchived(err) || errors.As(err, &repo_module.ErrPersonalRepoPolicy{}) || errors.Is(err, util.ErrPermissionDenied) {
 		ctx.Error(http.StatusForbidden, "acceptOrRejectRepoTransfer", err)
 		return
 	}

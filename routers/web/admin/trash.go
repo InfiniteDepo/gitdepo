@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	actions_model "forgejo.org/models/actions"
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
 	user_model "forgejo.org/models/user"
@@ -81,6 +82,8 @@ func trashDone(ctx *context.Context, err error, success template.HTML) {
 		ctx.Flash.Error(ctx.Tr("admin.trash.with_org"))
 	case errors.Is(err, trash_service.ErrOrgHasLiveRepos):
 		ctx.Flash.Error(ctx.Tr("admin.trash.org_live_repos"))
+	case errors.Is(err, audit_model.ErrNotOwnAct):
+		ctx.Flash.Error(ctx.Tr("settings.credential_not_own_act"))
 	case trash_service.IsBadTarget(err):
 		ctx.Flash.Error(ctx.Tr("admin.trash.bad_target", err.Error()))
 	case errors.Is(err, actions_model.ErrEnvironmentTwin):

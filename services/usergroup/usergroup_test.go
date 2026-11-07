@@ -258,6 +258,16 @@ func TestGroupWritesThatAddTeamMembersAreOwnActs(t *testing.T) {
 	require.ErrorIs(t, UpdateGroup(grant, group), audit_model.ErrNotOwnAct)
 	assert.False(t, unittest.AssertExistsAndLoadBean(t, &org_model.UserGroup{ID: group.ID}).GrantsOrgAdmin)
 	group.GrantsOrgAdmin = false
+	// so are the site admin and auditor roles
+	require.ErrorIs(t, CreateGroup(grant, &org_model.UserGroup{Name: "site-admins", GrantsSiteAdmin: true}), audit_model.ErrNotOwnAct)
+	require.ErrorIs(t, CreateGroup(grant, &org_model.UserGroup{Name: "auditors", GrantsAuditor: true}), audit_model.ErrNotOwnAct)
+	group.GrantsSiteAdmin = true
+	require.ErrorIs(t, UpdateGroup(grant, group), audit_model.ErrNotOwnAct)
+	group.GrantsSiteAdmin, group.GrantsAuditor = false, true
+	require.ErrorIs(t, UpdateGroup(grant, group), audit_model.ErrNotOwnAct)
+	group.GrantsAuditor = false
+	stored := unittest.AssertExistsAndLoadBean(t, &org_model.UserGroup{ID: group.ID})
+	assert.False(t, stored.GrantsSiteAdmin || stored.GrantsAuditor)
 
 	// a new name retargets the login sources that map to it
 	group.Name = "staff"

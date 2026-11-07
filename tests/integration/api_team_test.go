@@ -599,5 +599,5 @@ func TestAPIAddMemberGeneratesInvite(t *testing.T) {
 	resp := MakeRequest(t, req, http.StatusConflict)
 	var respBody map[string]any
 	DecodeJSON(t, resp, &respBody)
-	assert.Contains(t, respBody["message"], "team invite already exists")
+	assert.Contains(t, respBody["message"], "delete it to invite them again")
 }

@@ -32,7 +32,7 @@ func TestAdminAddOrSetPrimaryEmailAddress(t *testing.T) {
 	assert.NotEqual(t, "new-primary@example.com", primary.Email)
 	assert.Equal(t, user.Email, primary.Email)
 
-	require.NoError(t, AdminAddOrSetPrimaryEmailAddress(db.DefaultContext, user, "new-primary@example.com"))
+	require.NoError(t, AdminAddOrSetPrimaryEmailAddress(ownCtx(), user, "new-primary@example.com"))
 
 	primary, err = user_model.GetPrimaryEmailAddressOfUser(db.DefaultContext, user.ID)
 	require.NoError(t, err)
@@ -48,14 +48,14 @@ func TestAdminAddOrSetPrimaryEmailAddress(t *testing.T) {
 		setting.Service.EmailDomainAllowList = []glob.Glob{}
 	}()
 
-	require.NoError(t, AdminAddOrSetPrimaryEmailAddress(db.DefaultContext, user, "new-primary2@example2.com"))
+	require.NoError(t, AdminAddOrSetPrimaryEmailAddress(ownCtx(), user, "new-primary2@example2.com"))
 
 	primary, err = user_model.GetPrimaryEmailAddressOfUser(db.DefaultContext, user.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "new-primary2@example2.com", primary.Email)
 	assert.Equal(t, user.Email, primary.Email)
 
-	require.NoError(t, AdminAddOrSetPrimaryEmailAddress(db.DefaultContext, user, "user27@example.com"))
+	require.NoError(t, AdminAddOrSetPrimaryEmailAddress(ownCtx(), user, "user27@example.com"))
 
 	primary, err = user_model.GetPrimaryEmailAddressOfUser(db.DefaultContext, user.ID)
 	require.NoError(t, err)
@@ -116,9 +116,9 @@ func TestAddEmailAddresses(t *testing.T) {
 
 	emails := []string{"user1234@example.com", "user5678@example.com"}
 
-	require.NoError(t, AddEmailAddresses(db.DefaultContext, user, emails))
+	require.NoError(t, AddEmailAddresses(ownCtx(), user, emails))
 
-	err := AddEmailAddresses(db.DefaultContext, user, emails)
+	err := AddEmailAddresses(ownCtx(), user, emails)
 	require.Error(t, err)
 	assert.True(t, user_model.IsErrEmailAlreadyUsed(err))
 }
@@ -132,7 +132,7 @@ func TestReplaceInactivePrimaryEmail(t *testing.T) {
 			Email: "user9999999@example.com",
 			UID:   9999999,
 		}
-		err := ReplaceInactivePrimaryEmail(db.DefaultContext, "user10@example.com", email)
+		err := ReplaceInactivePrimaryEmail(ownCtx(), "user10@example.com", email)
 		require.Error(t, err)
 		assert.True(t, user_model.IsErrUserNotExist(err))
 	})
@@ -144,7 +144,7 @@ func TestReplaceInactivePrimaryEmail(t *testing.T) {
 			Email: "user201@example.com",
 			UID:   10,
 		}
-		err := ReplaceInactivePrimaryEmail(db.DefaultContext, "user10@example.com", email)
+		err := ReplaceInactivePrimaryEmail(ownCtx(), "user10@example.com", email)
 		require.NoError(t, err)
 
 		user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 10})

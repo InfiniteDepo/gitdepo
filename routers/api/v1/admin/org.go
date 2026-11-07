@@ -5,12 +5,14 @@
 package admin
 
 import (
+	"errors"
 	"net/http"
 
 	"forgejo.org/models/db"
 	"forgejo.org/models/organization"
 	user_model "forgejo.org/models/user"
 	api "forgejo.org/modules/structs"
+	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
 	"forgejo.org/routers/api/v1/utils"
 	"forgejo.org/services/context"
@@ -69,6 +71,8 @@ func CreateOrg(ctx *context.APIContext) {
 			db.IsErrNameCharsNotAllowed(err) ||
 			db.IsErrNamePatternNotAllowed(err) {
 			ctx.Error(http.StatusUnprocessableEntity, "", err)
+		} else if errors.Is(err, util.ErrPermissionDenied) { // not an own act, or the owner may not create organizations
+			ctx.Error(http.StatusForbidden, "", err)
 		} else {
 			ctx.Error(http.StatusInternalServerError, "CreateOrganization", err)
 		}

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/optional"
@@ -377,6 +378,12 @@ func SearchEmails(ctx context.Context, opts *SearchEmailOptions) ([]*SearchEmail
 // ActivateUserEmail will change the activated state of an email address,
 // either primary or secondary (all in the email_address table)
 func ActivateUserEmail(ctx context.Context, userID int64, email string, activate bool) (err error) {
+	// an activated address is where a mailed password reset goes (services/user checkEmailIsOwnAct)
+	if activate {
+		if err := audit_model.CheckOwnAct(ctx); err != nil {
+			return err
+		}
+	}
 	ctx, committer, err := db.TxContext(ctx)
 	if err != nil {
 		return err

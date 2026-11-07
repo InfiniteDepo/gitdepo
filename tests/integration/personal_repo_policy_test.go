@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
@@ -336,7 +337,7 @@ func TestPersonalRepoPolicyTrashRestore(t *testing.T) {
 	require.NotZero(t, repo.TrashedUnix)
 
 	defer setPersonalRepoMode(t, setting.PersonalReposDisabled)()
-	err = repo_service.MoveTrashedRepository(db.DefaultContext, user2, user4, repo, "")
+	err = repo_service.MoveTrashedRepository(audit_model.WithSystem(db.DefaultContext, "test"), user2, user4, repo, "")
 	require.ErrorAs(t, err, &repo_module.ErrPersonalRepoPolicy{})
 	// the same owner: allowed (the call above changed repo in memory, so load it again)
 	repo, err = repo_model.GetRepositoryByIDIncludingTrashed(db.DefaultContext, id)

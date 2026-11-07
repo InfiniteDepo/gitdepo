@@ -279,6 +279,15 @@ func TestOwnedAccessTokenAPI(t *testing.T) {
 		assert.Equal(t, http.StatusOK, use(t, "/api/v1/repos/org3/repo3", selfRotated.Token))
 		MakeRequest(t, NewRequest(t, "POST", "/api/v1/tokens/self/rotate").AddTokenAuth(self.Token), http.StatusUnauthorized)
 
+		// an organization token limited to some repositories rotates itself too: its identity has no account to widen,
+		// so it is not a restricted credential (audit Credential.Restricted)
+		selected := create(t, "/api/v1/orgs/org3/tokens", owner, api.CreateOwnedAccessTokenOption{Name: name(), Scopes: []string{"read:repository"}, Permission: "read", Repositories: []string{"repo3"}, SelfRotate: true}, http.StatusCreated)
+		resp = MakeRequest(t, NewRequest(t, "POST", "/api/v1/tokens/self/rotate").AddTokenAuth(selected.Token), http.StatusOK)
+		var selectedRotated api.AccessToken
+		DecodeJSON(t, resp, &selectedRotated)
+		assert.Equal(t, selected.ID, selectedRotated.ID)
+		assert.Equal(t, http.StatusOK, use(t, "/api/v1/repos/org3/repo3", selectedRotated.Token))
+
 		// a revoked token can't be rotated back
 		MakeRequest(t, NewRequest(t, "DELETE", fmt.Sprintf("%s/%d", path, self.ID)).AddTokenAuth(owner), http.StatusNoContent)
 		rotate(t, fmt.Sprintf("%s/%d/rotate", path, self.ID), owner, http.StatusNotFound)
