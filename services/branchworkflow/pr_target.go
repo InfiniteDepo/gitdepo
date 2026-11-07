@@ -65,6 +65,11 @@ func ResolveTarget(ctx context.Context, baseRepo *repo_model.Repository, head st
 	if err != nil {
 		return Target{}, err
 	}
+	return ResolveTargetWith(ctx, baseRepo, e, head)
+}
+
+// ResolveTargetWith is ResolveTarget with the model of baseRepo already read, for callers that resolve several heads.
+func ResolveTargetWith(ctx context.Context, baseRepo *repo_model.Repository, e EffectiveModel, head string) (Target, error) {
 	dev := e.DevelopmentBranch(baseRepo)
 	t := Target{Rule: TargetRuleDefault}
 	if bt, ok := MatchType(e.Model, head); ok {
