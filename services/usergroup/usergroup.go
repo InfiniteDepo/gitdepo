@@ -250,8 +250,11 @@ func UnlinkTeam(ctx context.Context, group *org_model.UserGroup, team *org_model
 // here, not in services/org, which services/user imports. Making someone else the owner of a new organization is
 // only a person's own act.
 func CreateOrganization(ctx context.Context, org *org_model.Organization, owner *user_model.User) error {
-	if err := audit_model.CheckOwnActFor(ctx, owner.ID); err != nil {
-		return err
+	// a user creating their own organization (even through a grant) takes no privilege from anyone
+	if a := audit_model.ActorFromContext(ctx); a == nil || a.Type != audit_model.ActorUser || a.ID != owner.ID || a.SudoByID != 0 {
+		if err := audit_model.CheckOwnAct(ctx); err != nil {
+			return err
+		}
 	}
 	return db.WithTx(ctx, func(ctx context.Context) error {
 		if err := org_model.CreateOrganization(ctx, org, owner); err != nil {

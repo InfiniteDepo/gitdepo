@@ -144,6 +144,8 @@ func CreateUser(ctx *context.APIContext) {
 			validation.IsErrEmailInvalid(err) ||
 			db.IsErrNamePatternNotAllowed(err) {
 			ctx.Error(http.StatusUnprocessableEntity, "", err)
+		} else if errors.Is(err, util.ErrPermissionDenied) {
+			ctx.Error(http.StatusForbidden, "", err)
 		} else {
 			ctx.Error(http.StatusInternalServerError, "CreateUser", err)
 		}

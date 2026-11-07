@@ -203,4 +203,63 @@ func TestPrivilegeGrantsAreOwnActs(t *testing.T) {
 		assert.False(t, repo.IsTrashed())
 		assert.EqualValues(t, 5, repo.OwnerID)
 	})
+
+	t.Run("sudo as the user is the admin's act", func(t *testing.T) {
+		// the sudoer is the real actor, so this is no act of the user's own
+		defer test.MockVariableValue(&setting.Service.RegisterEmailConfirm, false)() // an added address is activated
+		addEmail := func() *RequestWrapper {
+			return NewRequestWithJSON(t, "POST", "/api/v1/user/emails", &api.CreateEmailOption{Emails: []string{"sudo-added@example.com"}})
+		}
+		resp := MakeRequest(t, addEmail().AddTokenAuth(adminToken).SetHeader("Sudo", "user2"), http.StatusForbidden)
+		assert.Contains(t, resp.Body.String(), "credential of their own")
+		unittest.AssertNotExistsBean(t, &user_model.EmailAddress{LowerEmail: "sudo-added@example.com"})
+		MakeRequest(t, addEmail().AddTokenAuth(getUserToken(t, "user2", auth_model.AccessTokenScopeWriteUser)), http.StatusCreated)
+		unittest.AssertExistsAndLoadBean(t, &user_model.EmailAddress{UID: 2, LowerEmail: "sudo-added@example.com", IsActivated: true})
+
+		createToken := func() *RequestWrapper {
+			return NewRequestWithJSON(t, "POST", "/api/v1/users/user2/tokens", &api.CreateAccessTokenOption{Name: "sudo-minted", Scopes: []string{"read:user"}})
+		}
+		resp = MakeRequest(t, createToken().AddBasicAuth("user1").SetHeader("Sudo", "user2"), http.StatusForbidden)
+		assert.Contains(t, resp.Body.String(), "credential of their own")
+		unittest.AssertNotExistsBean(t, &auth_model.AccessToken{UID: 2, Name: "sudo-minted"})
+		MakeRequest(t, createToken().AddBasicAuth("user2"), http.StatusCreated)
+	})
+
+	t.Run("a delegated credential for its own user", func(t *testing.T) {
+		// a grant or an integration must not give its user a credential that passes every own-act check
+		delegated := map[string]func(*RequestWrapper) *RequestWrapper{
+			"OAuth2 grant":           credentials["OAuth2 grant"],
+			"authorized integration": credentials["authorized integration"],
+		}
+		before := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
+		for name, auth := range delegated {
+			for _, req := range []*RequestWrapper{
+				NewRequestWithJSON(t, "POST", "/api/v1/admin/users/user1/tokens", &api.CreateAccessTokenOption{Name: "self-minted", Scopes: []string{"read:user"}}),
+				NewRequestWithJSON(t, "PATCH", "/api/v1/admin/users/user1", &api.EditUserOption{Password: "an-own-act-is-needed-1A!"}),
+				NewRequestWithJSON(t, "PATCH", "/api/v1/admin/users/user1", &api.EditUserOption{Email: new("self-taken@example.com")}),
+			} {
+				resp := MakeRequest(t, auth(req), http.StatusForbidden)
+				assert.Contains(t, resp.Body.String(), "credential of their own", name)
+			}
+		}
+		resp := MakeRequest(t, NewRequestWithJSON(t, "POST", "/api/v1/user/emails", &api.CreateEmailOption{Emails: []string{"self-added@example.com"}}).AddTokenAuth(grant), http.StatusForbidden)
+		assert.Contains(t, resp.Body.String(), "credential of their own")
+
+		unittest.AssertNotExistsBean(t, &auth_model.AccessToken{UID: 1, Name: "self-minted"})
+		after := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
+		assert.Equal(t, before.Passwd, after.Passwd)
+		assert.Equal(t, before.Email, after.Email)
+		unittest.AssertNotExistsBean(t, &user_model.EmailAddress{LowerEmail: "self-taken@example.com"})
+		unittest.AssertNotExistsBean(t, &user_model.EmailAddress{LowerEmail: "self-added@example.com"})
+	})
+
+	t.Run("another user's login source and login name", func(t *testing.T) {
+		edit := func() *RequestWrapper {
+			return NewRequestWithJSON(t, "PATCH", "/api/v1/admin/users/user5", &api.EditUserOption{SourceID: new(int64(0)), LoginName: new("user5-elsewhere")})
+		}
+		refused(t, edit)
+		assert.Empty(t, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5}).LoginName)
+		MakeRequest(t, own(edit()), http.StatusOK)
+		assert.Equal(t, "user5-elsewhere", unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5}).LoginName)
+	})
 }

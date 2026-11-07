@@ -283,11 +283,20 @@ func TestUpdateUserOwnAct(t *testing.T) {
 	require.ErrorIs(t, CheckEditIsOwnAct(grant, u, &UpdateAuthOptions{}, &UpdateOptions{IsAdmin: optional.Some(true)}, ""), audit_model.ErrNotOwnAct)
 	require.ErrorIs(t, CheckEditIsOwnAct(grant, u, &UpdateAuthOptions{}, &UpdateOptions{}, "new-28@example.com"), audit_model.ErrNotOwnAct)
 	require.ErrorIs(t, AdminAddOrSetPrimaryEmailAddress(grant, u, "new-28@example.com"), audit_model.ErrNotOwnAct)
+	require.ErrorIs(t, UpdateAuth(grant, u, &UpdateAuthOptions{LoginName: optional.Some("elsewhere")}), audit_model.ErrNotOwnAct)
+	require.ErrorIs(t, CheckEditIsOwnAct(grant, u, &UpdateAuthOptions{LoginSource: optional.Some(int64(1))}, &UpdateOptions{}, ""), audit_model.ErrNotOwnAct)
+	require.NoError(t, UpdateAuth(grant, u, &UpdateAuthOptions{LoginName: optional.Some(u.LoginName)}), "an unchanged login name")
 	require.NoError(t, CheckEditIsOwnAct(grant, u, &UpdateAuthOptions{}, &UpdateOptions{}, u.Email), "an unchanged email")
 	require.NoError(t, UpdateUser(grant, u, &UpdateOptions{FullName: optional.Some("other fields")}))
 
 	self := audit_model.WithActor(db.DefaultContext, &audit_model.Actor{Type: audit_model.ActorUser, ID: 28, Name: u.Name, Credential: audit_model.Credential{Type: audit_model.CredentialSession}})
 	require.NoError(t, UpdateAuth(self, u, &UpdateAuthOptions{Password: optional.Some("%$DRZUVB576tfzgu")}))
+
+	// an activated address added under sudo is the sudoer's act, not the user's own
+	defer test.MockVariableValue(&setting.Service.RegisterEmailConfirm, false)()
+	sudo := audit_model.WithActor(db.DefaultContext, &audit_model.Actor{Type: audit_model.ActorUser, ID: 28, SudoByID: 1, Credential: audit_model.Credential{Type: audit_model.CredentialAccessToken}})
+	require.ErrorIs(t, AddEmailAddresses(sudo, u, []string{"sudo-28@example.com"}), audit_model.ErrNotOwnAct)
+	require.NoError(t, AddEmailAddresses(self, u, []string{"sudo-28@example.com"}))
 	require.NoError(t, UpdateUserFromSource(audit_model.WithLoginSource(grant, 1, "ldap"), u, &UpdateOptions{IsAdmin: optional.Some(true)}, "ldap"))
 	assert.True(t, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 28}).IsAdmin)
 }

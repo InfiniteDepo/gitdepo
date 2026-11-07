@@ -54,13 +54,27 @@ type UpdateOptions struct {
 // CheckEditIsOwnAct refuses, before anything is written, what UpdateAuth and UpdateUser would refuse because it is
 // not a person's own act, so a handler that calls both changes nothing on a refusal.
 func CheckEditIsOwnAct(ctx context.Context, u *user_model.User, authOpts *UpdateAuthOptions, opts *UpdateOptions, email string) error {
-	if err := checkPasswordIsOwnAct(ctx, u, authOpts.Password); err != nil {
+	if err := checkPasswordIsOwnAct(ctx, authOpts.Password); err != nil {
 		return err
 	}
 	if err := checkEmailIsOwnAct(ctx, u, email); err != nil {
 		return err
 	}
+	if err := checkLoginIsOwnAct(ctx, u, authOpts); err != nil {
+		return err
+	}
 	return checkAdminFlagIsOwnAct(ctx, u, opts.IsAdmin)
+}
+
+// checkLoginIsOwnAct: the login source and login name decide who signs in as u through LDAP, SMTP or PAM, so changing
+// them is only a person's own act (a login source sync acts as the source).
+func checkLoginIsOwnAct(ctx context.Context, u *user_model.User, opts *UpdateAuthOptions) error {
+	hasSource, source := opts.LoginSource.Get()
+	hasName, name := opts.LoginName.Get()
+	if (hasSource && source != u.LoginSource) || (hasName && name != u.LoginName) {
+		return audit_model.CheckOwnAct(ctx)
+	}
+	return nil
 }
 
 // checkAdminFlagIsOwnAct: making someone a site admin is only a person's own act (a login source syncing the flag
@@ -72,11 +86,11 @@ func checkAdminFlagIsOwnAct(ctx context.Context, u *user_model.User, isAdmin opt
 	return nil
 }
 
-// checkPasswordIsOwnAct: a password is a credential of the user, so setting another user's is only a person's own
-// act, as creating a token for them (auth_model.NewAccessToken).
-func checkPasswordIsOwnAct(ctx context.Context, u *user_model.User, password optional.Option[string]) error {
+// checkPasswordIsOwnAct: a password is a credential, so setting one is only a person's own act, also for themselves
+// (as creating a token, auth_model.NewAccessToken).
+func checkPasswordIsOwnAct(ctx context.Context, password optional.Option[string]) error {
 	if password.Has() {
-		return audit_model.CheckOwnActFor(ctx, u.ID)
+		return audit_model.CheckOwnAct(ctx)
 	}
 	return nil
 }
@@ -246,7 +260,10 @@ type UpdateAuthOptions struct {
 }
 
 func UpdateAuth(ctx context.Context, u *user_model.User, opts *UpdateAuthOptions) error {
-	if err := checkPasswordIsOwnAct(ctx, u, opts.Password); err != nil {
+	if err := checkPasswordIsOwnAct(ctx, opts.Password); err != nil {
+		return err
+	}
+	if err := checkLoginIsOwnAct(ctx, u, opts); err != nil {
 		return err
 	}
 	if opts.ProhibitLogin.ValueOrDefault(false) && user_model.IsLastUsableAdmin(ctx, u) {

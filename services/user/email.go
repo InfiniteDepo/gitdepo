@@ -19,13 +19,13 @@ import (
 	"forgejo.org/services/mailer"
 )
 
-// checkEmailIsOwnAct: an activated address of another user is where a mailed password reset goes, so setting it
-// is only a person's own act, as setting their password (checkPasswordIsOwnAct).
+// checkEmailIsOwnAct: an activated address is where a mailed password reset goes, so setting one is only a person's
+// own act, also for themselves (as setting a password, checkPasswordIsOwnAct).
 func checkEmailIsOwnAct(ctx context.Context, u *user_model.User, email string) error {
 	if email == "" || strings.EqualFold(u.Email, email) {
 		return nil
 	}
-	return audit_model.CheckOwnActFor(ctx, u.ID)
+	return audit_model.CheckOwnAct(ctx)
 }
 
 // AdminAddOrSetPrimaryEmailAddress is used by admins to add or set a user's primary email address
@@ -150,6 +150,10 @@ func AddEmailAddresses(ctx context.Context, u *user_model.User, emails []string)
 }
 
 func addEmailAddresses(ctx context.Context, u *user_model.User, emails []string) error {
+	// an added address, once confirmed by whoever reads it, can take the account by a password reset
+	if err := audit_model.CheckOwnAct(ctx); err != nil {
+		return err
+	}
 	for _, emailStr := range emails {
 		if err := validation.ValidateEmail(emailStr); err != nil {
 			return err

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"testing"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
@@ -26,7 +27,7 @@ func TestReverseProxyAuth(t *testing.T) {
 	require.EqualValues(t, 0, user_model.CountUsers(db.DefaultContext, nil))
 
 	t.Run("First user should be admin", func(t *testing.T) {
-		req, err := http.NewRequest("GET", "/", nil)
+		req, err := http.NewRequestWithContext(audit_model.WithSystem(t.Context(), "test"), "GET", "/", nil) // a server request always has an audit actor
 		require.NoError(t, err)
 
 		req.Header.Add(setting.ReverseProxyAuthUser, "Edgar")
@@ -46,7 +47,7 @@ func TestReverseProxyAuth(t *testing.T) {
 	})
 
 	t.Run("Second user shouldn't be admin", func(t *testing.T) {
-		req, err := http.NewRequest("GET", "/", nil)
+		req, err := http.NewRequestWithContext(audit_model.WithSystem(t.Context(), "test"), "GET", "/", nil) // a server request always has an audit actor
 		require.NoError(t, err)
 
 		req.Header.Add(setting.ReverseProxyAuthUser, " Gusted ")

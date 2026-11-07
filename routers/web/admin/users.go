@@ -17,6 +17,7 @@ import (
 	"unicode"
 
 	"forgejo.org/models"
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	org_model "forgejo.org/models/organization"
@@ -223,6 +224,8 @@ func NewUserPost(ctx *context.Context) {
 		case db.IsErrNamePatternNotAllowed(err):
 			ctx.Data["Err_UserName"] = true
 			ctx.RenderWithErr(ctx.Tr("user.form.name_pattern_not_allowed", err.(db.ErrNamePatternNotAllowed).Pattern), tplUserNew, &form)
+		case errors.Is(err, audit_model.ErrNotOwnAct):
+			ctx.RenderWithErr(ctx.Tr("settings.credential_not_own_act"), tplUserNew, &form)
 		default:
 			ctx.ServerError("CreateUser", err)
 		}
@@ -428,9 +431,27 @@ func EditUserPost(ctx *context.Context) {
 			sizeLimit = mib << 20
 		}
 	}
+	authOpts := &user_service.UpdateAuthOptions{
+		Password:  optional.FromNonDefault(form.Password),
+		LoginName: optional.Some(form.LoginName),
+	}
+
+	// skip self Prohibit Login
+	if ctx.Doer.ID == u.ID {
+		authOpts.ProhibitLogin = optional.Some(false)
+	} else {
+		authOpts.ProhibitLogin = optional.Some(form.ProhibitLogin)
+	}
+
+	fields := strings.Split(form.LoginType, "-")
+	if len(fields) == 2 {
+		authSource, _ := strconv.ParseInt(fields[1], 10, 64)
+
+		authOpts.LoginSource = optional.Some(authSource)
+	}
+
 	// refused before anything below is written
-	if err := user_service.CheckEditIsOwnAct(ctx, u, &user_service.UpdateAuthOptions{Password: optional.FromNonDefault(form.Password)},
-		&user_service.UpdateOptions{IsAdmin: optional.Some(form.Admin)}, form.Email); err != nil {
+	if err := user_service.CheckEditIsOwnAct(ctx, u, authOpts, &user_service.UpdateOptions{IsAdmin: optional.Some(form.Admin)}, form.Email); err != nil {
 		ctx.RenderWithErr(ctx.Tr("settings.credential_not_own_act"), tplUserEdit, &form)
 		return
 	}
@@ -461,25 +482,6 @@ func EditUserPost(ctx *context.Context) {
 			}
 			return
 		}
-	}
-
-	authOpts := &user_service.UpdateAuthOptions{
-		Password:  optional.FromNonDefault(form.Password),
-		LoginName: optional.Some(form.LoginName),
-	}
-
-	// skip self Prohibit Login
-	if ctx.Doer.ID == u.ID {
-		authOpts.ProhibitLogin = optional.Some(false)
-	} else {
-		authOpts.ProhibitLogin = optional.Some(form.ProhibitLogin)
-	}
-
-	fields := strings.Split(form.LoginType, "-")
-	if len(fields) == 2 {
-		authSource, _ := strconv.ParseInt(fields[1], 10, 64)
-
-		authOpts.LoginSource = optional.Some(authSource)
 	}
 
 	if err := user_service.UpdateAuth(ctx, u, authOpts); err != nil {

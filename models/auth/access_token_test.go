@@ -46,7 +46,11 @@ func TestNewAccessTokenOwnAct(t *testing.T) {
 	}
 	unittest.AssertNotExistsBean(t, &auth_model.AccessToken{UID: 3, Name: "minted grant"})
 
-	require.NoError(t, auth_model.NewAccessToken(actor(3, audit_model.CredentialOAuth2Grant, 0), &auth_model.AccessToken{UID: 3, Name: "for themselves"}, nil))
+	// a delegated credential can't mint one for its own user either
+	require.ErrorIs(t, auth_model.NewAccessToken(actor(3, audit_model.CredentialOAuth2Grant, 0), &auth_model.AccessToken{UID: 3, Name: "for themselves"}, nil), audit_model.ErrNotOwnAct)
+	_, err := auth_model.RegenerateAccessTokenByID(actor(2, audit_model.CredentialOAuth2Grant, 0), 1, 2)
+	require.ErrorIs(t, err, audit_model.ErrNotOwnAct)
+	require.NoError(t, auth_model.NewAccessToken(actor(3, audit_model.CredentialAccessToken, 0), &auth_model.AccessToken{UID: 3, Name: "for themselves"}, nil))
 	require.NoError(t, auth_model.NewAccessToken(actor(1, audit_model.CredentialSession, 0), &auth_model.AccessToken{UID: 3, Name: "admin's own act"}, nil))
 	require.NoError(t, auth_model.NewAccessToken(audit_model.WithCLI(db.DefaultContext), &auth_model.AccessToken{UID: 3, Name: "cli"}, nil))
 }

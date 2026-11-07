@@ -153,19 +153,26 @@ func LoadRepoCommit(t *testing.T, ctx gocontext.Context) {
 }
 
 // LoadUser load a user into a test context, with the audit actor a request of theirs would have (a session on the
-// web, an access token on the API)
+// web, an access token on the API). An actor set on ctx before (e.g. an OAuth2 grant or sudo, with
+// ctx.AppendContextValue(audit_model.ActorContextKey, actor)) is kept: Base.Value returns the first match, so a
+// second actor would be ignored anyway.
 func LoadUser(t *testing.T, ctx gocontext.Context, userID int64) {
 	doer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: userID})
 	actor := func(credential string) *audit_model.Actor {
 		return &audit_model.Actor{Type: audit_model.ActorUser, ID: doer.ID, Name: doer.Name, Credential: audit_model.Credential{Type: credential}}
 	}
+	hasActor := audit_model.ActorFromContext(ctx) != nil
 	switch ctx := ctx.(type) {
 	case *context.Context:
 		ctx.Doer = doer
-		ctx.AppendContextValue(audit_model.ActorContextKey, actor(audit_model.CredentialSession))
+		if !hasActor {
+			ctx.AppendContextValue(audit_model.ActorContextKey, actor(audit_model.CredentialSession))
+		}
 	case *context.APIContext:
 		ctx.SetDoer(doer)
-		ctx.AppendContextValue(audit_model.ActorContextKey, actor(audit_model.CredentialAccessToken))
+		if !hasActor {
+			ctx.AppendContextValue(audit_model.ActorContextKey, actor(audit_model.CredentialAccessToken))
+		}
 	default:
 		assert.FailNow(t, "context is not *context.Context or *context.APIContext")
 	}

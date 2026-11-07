@@ -5,6 +5,7 @@
 package user_test
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	"forgejo.org/models/unittest"
@@ -1245,4 +1247,17 @@ func TestVisibleToViewerMatchesIsUserVisibleToViewer(t *testing.T) {
 	assert.True(t, visible.Contains(10), "follows the viewer")
 	assert.True(t, visible.Contains(4), "shares an organization with the viewer")
 	assert.False(t, visible.Contains(5), "no follow, no shared organization")
+}
+
+func TestCreatePrivilegedUserOwnAct(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	grant := audit_model.WithActor(db.DefaultContext, &audit_model.Actor{Type: audit_model.ActorUser, ID: 1, Credential: audit_model.Credential{Type: audit_model.CredentialOAuth2Grant}})
+	sudo := audit_model.WithActor(db.DefaultContext, &audit_model.Actor{Type: audit_model.ActorUser, ID: 2, SudoByID: 1, Credential: audit_model.Credential{Type: audit_model.CredentialAccessToken}})
+	for _, ctx := range []context.Context{db.DefaultContext, grant, sudo} {
+		require.ErrorIs(t, user_model.AdminCreateUser(ctx, &user_model.User{Name: "new-admin", Email: "new-admin@example.com", Passwd: ";p['////..-++']", IsAdmin: true}), audit_model.ErrNotOwnAct)
+		require.ErrorIs(t, user_model.AdminCreateUser(ctx, &user_model.User{Name: "new-auditor", Email: "new-auditor@example.com", Passwd: ";p['////..-++']", IsAuditor: true}), audit_model.ErrNotOwnAct)
+	}
+	unittest.AssertNotExistsBean(t, &user_model.User{LowerName: "new-admin"})
+	require.NoError(t, user_model.AdminCreateUser(audit_model.WithCLI(db.DefaultContext), &user_model.User{Name: "new-admin", Email: "new-admin@example.com", Passwd: ";p['////..-++']", IsAdmin: true}))
+	require.NoError(t, user_model.AdminCreateUser(grant, &user_model.User{Name: "new-plain", Email: "new-plain@example.com", Passwd: ";p['////..-++']"}), "a plain user takes no privilege")
 }

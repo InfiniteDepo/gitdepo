@@ -399,7 +399,7 @@ func ActivateUserEmail(ctx context.Context, userID int64, email string, activate
 	}
 	if activate {
 		// an activated address is where a mailed password reset goes (services/user checkEmailIsOwnAct)
-		if err := audit_model.CheckOwnActFor(ctx, userID); err != nil {
+		if err := audit_model.CheckOwnAct(ctx); err != nil {
 			return err
 		}
 		if used, err := IsEmailActive(ctx, email, addr.ID); err != nil {
