@@ -257,8 +257,9 @@ func TestPrivilegeGrantsAreOwnActs(t *testing.T) {
 		edit := func() *RequestWrapper {
 			return NewRequestWithJSON(t, "PATCH", "/api/v1/admin/users/user5", &api.EditUserOption{SourceID: new(int64(0)), LoginName: new("user5-elsewhere")})
 		}
+		before := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5})
 		refused(t, edit)
-		assert.Empty(t, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5}).LoginName)
+		assert.Equal(t, before.LoginName, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5}).LoginName)
 		MakeRequest(t, own(edit()), http.StatusOK)
 		assert.Equal(t, "user5-elsewhere", unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5}).LoginName)
 	})

@@ -119,7 +119,7 @@ func fixtureCreateUser(t *testing.T, user *user_model.User) *user_model.User {
 	overwriteDefault.Visibility = &visibility
 	allowCreateOrganization := user.AllowCreateOrganization
 	overwriteDefault.AllowCreateOrganization = optional.Some(allowCreateOrganization)
-	require.NoError(t, user_model.CreateUser(t.Context(), user, overwriteDefault))
+	require.NoError(t, user_model.CreateUser(audit_model.WithSystem(t.Context(), "test"), user, overwriteDefault)) // test setup, not a request
 	user.AllowCreateOrganization = allowCreateOrganization
 	return user
 }
