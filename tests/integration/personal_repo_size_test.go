@@ -610,6 +610,8 @@ func TestPersonalRepoSizeLockTargets(t *testing.T) {
 	require.NoError(t, repo_model.UpdateRepoSize(db.DefaultContext, 4, 1000, 0, 0)) // user5's repo4: an override of 0 would mean the site limit
 	lock(5)
 	user5 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5})
+	// the web page shows the size refusal, not the own-act one
+	assert.Contains(t, trashRestoreFlash(t, id, "user5"), "The new owner or name can't be used")
 	require.ErrorAs(t, repo_service.MoveTrashedRepository(audit_model.WithSystem(db.DefaultContext, "test"), unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1}), user5, repo, ""), &quota_model.ErrPersonalRepoLimit{})
 }
 

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"forgejo.org/models/db"
 	"forgejo.org/modules/util"
 )
 
@@ -52,6 +53,9 @@ type Credential struct {
 	Name    string
 	OwnerID int64
 	AppID   int64 // oauth2_grant: its application, named by Record when it writes
+	// Restricted is an access token limited to public data or to some repositories: it is never an own act (IsOwnAct).
+	// It is not stored.
+	Restricted bool
 }
 
 var credentialNamers = map[string]func(context.Context, Credential) (string, error){}
@@ -138,15 +142,32 @@ var ErrNotOwnAct = util.NewPermissionDeniedErrorf("only a person with a credenti
 // deployments and every change of an environment's rules, secrets and variables.
 func IsOwnAct(ctx context.Context) bool {
 	a := ActorFromContext(ctx)
-	return a != nil && a.SudoByID == 0 && a.Credential.Type != CredentialOAuth2Grant && a.Credential.Type != CredentialAuthorizedIntegration
+	return a != nil && a.SudoByID == 0 && !a.Credential.Restricted &&
+		a.Credential.Type != CredentialOAuth2Grant && a.Credential.Type != CredentialAuthorizedIntegration
 }
 
-// CheckOwnAct returns ErrNotOwnAct unless IsOwnAct.
+// CheckOwnAct returns ErrNotOwnAct unless IsOwnAct, and records the refusal (fail open, aggregated). Inside a
+// transaction it is not recorded: the write would be rolled back with it, or wait for its write lock. So callers
+// check before they open one where they can.
 func CheckOwnAct(ctx context.Context) error {
-	if !IsOwnAct(ctx) {
-		return ErrNotOwnAct
+	if IsOwnAct(ctx) {
+		return nil
 	}
-	return nil
+	if !db.InTransaction(ctx) {
+		var subject int64
+		key := "not_own_act|"
+		if a := ActorFromContext(ctx); a != nil {
+			if a.Type == ActorUser {
+				subject = a.ID
+			}
+			key += a.Type + "|" + strconv.FormatInt(a.ID, 10) + "|" + a.Credential.Type + "|" + strconv.FormatInt(a.Credential.ID, 10)
+		}
+		RecordAggregated(ctx, Event{
+			Action: "auth.refused", Result: ResultRefused, SubjectUserID: subject,
+			TargetType: "refusal", TargetID: subject, Data: map[string]any{"reason": "not_own_act"},
+		}, key)
+	}
+	return ErrNotOwnAct
 }
 
 // SystemActor is the server doing work by itself, e.g. "cron:<task>", "mirror:<repo id>", "install".

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	"forgejo.org/models/perm"
 	user_model "forgejo.org/models/user"
@@ -17,6 +18,10 @@ import (
 
 // AddPrincipalKey adds new principal to database and authorized_principals file.
 func AddPrincipalKey(ctx context.Context, ownerID int64, content string, authSourceID int64) (*PublicKey, error) {
+	// a principal lets certificates sign in as its user, as a key does (AddPublicKey)
+	if err := audit_model.CheckOwnAct(ctx); err != nil {
+		return nil, err
+	}
 	dbCtx, committer, err := db.TxContext(ctx)
 	if err != nil {
 		return nil, err

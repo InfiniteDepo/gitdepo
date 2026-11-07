@@ -5,12 +5,14 @@ package common
 
 import (
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	audit_model "forgejo.org/models/audit"
 	"forgejo.org/modules/httplib"
+	"forgejo.org/modules/web/middleware"
 	auth_service "forgejo.org/services/auth"
 	"forgejo.org/services/context"
 
@@ -37,4 +39,27 @@ func TestSetAuditActorCaps(t *testing.T) {
 	assert.Len(t, a.IPCandidates, audit_model.MaxIPCandidates)
 	assert.LessOrEqual(t, cap(a.IPCandidates), audit_model.MaxIPCandidates)
 	assert.Equal(t, "127.0.0.1", a.IP)
+}
+
+type actorProbe struct{ seen *audit_model.Actor }
+
+func (p *actorProbe) Verify(req *http.Request, _ http.ResponseWriter, _ auth_service.SessionStore) auth_service.MethodOutput {
+	p.seen = audit_model.ActorFromContext(req.Context())
+	return &auth_service.AuthenticationNotAttempted{}
+}
+
+// Verify can write (a reverse proxy creates its first user, an admin, on first sight), so it already sees the
+// anonymous request actor, and SetAuditActor fills in that same actor.
+func TestAuthSharedActorBeforeVerify(t *testing.T) {
+	base, cleanup := context.NewBaseContext(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
+	defer cleanup()
+	base.Data = middleware.ContextData{}
+	probe := &actorProbe{}
+	AuthShared(base, nil, probe)
+	require.NotNil(t, probe.seen)
+	assert.Equal(t, audit_model.ActorAnonymous, probe.seen.Type)
+	assert.True(t, audit_model.IsOwnAct(base))
+
+	SetAuditActor(base, &auth_service.UnauthenticatedResult{})
+	assert.Same(t, probe.seen, audit_model.ActorFromContext(base))
 }

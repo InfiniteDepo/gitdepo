@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"forgejo.org/models"
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
 	"forgejo.org/models/organization"
@@ -447,7 +448,7 @@ func ActionTransfer(accept bool) func(ctx *context.Context) {
 			ctx.Error(http.StatusForbidden, err.Error())
 			return
 		}
-		if errors.Is(err, util.ErrPermissionDenied) {
+		if errors.Is(err, audit_model.ErrNotOwnAct) {
 			ctx.Flash.Error(ctx.Tr("settings.credential_not_own_act"))
 			ctx.Redirect(ctx.Repo.RepoLink)
 			return

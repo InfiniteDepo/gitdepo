@@ -551,7 +551,7 @@ func TestAuditRefusals(t *testing.T) {
 	t.Run("expired keys", func(t *testing.T) {
 		past := timeutil.TimeStampNow().Add(-60)
 		content, _ := newTestSSHKey(t)
-		key, err := asymkey_model.AddPublicKey(t.Context(), 2, "audit-expired", content, 0, past)
+		key, err := asymkey_model.AddPublicKey(audit_model.WithSystem(t.Context(), "test"), 2, "audit-expired", content, 0, past)
 		require.NoError(t, err)
 		since := auditMaxID(t)
 		status, _ := servCommandTo(t, key.ID, "user2/repo1", "203.0.113.60")

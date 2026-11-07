@@ -1410,7 +1410,7 @@ func updateSSHPubIfNeed(
 			return err
 		}
 
-		if asymkey_model.SynchronizePublicKeys(ctx, user, authSource, sshKeys) {
+		if asymkey_model.SynchronizePublicKeys(audit_model.WithLoginSource(ctx, authSource.ID, authSource.Name), user, authSource, sshKeys) {
 			err = asymkey_model.RewriteAllPublicKeys(ctx)
 			if err != nil {
 				return err

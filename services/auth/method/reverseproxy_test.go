@@ -14,6 +14,7 @@ import (
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/test"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,8 +27,17 @@ func TestReverseProxyAuth(t *testing.T) {
 	require.NoError(t, db.TruncateBeansCascade(db.DefaultContext, &user_model.User{}))
 	require.EqualValues(t, 0, user_model.CountUsers(db.DefaultContext, nil))
 
+	t.Run("no actor: nothing is created", func(t *testing.T) {
+		req, err := http.NewRequest("GET", "/", nil)
+		require.NoError(t, err)
+		req.Header.Add(setting.ReverseProxyAuthUser, "Edgar")
+		req.Header.Add(setting.ReverseProxyAuthEmail, "edgar@example.org")
+		assert.Nil(t, (&ReverseProxy{}).newUser(req), "an admin is never created without an actor")
+		require.EqualValues(t, 0, user_model.CountUsers(db.DefaultContext, nil))
+	})
+
 	t.Run("First user should be admin", func(t *testing.T) {
-		req, err := http.NewRequestWithContext(audit_model.WithSystem(t.Context(), "test"), "GET", "/", nil) // a server request always has an audit actor
+		req, err := http.NewRequestWithContext(audit_model.WithActor(t.Context(), &audit_model.Actor{Type: audit_model.ActorAnonymous}), "GET", "/", nil) // what common.AuthShared stores before Verify
 		require.NoError(t, err)
 
 		req.Header.Add(setting.ReverseProxyAuthUser, "Edgar")
@@ -47,7 +57,7 @@ func TestReverseProxyAuth(t *testing.T) {
 	})
 
 	t.Run("Second user shouldn't be admin", func(t *testing.T) {
-		req, err := http.NewRequestWithContext(audit_model.WithSystem(t.Context(), "test"), "GET", "/", nil) // a server request always has an audit actor
+		req, err := http.NewRequestWithContext(audit_model.WithActor(t.Context(), &audit_model.Actor{Type: audit_model.ActorAnonymous}), "GET", "/", nil) // what common.AuthShared stores before Verify
 		require.NoError(t, err)
 
 		req.Header.Add(setting.ReverseProxyAuthUser, " Gusted ")

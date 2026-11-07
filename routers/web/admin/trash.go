@@ -8,12 +8,12 @@ import (
 	"html/template"
 	"net/http"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/base"
 	"forgejo.org/modules/setting"
-	"forgejo.org/modules/util"
 	"forgejo.org/services/context"
 	trash_service "forgejo.org/services/trash"
 )
@@ -81,7 +81,7 @@ func trashDone(ctx *context.Context, err error, success template.HTML) {
 		ctx.Flash.Error(ctx.Tr("admin.trash.with_org"))
 	case errors.Is(err, trash_service.ErrOrgHasLiveRepos):
 		ctx.Flash.Error(ctx.Tr("admin.trash.org_live_repos"))
-	case errors.Is(err, util.ErrPermissionDenied):
+	case errors.Is(err, audit_model.ErrNotOwnAct):
 		ctx.Flash.Error(ctx.Tr("settings.credential_not_own_act"))
 	case trash_service.IsBadTarget(err):
 		ctx.Flash.Error(ctx.Tr("admin.trash.bad_target", err.Error()))

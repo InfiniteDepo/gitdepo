@@ -4,9 +4,12 @@
 package integration
 
 import (
+	"fmt"
 	"net/http"
+	"net/url"
 	"testing"
 
+	asymkey_model "forgejo.org/models/asymkey"
 	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
@@ -18,6 +21,7 @@ import (
 	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/test"
+	app_context "forgejo.org/services/context"
 	repo_service "forgejo.org/services/repository"
 	user_service "forgejo.org/services/user"
 	"forgejo.org/tests"
@@ -263,4 +267,55 @@ func TestPrivilegeGrantsAreOwnActs(t *testing.T) {
 		MakeRequest(t, own(edit()), http.StatusOK)
 		assert.Equal(t, "user5-elsewhere", unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5}).LoginName)
 	})
+
+	t.Run("an SSH key", func(t *testing.T) {
+		// a key signs in as its user (SSH, HTTP signatures), so it is a credential like a token
+		const key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC4cn+iXnA4KvcQYSV88vGn0Yi91vG47t1P7okprVmhNTkipNRIHWr6WdCO4VDr/cvsRkuVJAsLO2enwjGWWueOO6BodiBgyAOZ/5t5nJNMCNuLGT5UIo/RI1b0WRQwxEZTRjt6mFNw6lH14wRd8ulsr9toSWBPMOGWoYs1PDeDL0JuTjL+tr1SZi/EyxCngpYszKdXllJEHyI79KQgeD0Vt3pTrkbNVTOEcCNqZePSVmUH8X8Vhugz3bnE0/iE9Pb5fkWO9c4AnM1FgI/8Bvp27Fw2ShryIXuR6kKvUqhVMTuOSDHwu6A8jLE5Owt3GAYugDpDYuwTVNGrHLXKpPzrGGPE/jPmaLCMZcsdkec95dYeU3zKODEm8UQZFhmJmDeWVJ36nGrGZHL4J5aTTaeFUJmmXDaJYiJ+K2/ioKgXqnXvltu0A9R8/LGy4nrTJRr4JMLuJFoUXvGm1gXQ70w2LSpk6yl71RNC0hCtsBe8BP8IhYCM0EP5jh7eCMQZNvM= nocomment"
+		add := func(path string) func() *RequestWrapper {
+			return func() *RequestWrapper {
+				return NewRequestWithJSON(t, "POST", path, &api.CreateKeyOption{Title: "own-act-key", Key: key})
+			}
+		}
+		refused(t, add("/api/v1/admin/users/user5/keys")) // for another user
+		refused(t, add("/api/v1/user/keys"))              // for the credential's own user (sudo: the sudo'd admin)
+		unittest.AssertNotExistsBean(t, &asymkey_model.PublicKey{Name: "own-act-key"})
+		MakeRequest(t, own(add("/api/v1/admin/users/user5/keys")()), http.StatusCreated)
+		unittest.AssertExistsAndLoadBean(t, &asymkey_model.PublicKey{OwnerID: 5, Name: "own-act-key"})
+
+		// a login source syncing keys acts as the source
+		_, err := asymkey_model.AddPrincipalKey(audit_model.WithLoginSource(t.Context(), 1, "ldap"), 5, "own-act-principal", 1)
+		require.NoError(t, err)
+		_, err = asymkey_model.AddPrincipalKey(audit_model.WithActor(t.Context(), &audit_model.Actor{Type: audit_model.ActorUser, ID: 5, Credential: audit_model.Credential{Type: audit_model.CredentialOAuth2Grant}}), 5, "grant-principal", 0)
+		require.ErrorIs(t, err, audit_model.ErrNotOwnAct)
+	})
+
+	t.Run("a restricted access token", func(t *testing.T) {
+		// a token limited to public data or to some repositories is no own act; a full-scope token of the user is
+		addEmail := func(email string) *RequestWrapper {
+			return NewRequestWithJSON(t, "POST", "/api/v1/user/emails", &api.CreateEmailOption{Emails: []string{email}})
+		}
+		publicOnly := getUserToken(t, "user2", auth_model.AccessTokenScopePublicOnly, auth_model.AccessTokenScopeWriteUser)
+		repoLimited := createFineGrainedRepoAccessToken(t, "user2", []auth_model.AccessTokenScope{auth_model.AccessTokenScopeWriteUser}, []int64{1})
+		for name, token := range map[string]string{"public-only": publicOnly, "repository-limited": repoLimited} {
+			resp := MakeRequest(t, addEmail("restricted@example.com").AddTokenAuth(token), http.StatusForbidden)
+			assert.Contains(t, resp.Body.String(), "credential of their own", name)
+		}
+		unittest.AssertNotExistsBean(t, &user_model.EmailAddress{LowerEmail: "restricted@example.com"})
+		MakeRequest(t, addEmail("restricted@example.com").AddTokenAuth(getUserToken(t, "user2", auth_model.AccessTokenScopeWriteUser)), http.StatusCreated)
+	})
+}
+
+// trashRestoreFlash restores repository id from the trash to newOwner on the web admin page and returns the flash.
+func trashRestoreFlash(t *testing.T, id int64, newOwner string) string {
+	t.Helper()
+	session := loginUser(t, "user1")
+	session.MakeRequest(t, NewRequestWithValues(t, "POST", fmt.Sprintf("/admin/trash/%d/restore", id), map[string]string{"new_owner": newOwner}), http.StatusSeeOther)
+	cookie := session.GetCookie(app_context.CookieNameFlash)
+	require.NotNil(t, cookie)
+	flash, err := url.QueryUnescape(cookie.Value) // the cookie value, then the encoded flash values
+	require.NoError(t, err)
+	flash, err = url.QueryUnescape(flash)
+	require.NoError(t, err)
+	assert.NotContains(t, flash, "own credentials")
+	return flash
 }

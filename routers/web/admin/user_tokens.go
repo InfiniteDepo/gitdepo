@@ -7,11 +7,11 @@ import (
 	"errors"
 	"fmt"
 
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/base"
 	"forgejo.org/modules/setting"
-	"forgejo.org/modules/util"
 	user_setting "forgejo.org/routers/web/user/setting"
 	"forgejo.org/services/context"
 )
@@ -104,7 +104,7 @@ func UserTokenRegenerate(ctx *context.Context) {
 	if err != nil {
 		if auth_model.IsErrAccessTokenNotExist(err) {
 			ctx.NotFound("RegenerateAccessTokenByID", nil)
-		} else if errors.Is(err, util.ErrPermissionDenied) {
+		} else if errors.Is(err, audit_model.ErrNotOwnAct) {
 			ctx.Flash.Error(ctx.Tr("settings.credential_not_own_act"))
 			ctx.JSONRedirect(userEditLink(u))
 		} else {

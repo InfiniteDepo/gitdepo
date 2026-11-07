@@ -474,7 +474,7 @@ func EditUserPost(ctx *context.Context) {
 			case db.IsErrNameCharsNotAllowed(err):
 				ctx.Data["Err_UserName"] = true
 				ctx.RenderWithErr(ctx.Tr("user.form.name_chars_not_allowed", form.UserName), tplUserEdit, &form)
-			case errors.Is(err, util.ErrPermissionDenied):
+			case errors.Is(err, audit_model.ErrNotOwnAct):
 				ctx.Data["Err_UserName"] = true
 				ctx.RenderWithErr(ctx.Tr("settings.credential_not_own_act"), tplUserEdit, &form)
 			default:
@@ -515,7 +515,7 @@ func EditUserPost(ctx *context.Context) {
 			case user_model.IsErrEmailAlreadyUsed(err):
 				ctx.Data["Err_Email"] = true
 				ctx.RenderWithErr(ctx.Tr("form.email_been_used"), tplUserEdit, &form)
-			case errors.Is(err, util.ErrPermissionDenied):
+			case errors.Is(err, audit_model.ErrNotOwnAct):
 				ctx.RenderWithErr(ctx.Tr("settings.credential_not_own_act"), tplUserEdit, &form)
 			default:
 				ctx.ServerError("AddOrSetPrimaryEmailAddress", err)

@@ -802,8 +802,8 @@ func createUser(ctx context.Context, u *User, createdByAdmin bool, overwriteDefa
 		return util.NewPermissionDeniedErrorf("%s", m.Refusal())
 	}
 
-	// a new site admin or auditor takes a privilege, so only a person's own act creates one
-	if u.IsAdmin || u.IsAuditor {
+	// a new site admin takes a privilege, so only a person's own act creates one
+	if u.IsAdmin {
 		if err := audit_model.CheckOwnAct(ctx); err != nil {
 			return err
 		}

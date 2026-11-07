@@ -4,13 +4,21 @@
 package common
 
 import (
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/modules/web/middleware"
 	auth_service "forgejo.org/services/auth"
 	"forgejo.org/services/context"
 )
 
 func AuthShared(ctx *context.Base, sessionStore auth_service.SessionStore, authMethod auth_service.Method) auth_service.MethodOutput {
-	output := authMethod.Verify(ctx.Req, ctx.Resp, sessionStore)
+	// the anonymous request actor is stored before Verify, which can write (e.g. a reverse proxy user created on first
+	// sight); SetAuditActor fills in this same actor afterwards
+	a := audit_model.ActorFromContext(ctx)
+	if a == nil {
+		a = RequestAuditActor(ctx.Req)
+		ctx.AppendContextValue(audit_model.ActorContextKey, a)
+	}
+	output := authMethod.Verify(ctx.Req.WithContext(audit_model.WithActor(ctx.Req.Context(), a)), ctx.Resp, sessionStore)
 
 	var interactiveReauthenticationPossible bool
 	var ar auth_service.AuthenticationResult

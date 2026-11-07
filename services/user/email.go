@@ -144,16 +144,16 @@ func ReplacePrimaryEmailAddress(ctx context.Context, u *user_model.User, emailSt
 }
 
 func AddEmailAddresses(ctx context.Context, u *user_model.User, emails []string) error {
+	// an added address, once confirmed by whoever reads it, can take the account by a password reset
+	if err := audit_model.CheckOwnAct(ctx); err != nil {
+		return err
+	}
 	return db.WithTx(ctx, func(ctx context.Context) error {
 		return addEmailAddresses(ctx, u, emails)
 	})
 }
 
 func addEmailAddresses(ctx context.Context, u *user_model.User, emails []string) error {
-	// an added address, once confirmed by whoever reads it, can take the account by a password reset
-	if err := audit_model.CheckOwnAct(ctx); err != nil {
-		return err
-	}
 	for _, emailStr := range emails {
 		if err := validation.ValidateEmail(emailStr); err != nil {
 			return err

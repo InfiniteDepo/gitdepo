@@ -49,5 +49,6 @@ func (r *accessTokenAuthenticationResult) ExpiresAt() optional.Option[timeutil.T
 }
 
 func (r *accessTokenAuthenticationResult) Credential() audit_model.Credential {
-	return audit_model.Credential{Type: audit_model.CredentialAccessToken, ID: r.id, Name: r.name, OwnerID: r.user.ID}
+	_, all := r.reducer.(*authz.AllAccessAuthorizationReducer) // public-only and repository-limited tokens have another
+	return audit_model.Credential{Type: audit_model.CredentialAccessToken, ID: r.id, Name: r.name, OwnerID: r.user.ID, Restricted: !all}
 }

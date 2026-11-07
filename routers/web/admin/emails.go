@@ -9,13 +9,13 @@ import (
 	"net/http"
 	"net/url"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/base"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/optional"
 	"forgejo.org/modules/setting"
-	"forgejo.org/modules/util"
 	"forgejo.org/services/context"
 	"forgejo.org/services/user"
 )
@@ -128,7 +128,7 @@ func ActivateEmail(ctx *context.Context) {
 		log.Error("ActivateUserEmail(%v,%v,%v): %v", uid, email, activate, err)
 		if user_model.IsErrEmailAlreadyUsed(err) {
 			ctx.Flash.Error(ctx.Tr("admin.emails.duplicate_active"))
-		} else if errors.Is(err, util.ErrPermissionDenied) {
+		} else if errors.Is(err, audit_model.ErrNotOwnAct) {
 			ctx.Flash.Error(ctx.Tr("settings.credential_not_own_act"))
 		} else if errors.Is(err, user_model.ErrLastUsableAdmin) {
 			ctx.Flash.Error(ctx.Tr("auth.last_admin"))

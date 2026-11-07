@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	"forgejo.org/models/perm"
@@ -105,6 +106,11 @@ func appendKeyAfterCommit(key *PublicKey) error {
 
 // AddPublicKey adds new public key to database and authorized_keys file.
 func AddPublicKey(ctx context.Context, ownerID int64, name, content string, authSourceID int64, expires timeutil.TimeStamp) (*PublicKey, error) {
+	// a key signs in as its user (SSH, HTTP signatures), so adding one is only a person's own act; a login source
+	// syncing keys acts as the source
+	if err := audit_model.CheckOwnAct(ctx); err != nil {
+		return nil, err
+	}
 	log.Trace(content)
 
 	fingerprint, err := CalcFingerprint(content)

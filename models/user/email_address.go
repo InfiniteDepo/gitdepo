@@ -378,6 +378,12 @@ func SearchEmails(ctx context.Context, opts *SearchEmailOptions) ([]*SearchEmail
 // ActivateUserEmail will change the activated state of an email address,
 // either primary or secondary (all in the email_address table)
 func ActivateUserEmail(ctx context.Context, userID int64, email string, activate bool) (err error) {
+	// an activated address is where a mailed password reset goes (services/user checkEmailIsOwnAct)
+	if activate {
+		if err := audit_model.CheckOwnAct(ctx); err != nil {
+			return err
+		}
+	}
 	ctx, committer, err := db.TxContext(ctx)
 	if err != nil {
 		return err
@@ -398,10 +404,6 @@ func ActivateUserEmail(ctx context.Context, userID int64, email string, activate
 		return nil
 	}
 	if activate {
-		// an activated address is where a mailed password reset goes (services/user checkEmailIsOwnAct)
-		if err := audit_model.CheckOwnAct(ctx); err != nil {
-			return err
-		}
 		if used, err := IsEmailActive(ctx, email, addr.ID); err != nil {
 			return fmt.Errorf("unable to check isEmailActive() for %s: %w", email, err)
 		} else if used {
