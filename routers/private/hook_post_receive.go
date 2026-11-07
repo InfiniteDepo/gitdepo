@@ -320,9 +320,9 @@ func HookPostReceive(ctx *app_context.PrivateContext) {
 				baseReadable = &readable
 				if readable {
 					if baseModel, err = branchworkflow.GetEffectiveModel(ctx, baseRepo); err != nil {
-						log.Error("Failed to read the branching model of %-v: %v", baseRepo, err)
-						ctx.JSON(http.StatusInternalServerError, private.HookPostReceiveResult{Err: fmt.Sprintf("Failed to read the branching model of %-v: %v", baseRepo, err), RepoWasEmpty: wasEmpty})
-						return
+						// the suggestion is cosmetic: an unreadable model must not fail every push
+						log.Error("Failed to read the branching model of %-v, suggesting the default branch: %v", baseRepo, err)
+						baseModel, *baseReadable = branchworkflow.EffectiveModel{}, false
 					}
 				}
 			}

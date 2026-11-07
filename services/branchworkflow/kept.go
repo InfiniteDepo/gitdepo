@@ -5,8 +5,6 @@ package branchworkflow
 
 import (
 	"context"
-	"slices"
-	"strings"
 
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
@@ -81,6 +79,9 @@ func NewKeptChecker(ctx context.Context, repo *repo_model.Repository, openPRs bo
 	return k, nil
 }
 
+// Model returns the branching model the checker decided with, so a caller needs no second read of it.
+func (k *KeptChecker) Model() EffectiveModel { return k.model }
+
 // Reason returns why the branch must be kept, one of the Kept constants, or "".
 func (k *KeptChecker) Reason(name string) string {
 	switch {
@@ -90,7 +91,7 @@ func (k *KeptChecker) Reason(name string) string {
 		return KeptDevelopment
 	case k.model.Model.ProductionBranch != "" && name == k.model.Model.ProductionBranch:
 		return KeptProduction
-	case slices.ContainsFunc(k.model.Model.ReleasePrefixes, func(p string) bool { return strings.HasPrefix(name, p) }):
+	case isReleaseBranch(k.model.Model, name):
 		return KeptRelease
 	case k.rules.GetFirstMatched(name) != nil:
 		return KeptProtected
@@ -113,4 +114,11 @@ func KeptReason(ctx context.Context, repo *repo_model.Repository, name string, o
 		return "", err
 	}
 	return k.Reason(name), nil
+}
+
+// isReleaseBranch uses MatchType, the one classifier of branch types, so a branch is a release branch for the kept
+// rule exactly when it is one for the pull request target.
+func isReleaseBranch(m repo_model.BranchingModel, name string) bool {
+	t, ok := MatchType(m, name)
+	return ok && t.Name == ReleaseTypeName
 }
