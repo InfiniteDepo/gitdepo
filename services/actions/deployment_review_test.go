@@ -263,6 +263,17 @@ func TestReviewDeployments(t *testing.T) {
 		assert.Equal(t, actions_model.DeploymentReleased, first.Status, "the first attempt keeps its approval")
 	})
 
+	t.Run("a new deployment is not stale against its environment, whatever the gate's clock", func(t *testing.T) {
+		// the environment's update time comes from the real clock (xorm), so the deployment's must too
+		timeutil.MockSet(time.Now().Add(-time.Hour))
+		defer timeutil.MockUnset()
+		f := newReviewFixture(t, &actions_model.ActionEnvironment{}, []int64{2}, nil)
+		assert.Equal(t, actions_model.DeploymentWaitingReview, f.deployment(t).Status)
+		due, err := actions_model.FindDueDeploymentRunIDs(t.Context(), timeutil.TimeStampNow(), 10)
+		require.NoError(t, err)
+		assert.Empty(t, due)
+	})
+
 	t.Run("the review and the wait timer run in parallel: both are needed", func(t *testing.T) {
 		start := time.Now().Truncate(time.Second)
 		timeutil.MockSet(start)
