@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"forgejo.org/models"
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	user_model "forgejo.org/models/user"
@@ -48,6 +49,50 @@ type UpdateOptions struct {
 	RestrictRepoVisibilityChange optional.Option[bool]
 	PrivateForkPolicy            optional.Option[int]
 	CategoryID                   optional.Option[int64]
+}
+
+// CheckEditIsOwnAct refuses, before anything is written, what UpdateAuth and UpdateUser would refuse because it is
+// not a person's own act, so a handler that calls both changes nothing on a refusal.
+func CheckEditIsOwnAct(ctx context.Context, u *user_model.User, authOpts *UpdateAuthOptions, opts *UpdateOptions, email string) error {
+	if err := checkPasswordIsOwnAct(ctx, authOpts.Password); err != nil {
+		return err
+	}
+	if err := checkEmailIsOwnAct(ctx, u, email); err != nil {
+		return err
+	}
+	if err := checkLoginIsOwnAct(ctx, u, authOpts); err != nil {
+		return err
+	}
+	return checkAdminFlagIsOwnAct(ctx, u, opts.IsAdmin)
+}
+
+// checkLoginIsOwnAct: the login source and login name decide who signs in as u through LDAP, SMTP or PAM, so changing
+// them is only a person's own act (a login source sync acts as the source).
+func checkLoginIsOwnAct(ctx context.Context, u *user_model.User, opts *UpdateAuthOptions) error {
+	hasSource, source := opts.LoginSource.Get()
+	hasName, name := opts.LoginName.Get()
+	if (hasSource && source != u.LoginSource) || (hasName && name != u.LoginName) {
+		return audit_model.CheckOwnAct(ctx)
+	}
+	return nil
+}
+
+// checkAdminFlagIsOwnAct: making someone a site admin is only a person's own act (a login source syncing the flag
+// acts as the source).
+func checkAdminFlagIsOwnAct(ctx context.Context, u *user_model.User, isAdmin optional.Option[bool]) error {
+	if has, value := isAdmin.Get(); has && value && !u.IsAdmin {
+		return audit_model.CheckOwnAct(ctx)
+	}
+	return nil
+}
+
+// checkPasswordIsOwnAct: a password is a credential, so setting one is only a person's own act, also for themselves
+// (as creating a token, auth_model.NewAccessToken).
+func checkPasswordIsOwnAct(ctx context.Context, password optional.Option[string]) error {
+	if password.Has() {
+		return audit_model.CheckOwnAct(ctx)
+	}
+	return nil
 }
 
 func UpdateUser(ctx context.Context, u *user_model.User, opts *UpdateOptions) error {
@@ -128,6 +173,9 @@ func UpdateUser(ctx context.Context, u *user_model.User, opts *UpdateOptions) er
 	if has, value := opts.IsAdmin.Get(); has {
 		if !value && user_model.IsLastAdminUser(ctx, u) {
 			return models.ErrDeleteLastAdminUser{UID: u.ID}
+		}
+		if err := checkAdminFlagIsOwnAct(ctx, u, opts.IsAdmin); err != nil {
+			return err
 		}
 		u.IsAdmin = value
 		cols = append(cols, "is_admin")
@@ -212,6 +260,12 @@ type UpdateAuthOptions struct {
 }
 
 func UpdateAuth(ctx context.Context, u *user_model.User, opts *UpdateAuthOptions) error {
+	if err := checkPasswordIsOwnAct(ctx, opts.Password); err != nil {
+		return err
+	}
+	if err := checkLoginIsOwnAct(ctx, u, opts); err != nil {
+		return err
+	}
 	if opts.ProhibitLogin.ValueOrDefault(false) && user_model.IsLastUsableAdmin(ctx, u) {
 		return models.ErrDeleteLastAdminUser{UID: u.ID}
 	}

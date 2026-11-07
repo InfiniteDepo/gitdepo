@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	"forgejo.org/models/organization"
 	repo_model "forgejo.org/models/repo"
@@ -307,7 +308,7 @@ func TestRepoGroupRedirectReuse(t *testing.T) {
 // the repository, its claims and its directories where they were.
 func TestRedirectReuseRefused(t *testing.T) {
 	unittest.PrepareTestEnv(t)
-	ctx := t.Context()
+	ctx := audit_model.WithSystem(t.Context(), "test")
 	admin := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
 	user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
 	org3 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3})
@@ -350,7 +351,7 @@ func TestRedirectReuseRefused(t *testing.T) {
 	// transfer into the organization onto a redirect
 	incoming, err := CreateRepositoryDirectly(ctx, user2, user2, CreateRepoOptions{Name: "taken"})
 	require.NoError(t, err)
-	unchanged("transfer", TransferOwnership(ctx, admin, org3, reloadRepo(t, incoming.ID), nil), incoming)
+	unchanged("transfer", TransferOwnership(audit_model.WithSystem(ctx, "test"), admin, org3, reloadRepo(t, incoming.ID), nil), incoming)
 	unittest.AssertNotExistsBean(t, &repo_model.RepoGroupNameClaim{OwnerID: org3.ID, LowerName: "taken"})
 
 	// trash restore into the organization, with a new owner or a new name

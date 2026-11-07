@@ -130,7 +130,7 @@ func verifyAuth(r *web.Route, authMethods []auth.Method) {
 	authGroup := auth_method.NewGroup(authMethods...)
 
 	r.Use(func(ctx *context.Context) {
-		output := authGroup.Verify(ctx.Req, ctx.Resp, ctx.Session)
+		output := common.VerifyWithRequestActor(ctx.Base, ctx.Session, authGroup)
 		var ar auth.AuthenticationResult
 		switch v := output.(type) {
 		case *auth.AuthenticationSuccess:
@@ -174,7 +174,7 @@ func verifyContainerAuth(r *web.Route, authMethods []auth.Method) {
 	authGroup := auth_method.NewGroup(authMethods...)
 
 	r.Use(func(ctx *context.Context) {
-		output := authGroup.Verify(ctx.Req, ctx.Resp, ctx.Session)
+		output := common.VerifyWithRequestActor(ctx.Base, ctx.Session, authGroup)
 		var ar auth.AuthenticationResult
 		switch v := output.(type) {
 		case *auth.AuthenticationSuccess:

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	asymkey_model "forgejo.org/models/asymkey"
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	"forgejo.org/models/perm"
@@ -62,7 +63,7 @@ func TestCredentialExpiryServ(t *testing.T) {
 
 		t.Run("expired user key", func(t *testing.T) {
 			content, _ := newTestSSHKey(t)
-			key, err := asymkey_model.AddPublicKey(ctx, 2, "expired-laptop", content, 0, past)
+			key, err := asymkey_model.AddPublicKey(audit_model.WithSystem(ctx, "test"), 2, "expired-laptop", content, 0, past)
 			require.NoError(t, err)
 
 			_, _, err = private.ServNoCommand(ctx, key.ID)
@@ -80,7 +81,7 @@ func TestCredentialExpiryServ(t *testing.T) {
 
 		t.Run("user key not yet expired", func(t *testing.T) {
 			content, _ := newTestSSHKey(t)
-			key, err := asymkey_model.AddPublicKey(ctx, 2, "valid-laptop", content, 0, future)
+			key, err := asymkey_model.AddPublicKey(audit_model.WithSystem(ctx, "test"), 2, "valid-laptop", content, 0, future)
 			require.NoError(t, err)
 
 			_, _, err = private.ServNoCommand(ctx, key.ID)
@@ -118,7 +119,7 @@ func TestCredentialExpiryServ(t *testing.T) {
 func TestCredentialExpiryHTTPSig(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
 	content, signer := newTestSSHKey(t)
-	key, err := asymkey_model.AddPublicKey(t.Context(), 2, "httpsig", content, 0, timeutil.TimeStampNow().Add(3600))
+	key, err := asymkey_model.AddPublicKey(audit_model.WithSystem(t.Context(), "test"), 2, "httpsig", content, 0, timeutil.TimeStampNow().Add(3600))
 	require.NoError(t, err)
 
 	signedRequest := func() *RequestWrapper {
@@ -353,7 +354,7 @@ func TestCredentialExpiryUserKeysFile(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
 	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
 	content, _ := newTestSSHKey(t)
-	key, err := asymkey_model.AddPublicKey(t.Context(), user.ID, "soon-expired", content, 0, timeutil.TimeStampNow().Add(3600))
+	key, err := asymkey_model.AddPublicKey(audit_model.WithSystem(t.Context(), "test"), user.ID, "soon-expired", content, 0, timeutil.TimeStampNow().Add(3600))
 	require.NoError(t, err)
 
 	resp := MakeRequest(t, NewRequest(t, "GET", "/user2.keys"), http.StatusOK)

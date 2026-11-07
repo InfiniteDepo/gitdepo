@@ -6,6 +6,7 @@ package repo
 
 import (
 	stdCtx "context"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -16,6 +17,7 @@ import (
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
+	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
 	"forgejo.org/routers/api/v1/utils"
 	asymkey_service "forgejo.org/services/asymkey"
@@ -193,6 +195,8 @@ func HandleAddKeyError(ctx *context.APIContext, err error) {
 		ctx.Error(http.StatusUnprocessableEntity, "", "Key title has been used")
 	case asymkey_model.IsErrDeployKeyNameAlreadyUsed(err):
 		ctx.Error(http.StatusUnprocessableEntity, "", "A key with the same name already exists")
+	case errors.Is(err, util.ErrPermissionDenied):
+		ctx.Error(http.StatusForbidden, "", err)
 	default:
 		ctx.Error(http.StatusInternalServerError, "AddKey", err)
 	}

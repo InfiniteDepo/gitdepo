@@ -247,8 +247,15 @@ func UnlinkTeam(ctx context.Context, group *org_model.UserGroup, team *org_model
 
 // CreateOrganization creates an organization owned by owner, and makes the
 // members of the user groups granting the org-admin role its owners. It lives
-// here, not in services/org, which services/user imports.
+// here, not in services/org, which services/user imports. Making someone else the owner of a new organization is
+// only a person's own act.
 func CreateOrganization(ctx context.Context, org *org_model.Organization, owner *user_model.User) error {
+	// a user creating their own organization (even through a grant) takes no privilege from anyone
+	if a := audit_model.ActorFromContext(ctx); a == nil || a.Type != audit_model.ActorUser || a.ID != owner.ID || a.SudoByID != 0 {
+		if err := audit_model.CheckOwnAct(ctx); err != nil {
+			return err
+		}
+	}
 	return db.WithTx(ctx, func(ctx context.Context) error {
 		if err := org_model.CreateOrganization(ctx, org, owner); err != nil {
 			return err
@@ -258,9 +265,10 @@ func CreateOrganization(ctx context.Context, org *org_model.Organization, owner 
 }
 
 // CreateGroup creates a user group. A group granting the org-admin role is
-// linked to the Owners team of every organization right away, so creating one is only the admin's own act.
+// linked to the Owners team of every organization right away, so creating one is only the admin's own act, as is
+// creating one that grants the site admin or auditor role.
 func CreateGroup(ctx context.Context, group *org_model.UserGroup) error {
-	if group.GrantsOrgAdmin {
+	if group.GrantsOrgAdmin || group.GrantsSiteAdmin || group.GrantsAuditor {
 		if err := audit_model.CheckOwnAct(ctx); err != nil {
 			return err
 		}
@@ -280,15 +288,17 @@ func CreateGroup(ctx context.Context, group *org_model.UserGroup) error {
 }
 
 // UpdateGroup updates the name, description and roles of a user group, and
-// the role flags of its members. Turning on the org-admin role adds owners, and a new name retargets the login
-// sources that map a directory group to that name onto the group's teams, so both are only the admin's own act.
+// the role flags of its members. Turning on a role (org admin, site admin, auditor) gives it to the members, and a
+// new name retargets the login sources that map a directory group to that name onto the group's teams, so these are
+// only the admin's own act.
 func UpdateGroup(ctx context.Context, group *org_model.UserGroup) error {
 	return db.WithTx(ctx, func(ctx context.Context) error {
 		old, err := org_model.GetUserGroupByID(ctx, group.ID)
 		if err != nil {
 			return err
 		}
-		if (group.GrantsOrgAdmin && !old.GrantsOrgAdmin) || !strings.EqualFold(strings.TrimSpace(group.Name), old.Name) {
+		if (group.GrantsOrgAdmin && !old.GrantsOrgAdmin) || (group.GrantsSiteAdmin && !old.GrantsSiteAdmin) ||
+			(group.GrantsAuditor && !old.GrantsAuditor) || !strings.EqualFold(strings.TrimSpace(group.Name), old.Name) {
 			if err := audit_model.CheckOwnAct(ctx); err != nil {
 				return err
 			}

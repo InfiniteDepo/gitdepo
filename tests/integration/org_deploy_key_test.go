@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	asymkey_model "forgejo.org/models/asymkey"
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
@@ -231,7 +232,7 @@ func TestOrgDeployKey(t *testing.T) {
 		_, extra = receive(movingKey.KeyID, "org3", "moving")
 		require.NoError(t, extra.Error)
 
-		require.NoError(t, repo_service.TransferOwnership(ctx, admin, org17, repo, nil))
+		require.NoError(t, repo_service.TransferOwnership(audit_model.WithSystem(ctx, "test"), admin, org17, repo, nil))
 
 		_, extra = upload(movingKey.KeyID, "org17", "moving")
 		assert.Equal(t, http.StatusNotFound, extra.StatusCode)
@@ -243,7 +244,7 @@ func TestOrgDeployKey(t *testing.T) {
 		// moving it back doesn't restore the selection
 		repo = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: repo.ID})
 		require.NoError(t, repo.LoadOwner(ctx))
-		require.NoError(t, repo_service.TransferOwnership(ctx, admin, org3, repo, nil))
+		require.NoError(t, repo_service.TransferOwnership(audit_model.WithSystem(ctx, "test"), admin, org3, repo, nil))
 		_, extra = upload(movingKey.KeyID, "org3", "moving")
 		assert.Equal(t, http.StatusNotFound, extra.StatusCode)
 		_, extra = upload(readKey.KeyID, "org3", "moving") // all repositories: covered again

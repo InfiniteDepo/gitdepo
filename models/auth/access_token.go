@@ -142,8 +142,13 @@ func init() {
 	})
 }
 
-// NewAccessToken creates a new access token limited to the given repositories, and records it in the audit log.
+// NewAccessToken creates a new access token limited to the given repositories, and records it in the audit log. A
+// token is a credential, so creating one is only a person's own act, also for themselves: a delegated credential
+// (OAuth2 grant, authorized integration) or sudo must not mint a credential that passes every own-act check.
 func NewAccessToken(ctx context.Context, t *AccessToken, resources []*AccessTokenResourceRepo) error {
+	if err := audit_model.CheckOwnAct(ctx); err != nil {
+		return err
+	}
 	generateAccessToken(t)
 	return db.WithTx(ctx, func(ctx context.Context) error {
 		if _, err := db.GetEngine(ctx).Insert(t); err != nil {
@@ -373,8 +378,12 @@ func DeleteAccessTokenByID(ctx context.Context, id, userID int64) error {
 }
 
 // RegenerateAccessTokenByID regenerates access token by given ID.
-// It regenerates token and salt, as well as updates the creation time.
+// It regenerates token and salt, as well as updates the creation time. Like NewAccessToken, it is only a person's
+// own act.
 func RegenerateAccessTokenByID(ctx context.Context, id, userID int64) (*AccessToken, error) {
+	if err := audit_model.CheckOwnAct(ctx); err != nil {
+		return nil, err
+	}
 	t := &AccessToken{}
 	return t, db.WithTx(ctx, func(ctx context.Context) error {
 		found, err := db.GetEngine(ctx).Where("id = ? AND uid = ?", id, userID).Get(t)

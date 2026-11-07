@@ -45,3 +45,22 @@ func TestValidateOwnedTokenMode(t *testing.T) {
 		assert.Error(t, ValidateOwnedTokenMode(mode))
 	}
 }
+
+func TestAccessTokenRestrictsAccount(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		token AccessToken
+		want  bool
+	}{
+		{"personal, every repository", AccessToken{OwnerType: AccessTokenOwnerUser, ResourceAllRepos: true, Scope: "write:user"}, false},
+		{"personal, public only", AccessToken{OwnerType: AccessTokenOwnerUser, ResourceAllRepos: true, Scope: "public-only,write:user"}, true},
+		{"personal, some repositories", AccessToken{OwnerType: AccessTokenOwnerUser, Scope: "write:repository"}, true},
+		{"personal, unreadable scope", AccessToken{OwnerType: AccessTokenOwnerUser, ResourceAllRepos: true, Scope: "nonsense"}, true},
+		{"organization, some repositories", AccessToken{OwnerType: AccessTokenOwnerOrg, OwnerID: 3, Scope: "write:repository"}, false},
+		{"repository", AccessToken{OwnerType: AccessTokenOwnerRepo, OwnerID: 1, Scope: "write:repository"}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, c.token.RestrictsAccount())
+		})
+	}
+}

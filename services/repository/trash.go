@@ -12,6 +12,7 @@ import (
 
 	"forgejo.org/models"
 	actions_model "forgejo.org/models/actions"
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	"forgejo.org/models/organization"
 	repo_model "forgejo.org/models/repo"
@@ -150,6 +151,12 @@ func afterTrash(ctx context.Context, repo *repo_model.Repository) {
 // (if not nil, a live owner), keeping it hidden until the caller restores it. The old owner may be a
 // trashed organization or a tombstone, so the owner is loaded including the trash.
 func MoveTrashedRepository(ctx context.Context, doer, newOwner *user_model.User, repo *repo_model.Repository, newName string) error {
+	if newOwner != nil && newOwner.ID != repo.OwnerID {
+		// a move to a new owner is a transfer (TransferOwnership)
+		if err := audit_model.CheckOwnAct(ctx); err != nil {
+			return err
+		}
+	}
 	owner, err := user_model.GetUserByIDIncludingTrashed(ctx, repo.OwnerID)
 	if err != nil {
 		return err

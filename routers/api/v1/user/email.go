@@ -4,11 +4,13 @@
 package user
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
 	user_model "forgejo.org/models/user"
 	api "forgejo.org/modules/structs"
+	"forgejo.org/modules/util"
 	"forgejo.org/modules/validation"
 	"forgejo.org/modules/web"
 	"forgejo.org/services/context"
@@ -83,6 +85,8 @@ func AddEmail(ctx *context.APIContext) {
 
 			errMsg := fmt.Sprintf("Email address %q invalid", email)
 			ctx.Error(http.StatusUnprocessableEntity, "", errMsg)
+		} else if errors.Is(err, util.ErrPermissionDenied) {
+			ctx.Error(http.StatusForbidden, "", err)
 		} else {
 			ctx.Error(http.StatusInternalServerError, "AddEmailAddresses", err)
 		}

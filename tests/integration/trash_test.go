@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"forgejo.org/models"
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	issues_model "forgejo.org/models/issues"
@@ -433,7 +434,7 @@ func TestTrashOwnerLifecycle(t *testing.T) {
 	unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
 
 	t.Run("renamed owner purges the right dir", func(t *testing.T) {
-		require.NoError(t, user_service.RenameUser(ctx, user, "user2-renamed"))
+		require.NoError(t, user_service.RenameUser(audit_model.WithSystem(ctx, "test"), user, "user2-renamed"))
 		require.NoError(t, trash_service.Purge(ctx, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1}), trashRepoID))
 		assert.NoDirExists(t, repo_model.RepoPath("user2-renamed", "repo1"))
 	})

@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	access_model "forgejo.org/models/perm/access"
@@ -341,7 +342,10 @@ func AccessTokenCreatePostFor(ctx *context.Context, owner *user_model.User, tpl 
 		return
 	}
 
-	if err := auth_model.NewAccessToken(ctx, t, resourceRepos); err != nil {
+	if err := auth_model.NewAccessToken(ctx, t, resourceRepos); errors.Is(err, audit_model.ErrNotOwnAct) {
+		renderWithError(ctx.Tr("settings.credential_not_own_act"))
+		return
+	} else if err != nil {
 		ctx.ServerError("NewAccessToken", err)
 		return
 	}

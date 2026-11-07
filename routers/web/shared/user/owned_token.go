@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	"forgejo.org/models/perm"
@@ -268,6 +269,8 @@ func CreateOwnedToken(ctx *context.Context, level OwnedTokenLevel, f OwnedTokenF
 		}
 		if has, msg := TranslateAccessTokenValidationError(ctx.Base, err).Get(); has {
 			return refuse(msg)
+		} else if errors.Is(err, audit_model.ErrNotOwnAct) {
+			return refuse(ctx.Locale.TrString("settings.credential_not_own_act"))
 		}
 		ctx.ServerError("CreateOwnedAccessToken", err)
 		return nil
@@ -360,6 +363,8 @@ func RotateOwnedToken(ctx *context.Context, level OwnedTokenLevel) bool {
 			ctx.Flash.Error(ctx.Tr("error.not_found"))
 		} else if errors.Is(err, auth_model.ErrOwnedTokenScope) || errors.Is(err, authz.ErrOwnedTokenNoScope) {
 			ctx.Flash.Error(ctx.Tr("owned_token.error.scope"))
+		} else if errors.Is(err, audit_model.ErrNotOwnAct) {
+			ctx.Flash.Error(ctx.Tr("settings.credential_not_own_act"))
 		} else if has, msg := TranslateAccessTokenValidationError(ctx.Base, err).Get(); has {
 			ctx.Flash.Error(html.EscapeString(msg)) // rendered as HTML
 		} else {

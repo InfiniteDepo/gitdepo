@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	asymkey_model "forgejo.org/models/asymkey"
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/auth"
 	"forgejo.org/models/perm"
 	"forgejo.org/models/unittest"
@@ -169,7 +170,7 @@ func TestAPIPrivateServAndNoServWithRequiredTwoFactor(t *testing.T) {
 			t.Helper()
 			repo := forgery.CreateRepository(t, user, nil)
 
-			pubKey, err := asymkey_model.AddPublicKey(ctx, user.ID, "tmp-key-"+user.Name, "sk-ecdsa-sha2-nistp256@openssh.com AAAAInNrLWVjZHNhLXNoYTItbmlzdHAyNTZAb3BlbnNzaC5jb20AAAAIbmlzdHAyNTYAAABBBGXEEzWmm1dxb+57RoK5KVCL0w2eNv9cqJX2AGGVlkFsVDhOXHzsadS3LTK4VlEbbrDMJdoti9yM8vclA8IeRacAAAAEc3NoOg== nocomment", 0, 0)
+			pubKey, err := asymkey_model.AddPublicKey(audit_model.WithSystem(ctx, "test"), user.ID, "tmp-key-"+user.Name, "sk-ecdsa-sha2-nistp256@openssh.com AAAAInNrLWVjZHNhLXNoYTItbmlzdHAyNTZAb3BlbnNzaC5jb20AAAAIbmlzdHAyNTYAAABBBGXEEzWmm1dxb+57RoK5KVCL0w2eNv9cqJX2AGGVlkFsVDhOXHzsadS3LTK4VlEbbrDMJdoti9yM8vclA8IeRacAAAAEc3NoOg== nocomment", 0, 0)
 			require.NoError(t, err)
 			defer unittest.AssertSuccessfulDelete(t, &asymkey_model.PublicKey{ID: pubKey.ID})
 
