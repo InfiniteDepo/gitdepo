@@ -546,8 +546,14 @@ func DeleteBranch(ctx context.Context, doer *user_model.User, repo *repo_model.R
 		return nil
 	}); err != nil {
 		if errors.Is(err, errBranchSwap) {
-			if _, err2 := gitRepo.GetBranchCommitID(branchName); err2 == nil {
-				return ErrBranchHasNewCommits // moved, or locked by a push in flight: still there, try again
+			log.Warn("DeleteBranch %-v %s: %v", repo, branchName, err)
+			// only a branch that moved is "new commits"; any other failure of git stays an error
+			now, err2 := gitRepo.GetBranchCommitID(branchName)
+			switch {
+			case err2 == nil && now != expected:
+				return ErrBranchHasNewCommits
+			case git.IsErrNotExist(err2) || git.IsErrBranchNotExist(err2):
+				return git.ErrBranchNotExist{Name: branchName} // deleted by someone else meanwhile
 			}
 		}
 		return err
@@ -679,6 +685,12 @@ func DeleteBranchAfterMerge(ctx context.Context, doer *user_model.User, pr *issu
 		return ErrBranchHasNewCommits
 	}
 
+	// a push that landed since the check must not move the children of a branch that stays
+	if tip, err := headRepo.GetBranchCommitID(pr.HeadBranch); err != nil {
+		return err
+	} else if tip != prHead {
+		return ErrBranchHasNewCommits
+	}
 	if err := pull_service.RetargetChildrenOnMerge(ctx, doer, pr); err != nil {
 		if errors.Is(err, pull_service.ErrChildPullsNotRetargeted) {
 			return ErrBranchInUse // an open pull request still needs this branch

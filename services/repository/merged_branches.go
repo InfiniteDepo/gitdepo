@@ -189,11 +189,7 @@ func deleteMergedBranchesOf(ctx context.Context, doer *user_model.User, repo *re
 	}
 	locked := PersonalRepoLocked(ctx, repo)
 	for _, b := range branches {
-		// a push since the merged check would lose its commits: leave the branch for the next run
-		if commit, err := gitRepo.GetBranchCommitID(b.name); err != nil || commit != b.commit {
-			failed++
-			continue
-		}
+		// DeleteBranch deletes only if the branch is still at the commit that was checked: a push since leaves it for the next run
 		if err := DeleteBranch(ctx, doer, repo, gitRepo, b.name, b.commit); err != nil {
 			log.Error("DeleteMergedBranches: branch %q of %-v: %v", b.name, repo, err)
 			failed++
