@@ -1,0 +1,137 @@
+{{template "base/head" .}}
+<div class="page-content repository actions deployments">
+	{{template "repo/header" .}}
+	<div class="ui container">
+		{{template "base/alert" .}}
+		<div class="ui stackable grid">
+			<div class="four wide column">
+				<div class="max-md:tw-hidden">
+					{{template "repo/actions/workflows_menu" .}}
+					<div id="deployments-menu">{{template "repo/actions/deployments_menu" .}}</div>
+				</div>
+				<div class="md:tw-hidden tw-flex tw-flex-col tw-gap-2" id="deployments-menus-mobile">
+					<details class="deployments-menu-collapsed">
+						<summary class="ui basic button">{{ctx.Locale.Tr "actions.deployments.workflows"}}</summary>
+						{{template "repo/actions/workflows_menu" .}}
+					</details>
+					{{if .DeploymentEnvironments}}
+					<details class="deployments-menu-collapsed">
+						<summary class="ui basic button">{{if .CurEnvironment}}{{ctx.Locale.Tr "actions.deployments.menu_summary" .CurEnvironment.Name}}{{else}}{{ctx.Locale.Tr "actions.deployments.menu_summary" (ctx.Locale.Tr "actions.deployments.all")}}{{end}}</summary>
+						{{template "repo/actions/deployments_menu" .}}
+					</details>
+					{{end}}
+				</div>
+			</div>
+			<div class="twelve wide column content">
+				{{if .UnknownEnvironment}}
+					<div class="ui warning message" id="deployments-unknown">{{ctx.Locale.Tr "actions.deployments.unknown" .UnknownEnvironment}}</div>
+				{{end}}
+				{{if .CurEnvironment}}
+					<h2 class="ui header">{{svg "octicon-rocket" 20}} {{.CurEnvironment.Name}}</h2>
+					<form class="ui form" id="deployment-filters" method="get" action="{{.DeploymentsLink}}">
+						<input type="hidden" name="environment" value="{{.CurEnvironment.Name}}">
+						<div class="tw-flex tw-flex-wrap tw-gap-3 tw-items-end tw-mb-4">
+							<div class="field tw-mb-0">
+								<label for="deployment-status">{{ctx.Locale.Tr "actions.deployments.filter.status"}}</label>
+								<select id="deployment-status" name="status">
+									<option value="">{{ctx.Locale.Tr "actions.deployments.filter.all"}}</option>
+									<option value="waiting"{{if eq "waiting" $.CurStatus}} selected{{end}}>{{ctx.Locale.Tr "actions.deployments.filter.waiting"}}</option>
+									<option value="released"{{if eq "released" $.CurStatus}} selected{{end}}>{{ctx.Locale.Tr "actions.deployments.filter.released"}}</option>
+									<option value="rejected"{{if eq "rejected" $.CurStatus}} selected{{end}}>{{ctx.Locale.Tr "actions.deployments.filter.rejected"}}</option>
+									<option value="expired"{{if eq "expired" $.CurStatus}} selected{{end}}>{{ctx.Locale.Tr "actions.deployments.filter.expired"}}</option>
+									<option value="refused"{{if eq "refused" $.CurStatus}} selected{{end}}>{{ctx.Locale.Tr "actions.deployments.filter.refused"}}</option>
+									<option value="cancelled"{{if eq "cancelled" $.CurStatus}} selected{{end}}>{{ctx.Locale.Tr "actions.deployments.filter.cancelled"}}</option>
+								</select>
+							</div>
+							<div class="field tw-mb-0">
+								<label for="deployment-actor">{{ctx.Locale.Tr "actions.deployments.triggered_by"}}</label>
+								<select id="deployment-actor" name="actor">
+									<option value="0">{{ctx.Locale.Tr "actions.deployments.filter.anyone"}}</option>
+									{{range .Actors}}
+										<option value="{{.ID}}"{{if eq .ID $.CurActor}} selected{{end}}>{{.GetDisplayName}}</option>
+									{{end}}
+								</select>
+							</div>
+							<div class="field tw-mb-0 tw-flex-1 tw-min-w-[12rem]">
+								<label for="deployment-ref">{{ctx.Locale.Tr "actions.deployments.filter.ref"}}</label>
+								<input id="deployment-ref" type="search" name="ref" value="{{.CurRef}}" placeholder="{{ctx.Locale.Tr "actions.deployments.filter.ref_placeholder"}}">
+							</div>
+							<button class="ui primary button">{{ctx.Locale.Tr "actions.deployments.filter.apply"}}</button>
+						</div>
+					</form>
+				{{end}}
+				{{if .Deployments}}
+					<table class="ui table deployment-table" id="deployment-list">
+						<thead>
+							<tr>
+								{{if not $.CurEnvironment}}<th>{{ctx.Locale.Tr "actions.deployments.environment"}}</th>{{end}}
+								<th>{{ctx.Locale.Tr "actions.deployments.status"}}</th>
+								<th>{{ctx.Locale.Tr "actions.deployments.ref"}}</th>
+								<th>{{ctx.Locale.Tr "actions.deployments.run"}}</th>
+								<th>{{ctx.Locale.Tr "actions.deployments.triggered_by"}}</th>
+								<th>{{ctx.Locale.Tr "actions.deployments.review"}}</th>
+								<th>{{ctx.Locale.Tr "actions.deployments.time"}}</th>
+								{{if not $.CurEnvironment}}<th><span class="tw-sr-only">{{ctx.Locale.Tr "actions.deployments.history"}}</span></th>{{end}}
+							</tr>
+						</thead>
+						<tbody>
+							{{range .Deployments}}
+								<tr class="deployment-item">
+									{{if not $.CurEnvironment}}
+										<td class="deployment-environment-cell">{{svg "octicon-rocket"}} <a class="deployment-environment" href="{{$.DeploymentsLink}}?environment={{.Environment}}">{{.Environment}}</a></td>
+									{{end}}
+									<td><span class="tw-inline-flex tw-items-center tw-gap-1">{{template "repo/settings/environment_deployment_status" .}}</span></td>
+									<td>
+										<span class="deployment-label">{{ctx.Locale.Tr "actions.deployments.ref"}}</span>
+										{{if .RefName}}<span class="ui basic label">{{.RefName}}</span>{{end}}
+										{{if .CommitLink}}<a class="deployment-commit tw-font-mono" href="{{.CommitLink}}">{{.ShortSHA}}</a>{{end}}
+									</td>
+									<td>
+										<span class="deployment-label">{{ctx.Locale.Tr "actions.deployments.run"}}</span>
+										{{if .RunLink}}<a class="deployment-run" href="{{.RunLink}}">{{.RunTitle}} #{{.RunIndex}}</a>{{if .Job}} · {{end}}{{end}}{{.Job}}
+									</td>
+									<td>
+										<span class="deployment-label">{{ctx.Locale.Tr "actions.deployments.triggered_by"}}</span>
+										{{if .TriggerUser}}<span class="tw-inline-flex tw-items-center tw-gap-1">{{ctx.AvatarUtils.Avatar .TriggerUser 16}} {{.TriggerUser.GetDisplayName}}</span>{{end}}
+									</td>
+									<td class="deployment-review">
+										<span class="deployment-label">{{ctx.Locale.Tr "actions.deployments.review"}}</span>
+										{{if .Reviewer}}
+											{{if eq .Status.String "rejected"}}{{ctx.Locale.Tr "actions.deployments.rejected" .Reviewer.GetDisplayName}}{{else}}{{ctx.Locale.Tr "actions.deployments.approved" .Reviewer.GetDisplayName}}{{end}}
+										{{else if eq .Status.String "waiting_review"}}{{ctx.Locale.Tr "actions.deployments.waiting_reviewer"}}
+										{{else if eq .Status.String "expired"}}{{ctx.Locale.Tr "actions.deployments.review_expired"}}
+										{{else if or (eq .Status.String "refused") (eq .Status.String "cancelled")}}{{ctx.Locale.Tr "actions.deployments.review_not_asked"}}
+										{{else}}{{ctx.Locale.Tr "actions.deployments.review_not_required"}}{{end}}
+										{{if .ReviewComment}}<div class="deployment-comment tw-whitespace-pre-wrap tw-text-text-light">{{ctx.Locale.Tr "actions.deployments.comment" .ReviewComment}}</div>{{end}}
+									</td>
+									<td class="tw-whitespace-nowrap">{{DateUtils.TimeSince .When}}</td>
+									{{if not $.CurEnvironment}}
+										<td class="right aligned">
+											<a class="ui basic tiny button" href="{{$.DeploymentsLink}}?environment={{.Environment}}" aria-label="{{ctx.Locale.Tr "actions.deployments.history_of" .Environment}}">{{ctx.Locale.Tr "actions.deployments.history"}}</a>
+										</td>
+									{{end}}
+								</tr>
+							{{end}}
+							{{range .IdleEnvironments}}
+								<tr class="deployment-idle">
+									<td class="deployment-environment-cell">{{svg "octicon-rocket"}} <a class="deployment-environment" href="{{$.DeploymentsLink}}?environment={{.Name}}">{{.Name}}</a></td>
+									<td colspan="6" class="tw-text-text-light">{{ctx.Locale.Tr "actions.deployments.no_deployment"}}</td>
+								</tr>
+							{{end}}
+						</tbody>
+					</table>
+					{{template "base/paginate" .}}
+				{{else if .CurEnvironment}}
+					<div class="ui info message" id="deployments-empty">{{ctx.Locale.Tr "actions.deployments.none_match"}} <a href="{{.DeploymentsLink}}?environment={{.CurEnvironment.Name}}">{{ctx.Locale.Tr "actions.deployments.clear_filters"}}</a></div>
+				{{else}}
+					<div class="tw-text-center tw-py-8" id="deployments-empty">
+						{{svg "octicon-rocket" 32}}
+						<p class="tw-mt-2"><strong>{{ctx.Locale.Tr "actions.deployments.none"}}</strong></p>
+						<p>{{ctx.Locale.Tr "actions.deployments.none.desc" (HTMLFormat "<code>%s</code>" "environment: production")}}</p>
+					</div>
+				{{end}}
+			</div>
+		</div>
+	</div>
+</div>
+{{template "base/footer" .}}

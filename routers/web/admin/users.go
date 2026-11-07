@@ -712,6 +712,8 @@ func lastApproverKind(ctx *context.Context, kind string) string {
 		return ctx.Locale.TrString("admin.users.last_approver.kind.project_rule")
 	case user_service.LastApproverOrgRule:
 		return ctx.Locale.TrString("admin.users.last_approver.kind.org_rule")
+	case user_service.LastApproverEnvironment:
+		return ctx.Locale.TrString("admin.users.last_approver.kind.environment")
 	}
 	if ctx.Locale.HasKey(kind) { // another check's key
 		return ctx.Locale.TrString(kind)

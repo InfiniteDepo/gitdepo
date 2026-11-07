@@ -259,9 +259,9 @@ type ReviewDeploymentsOption struct {
 // ActionDeploymentReviewers summarizes who may review a deployment
 // swagger:model
 type ActionDeploymentReviewers struct {
-	// how many users the environment lists as reviewers
+	// how many users the environment lists as reviewers (0 unless the authenticated user may change the repository's Actions)
 	Users int `json:"users"`
-	// how many teams the environment lists as reviewers
+	// how many teams the environment lists as reviewers (0 unless the authenticated user may change the repository's Actions)
 	Teams int `json:"teams"`
 	// whether the authenticated user may review the deployment now
 	CanReview bool `json:"can_review"`

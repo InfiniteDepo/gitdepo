@@ -573,7 +573,12 @@ func TestCheckEnvironmentReviewersMatchesIneligibility(t *testing.T) {
 		if repoID != 24 { // org17 requires 2FA, which none of its members has
 			assert.NotEmpty(t, check.Readers, "repo %d", repoID)
 		}
-		assert.Less(t, len(check.Ineligible), len(users), "someone can approve on repo %d", repoID)
+		if repoID == 24 { // org17 requires 2FA: nobody without it approves, the site administrator included
+			assert.Len(t, check.Ineligible, len(users), "nobody can approve on repo %d", repoID)
+			assert.Equal(t, ReviewerTwoFactor, check.Ineligible["user:1"])
+		} else {
+			assert.Less(t, len(check.Ineligible), len(users), "someone can approve on repo %d", repoID)
+		}
 		assert.Equal(t, check.Readers, plain.Readers, "the readers don't depend on the doer")
 		for _, r := range check.Readers {
 			assert.Empty(t, check.Ineligible[fmt.Sprintf("user:%d", r.ID)], "reader %d of repo %d can approve", r.ID, repoID)
@@ -638,7 +643,7 @@ func TestCheckEnvironmentReviewersOutsiders(t *testing.T) {
 		require.NoError(t, db.Insert(ctx, &repo_model.RepoUnit{RepoID: repo.ID, Type: unit.TypeActions}))
 		check := decide(repo, owner)
 		assert.Equal(t, map[string]string{"user:1": ReviewerOutsider, "user:4": ReviewerOutsider, "user:8": ReviewerOutsider, "user:9": ReviewerOutsider, "user:24": ReviewerOutsider}, check.Ineligible)
-		assert.False(t, check.NoReviewer[1], "an outsider may approve a public repository's deployments")
+		assert.True(t, check.NoReviewer[1], "reading a public repository is not enough to approve its deployments")
 		assert.NotContains(t, readers(check), int64(1))
 		assert.NotContains(t, readers(check), int64(8))
 
@@ -646,7 +651,7 @@ func TestCheckEnvironmentReviewersOutsiders(t *testing.T) {
 		check = decide(repo, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1}))
 		assert.Equal(t, ReviewerTwoFactor, check.Ineligible["user:4"])
 		assert.Equal(t, ReviewerNotUsable, check.Ineligible["user:9"])
-		assert.Empty(t, check.Ineligible["user:24"])
+		assert.Equal(t, ReviewerOutsider, check.Ineligible["user:24"], "usable, but without a membership path")
 	})
 
 	t.Run("a public repository of a user", func(t *testing.T) {
