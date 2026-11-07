@@ -157,6 +157,8 @@
 		</div>
 	</div>
 
+	{{if .BaseTargetText}}<p class="tw-text-text-light-2" id="base-target-text">{{.BaseTargetText}}</p>{{end}}
+
 	{{if .IsNothingToCompare}}
 		{{if and $.IsSigned $.AllowEmptyPr (not .Repository.IsArchived) .PageIsComparePull}}
 			<div class="ui segment">{{ctx.Locale.Tr "repo.pulls.nothing_to_compare_and_allow_empty_pr"}}</div>

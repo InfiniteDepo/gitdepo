@@ -5,7 +5,11 @@ package forms
 
 import (
 	"net/http"
+	"slices"
+	"strconv"
+	"strings"
 
+	repo_model "forgejo.org/models/repo"
 	"forgejo.org/modules/web/middleware"
 	"forgejo.org/services/context"
 
@@ -33,7 +37,32 @@ type BranchingModelForm struct {
 	MergeForward              bool
 	MergeForwardNeverBypass   bool
 	MergeForwardAnyoneMaySkip bool
-	EnforceModel              bool // organizations only
+	DefaultPRTarget           string
+	// the branch types besides Release, one entry per table row; TypeOn holds the indexes of the rows that are on
+	TypeName     []string
+	TypePrefix   []string
+	TypeBase     []string
+	TypeBranch   []string
+	TypeOn       []string
+	EnforceModel bool // organizations only
+}
+
+// Model builds the branching model the form describes; branchworkflow.NormalizeBranchingModel checks it.
+func (f *BranchingModelForm) Model() *repo_model.BranchingModel {
+	m := &repo_model.BranchingModel{DevelopmentBranch: f.DevelopmentBranch, ProductionBranch: f.ProductionBranch, ReleasePrefixes: strings.Split(f.ReleasePrefixes, ","), DefaultPRTarget: f.DefaultPRTarget, MergeForward: f.MergeForward, MergeForwardNeverBypass: f.MergeForwardNeverBypass, MergeForwardAnyoneMaySkip: f.MergeForwardAnyoneMaySkip}
+	at := func(l []string, i int) string {
+		if i < len(l) {
+			return l[i]
+		}
+		return ""
+	}
+	for i, name := range f.TypeName {
+		if strings.TrimSpace(name) == "" && strings.TrimSpace(at(f.TypePrefix, i)) == "" { // an empty row of the table
+			continue
+		}
+		m.Types = append(m.Types, repo_model.BranchType{Name: name, Prefix: at(f.TypePrefix, i), Base: at(f.TypeBase, i), BaseBranch: at(f.TypeBranch, i), Off: !slices.Contains(f.TypeOn, strconv.Itoa(i))})
+	}
+	return m
 }
 
 // Validate validates the fields

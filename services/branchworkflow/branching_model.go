@@ -11,16 +11,20 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
+	pull_model "forgejo.org/models/pull"
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/git"
 	"forgejo.org/modules/json"
 	"forgejo.org/modules/optional"
+	api "forgejo.org/modules/structs"
 )
 
 const (
@@ -31,6 +35,9 @@ const (
 	maxReleasePrefixLen  = 100
 	maxDevelopmentBranch = 255
 	maxVersionPartDigits = 9
+	maxBranchTypes       = 20
+	maxTypeNameLen       = 50
+	maxTypePrefixLen     = 100
 )
 
 // ErrInvalidBranchingModel is returned for a development branch or release prefix that can't be part of a branch name.
@@ -45,13 +52,57 @@ func (e ErrInvalidBranchingModel) Error() string {
 // ErrTooManyReleasePrefixes is returned for more than maxReleasePrefixes prefixes.
 var ErrTooManyReleasePrefixes = fmt.Errorf("at most %d release prefixes", maxReleasePrefixes)
 
+// ErrTooManyBranchTypes is returned for more than maxBranchTypes branch types.
+var ErrTooManyBranchTypes = fmt.Errorf("at most %d branch types", maxBranchTypes)
+
+// validBranchRef tells if b can be a branch the model names: a valid ref name that is no merge queue branch.
+func validBranchRef(b string) bool {
+	return b != "" && len(b) <= maxDevelopmentBranch && git.IsValidRefPattern(b) && !pull_model.IsMergeQueueBranch(b)
+}
+
+// normalizeTypes checks the branch types; prefixes must differ from each other and from the release prefixes.
+func normalizeTypes(in []repo_model.BranchType, release []string) ([]repo_model.BranchType, error) {
+	if len(in) > maxBranchTypes {
+		return nil, ErrTooManyBranchTypes
+	}
+	var out []repo_model.BranchType
+	seen := slices.Clone(release)
+	for _, t := range in {
+		t.Name, t.Prefix, t.BaseBranch = strings.TrimSpace(t.Name), strings.TrimSpace(t.Prefix), strings.TrimSpace(t.BaseBranch)
+		if t.Name == "" || utf8.RuneCountInString(t.Name) > maxTypeNameLen || !utf8.ValidString(t.Name) || strings.ContainsFunc(t.Name, unicode.IsControl) {
+			return nil, ErrInvalidBranchingModel{t.Name}
+		}
+		mergeQueue := pull_model.MergeQueueBranchPrefix
+		if t.Prefix == "" || len(t.Prefix) > maxTypePrefixLen || strings.Contains(t.Prefix, ",") || !git.IsValidRefPattern(t.Prefix+"x") ||
+			strings.HasPrefix(mergeQueue, t.Prefix) || strings.HasPrefix(t.Prefix, mergeQueue) || slices.Contains(seen, t.Prefix) {
+			return nil, ErrInvalidBranchingModel{t.Prefix}
+		}
+		seen = append(seen, t.Prefix)
+		switch t.Base {
+		case repo_model.BranchTypeBaseDevelopment, repo_model.BranchTypeBaseProduction:
+			t.BaseBranch = ""
+		case repo_model.BranchTypeBaseBranch:
+			if !validBranchRef(t.BaseBranch) {
+				return nil, ErrInvalidBranchingModel{t.BaseBranch}
+			}
+		default:
+			return nil, ErrInvalidBranchingModel{t.Base}
+		}
+		out = append(out, t)
+	}
+	return out, nil
+}
+
 // NormalizeBranchingModel trims the values, drops empty and repeated prefixes and checks the rest.
 func NormalizeBranchingModel(m *repo_model.BranchingModel) (*repo_model.BranchingModel, error) {
-	out := &repo_model.BranchingModel{DevelopmentBranch: strings.TrimSpace(m.DevelopmentBranch), ProductionBranch: strings.TrimSpace(m.ProductionBranch), MergeForward: m.MergeForward, MergeForwardNeverBypass: m.MergeForwardNeverBypass, MergeForwardAnyoneMaySkip: m.MergeForwardAnyoneMaySkip}
+	out := &repo_model.BranchingModel{DevelopmentBranch: strings.TrimSpace(m.DevelopmentBranch), ProductionBranch: strings.TrimSpace(m.ProductionBranch), DefaultPRTarget: strings.TrimSpace(m.DefaultPRTarget), MergeForward: m.MergeForward, MergeForwardNeverBypass: m.MergeForwardNeverBypass, MergeForwardAnyoneMaySkip: m.MergeForwardAnyoneMaySkip}
 	for _, b := range []string{out.DevelopmentBranch, out.ProductionBranch} {
 		if b != "" && (len(b) > maxDevelopmentBranch || !git.IsValidRefPattern(b)) {
 			return nil, ErrInvalidBranchingModel{b}
 		}
+	}
+	if out.DefaultPRTarget != "" && !validBranchRef(out.DefaultPRTarget) {
+		return nil, ErrInvalidBranchingModel{out.DefaultPRTarget}
 	}
 	if out.ProductionBranch != "" && out.ProductionBranch == out.DevelopmentBranch {
 		return nil, ErrInvalidBranchingModel{out.ProductionBranch}
@@ -70,7 +121,21 @@ func NormalizeBranchingModel(m *repo_model.BranchingModel) (*repo_model.Branchin
 	if len(out.ReleasePrefixes) > maxReleasePrefixes {
 		return nil, ErrTooManyReleasePrefixes
 	}
+	var err error
+	if out.Types, err = normalizeTypes(m.Types, out.ReleasePrefixes); err != nil {
+		return nil, err
+	}
+	for _, t := range out.Types {
+		if t.Prefix == out.DevelopmentBranch || t.Prefix == out.ProductionBranch {
+			return nil, ErrInvalidBranchingModel{t.Prefix}
+		}
+	}
 	return out, nil
+}
+
+// isEmpty tells if the model sets nothing that a repository could inherit.
+func isEmpty(m *repo_model.BranchingModel) bool {
+	return len(m.ReleasePrefixes) == 0 && m.ProductionBranch == "" && len(m.Types) == 0 && m.DefaultPRTarget == ""
 }
 
 // parseVersion reads the part of a release branch name after its prefix: numbers separated by dots, optionally after a "v".
@@ -258,6 +323,8 @@ func auditModel(m *repo_model.BranchingModel, locked bool) map[string]any {
 		"merge_forward":                 m.MergeForward,
 		"merge_forward_never_bypass":    m.MergeForwardNeverBypass,
 		"merge_forward_anyone_may_skip": m.MergeForwardAnyoneMaySkip,
+		"types":                         typeAudit(m.Types),
+		"default_pr_target":             m.DefaultPRTarget,
 		"model_locked":                  locked,
 	}
 }
@@ -271,7 +338,7 @@ func SetOrgModel(ctx context.Context, org *user_model.User, m *repo_model.Branch
 			return err
 		}
 	}
-	if m != nil && len(m.ReleasePrefixes) == 0 && m.ProductionBranch == "" {
+	if m != nil && isEmpty(m) {
 		m = nil
 	}
 	if locked && m == nil {
@@ -342,6 +409,19 @@ func SetRepoModel(ctx context.Context, repo *repo_model.Repository, m *repo_mode
 	})
 }
 
+// typeAudit lists the branch types as "name|prefix|base|branch|on or off".
+func typeAudit(types []repo_model.BranchType) []string {
+	out := []string{}
+	for _, t := range types {
+		state := "on"
+		if t.Off {
+			state = "off"
+		}
+		out = append(out, strings.Join([]string{t.Name, t.Prefix, t.Base, t.BaseBranch, state}, "|"))
+	}
+	return out
+}
+
 func repoAuditModel(m *repo_model.BranchingModel) map[string]any {
 	data := auditModel(m, false)
 	delete(data, "model_locked")
@@ -355,4 +435,22 @@ func IsInvalidBranchingModel(err error) (string, bool) {
 		return e.Value, true
 	}
 	return "", false
+}
+
+// TypesToAPI converts the branch types for the API.
+func TypesToAPI(types []repo_model.BranchType) []api.BranchType {
+	out := make([]api.BranchType, 0, len(types))
+	for _, t := range types {
+		out = append(out, api.BranchType{Name: t.Name, Prefix: t.Prefix, Base: t.Base, BaseBranch: t.BaseBranch, Off: t.Off})
+	}
+	return out
+}
+
+// TypesFromAPI converts branch types of an API request; NormalizeBranchingModel checks them.
+func TypesFromAPI(types []api.BranchType) []repo_model.BranchType {
+	var out []repo_model.BranchType
+	for _, t := range types {
+		out = append(out, repo_model.BranchType{Name: t.Name, Prefix: t.Prefix, Base: t.Base, BaseBranch: t.BaseBranch, Off: t.Off})
+	}
+	return out
 }

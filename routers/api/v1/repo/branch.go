@@ -119,6 +119,8 @@ func DeleteBranch(ctx *context.APIContext) {
 	//     "$ref": "#/responses/error"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
+	//   "409":
+	//     "$ref": "#/responses/error"
 	//   "423":
 	//     "$ref": "#/responses/repoArchivedError"
 	if ctx.Repo().Repository.IsEmpty {
@@ -158,6 +160,8 @@ func DeleteBranch(ctx *context.APIContext) {
 			ctx.Error(http.StatusForbidden, "DefaultBranch", errors.New("can not delete default branch"))
 		case errors.Is(err, git_model.ErrBranchIsProtected):
 			ctx.Error(http.StatusForbidden, "IsProtectedBranch", errors.New("branch protected"))
+		case errors.Is(err, repo_service.ErrBranchHasNewCommits):
+			ctx.Error(http.StatusConflict, "BranchMoved", errors.New("the branch was pushed to meanwhile and was not deleted"))
 		default:
 			ctx.Error(http.StatusInternalServerError, "DeleteBranch", err)
 		}

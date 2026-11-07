@@ -29,6 +29,7 @@ import (
 	timeutil "forgejo.org/modules/timeutil"
 	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
+	"forgejo.org/services/branchworkflow"
 	app_context "forgejo.org/services/context"
 	repo_service "forgejo.org/services/repository"
 	secretscan_service "forgejo.org/services/secretscan"
@@ -307,8 +308,19 @@ func HookPostReceive(ctx *app_context.PrivateContext) {
 
 			branch := refFullName.BranchName()
 
+			// The branching model of the base repository chooses the branch the pull request would target
+			target, err := branchworkflow.ResolveTarget(ctx, baseRepo, branch)
+			if err != nil {
+				log.Error("Failed to resolve the pull request target of %-v branch %s: %v", baseRepo, branch, err)
+				ctx.JSON(http.StatusInternalServerError, private.HookPostReceiveResult{
+					Err:          fmt.Sprintf("Failed to resolve the pull request target of %-v branch %s: %v", baseRepo, branch, err),
+					RepoWasEmpty: wasEmpty,
+				})
+				return
+			}
+
 			// If our branch is the default branch of an unforked repo - there's no PR to create or refer to
-			if !repo.IsFork && branch == baseRepo.DefaultBranch {
+			if !repo.IsFork && (branch == baseRepo.DefaultBranch || branch == target.Branch) {
 				results = append(results, private.HookPostReceiveBranchResult{})
 				continue
 			}
@@ -338,7 +350,7 @@ func HookPostReceive(ctx *app_context.PrivateContext) {
 			if repo.IsFork {
 				branch = fmt.Sprintf("%s:%s", repo.OwnerName, branch)
 			}
-			createURL := fmt.Sprintf("%s/compare/%s...%s", baseRepo.HTMLURL(), util.PathEscapeSegments(baseRepo.DefaultBranch), util.PathEscapeSegments(branch))
+			createURL := fmt.Sprintf("%s/compare/%s...%s", baseRepo.HTMLURL(), util.PathEscapeSegments(target.Branch), util.PathEscapeSegments(branch))
 			var urls []string
 			foundDefaultBranch := false
 			for _, pr := range prList {
@@ -351,7 +363,7 @@ func HookPostReceive(ctx *app_context.PrivateContext) {
 					baseBranchDisplay = fmt.Sprintf("%s:%s", pr.BaseRepo.FullName(), pr.BaseBranch)
 				}
 				urls = append(urls, fmt.Sprintf("%s/pulls/%d merges into %s", baseRepo.HTMLURL(), pr.Index, baseBranchDisplay))
-				if pr.BaseBranch == baseRepo.DefaultBranch {
+				if pr.BaseBranch == target.Branch {
 					foundDefaultBranch = true
 				}
 			}

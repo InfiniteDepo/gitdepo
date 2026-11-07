@@ -33,6 +33,7 @@ import (
 	"forgejo.org/modules/util"
 	webhook_module "forgejo.org/modules/webhook"
 	actions_service "forgejo.org/services/actions"
+	"forgejo.org/services/branchworkflow"
 	notify_service "forgejo.org/services/notify"
 	pull_service "forgejo.org/services/pull"
 	files_service "forgejo.org/services/repository/files"
@@ -453,6 +454,22 @@ var (
 	ErrBranchHasNewCommits = errors.New("branch has new commits")
 )
 
+// The kept reasons that don't come from branchworkflow.KeptReason.
+const (
+	KeptNewCommits = "new_commits"
+	KeptPermission = "permission"
+)
+
+// ErrBranchKept says that a branch is kept because of the branching model or a protection rule; Reason is one of
+// the branchworkflow.Kept constants.
+type ErrBranchKept struct {
+	Reason string
+}
+
+func (e ErrBranchKept) Error() string {
+	return "branch is kept: " + e.Reason
+}
+
 // DeleteBranch delete branch
 func DeleteBranch(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, gitRepo *git.Repository, branchName string) error {
 	err := repo.MustNotBeArchived()
@@ -503,10 +520,15 @@ func DeleteBranch(ctx context.Context, doer *user_model.User, repo *repo_model.R
 			return err
 		}
 
+		// compare-and-swap on the tip read above: a push in between is not deleted with its commits
 		return gitRepo.DeleteBranch(branchName, git.DeleteBranchOptions{
-			Force: true,
+			Force:          true,
+			ExpectedCommit: commit.ID.String(),
 		})
 	}); err != nil {
+		if now, err2 := gitRepo.GetBranchCommitID(branchName); err2 == nil && now != commit.ID.String() {
+			return ErrBranchHasNewCommits
+		}
 		return err
 	}
 
@@ -531,10 +553,31 @@ func DeleteBranch(ctx context.Context, doer *user_model.User, repo *repo_model.R
 	return nil
 }
 
+// KeptCode returns the reason code (a closed set) when err only says that the head branch was kept on purpose after
+// a successful merge.
+func KeptCode(err error) (string, bool) {
+	if kept, ok := errors.AsType[ErrBranchKept](err); ok {
+		return kept.Reason, true
+	}
+	switch {
+	case errors.Is(err, ErrBranchIsDefault):
+		return branchworkflow.KeptDefault, true
+	case errors.Is(err, ErrBranchInUse):
+		return branchworkflow.KeptOpenPR, true
+	case errors.Is(err, ErrBranchHasNewCommits):
+		return KeptNewCommits, true
+	case errors.Is(err, git_model.ErrBranchIsProtected):
+		return branchworkflow.KeptProtected, true
+	case errors.Is(err, util.ErrPermissionDenied):
+		return KeptPermission, true
+	}
+	return "", false
+}
+
 // IsBranchKept tells if err only says that the head branch was kept on purpose after a successful merge.
 func IsBranchKept(err error) bool {
-	return errors.Is(err, ErrBranchIsDefault) || errors.Is(err, ErrBranchInUse) || errors.Is(err, ErrBranchHasNewCommits) ||
-		errors.Is(err, git_model.ErrBranchIsProtected) || errors.Is(err, util.ErrPermissionDenied)
+	_, ok := KeptCode(err)
+	return ok
 }
 
 // DeleteBranchAfterMerge deletes the head branch after a PR was merged associated with the head branch.
@@ -542,6 +585,24 @@ func DeleteBranchAfterMerge(ctx context.Context, doer *user_model.User, pr *issu
 	// The head branch of an AGit pull request ("<user>/<topic>") is not a real branch and can match an unrelated one.
 	if pr.Flow == issues_model.PullRequestFlowAGit {
 		return nil
+	}
+
+	// Never delete the default, development, production, release or a protected branch of the repository that owns it.
+	reason, err := branchworkflow.KeptReason(ctx, pr.HeadRepo, pr.HeadBranch, false)
+	if err != nil {
+		return err
+	}
+	if reason != "" {
+		// under "Always" the merger didn't choose the deletion, so reviewers are told why it didn't happen
+		if err := pr.LoadBaseRepo(ctx); err != nil {
+			return err
+		}
+		if always, err := branchworkflow.IsAlways(ctx, pr.BaseRepo); err == nil && always && reason != branchworkflow.KeptDefault {
+			if _, err := issues_model.CreateAutoMergeComment(ctx, issues_model.CommentTypePRBranchKept, pr, doer, issues_model.AutoMergeInfo{Reason: reason}); err != nil {
+				log.Error("DeleteBranchAfterMerge: %v", err)
+			}
+		}
+		return ErrBranchKept{reason}
 	}
 
 	// Don't cleanup when there are other PR's that use this branch as head branch.

@@ -157,8 +157,17 @@ func SetRepo(ctx context.Context, repo *repo_model.Repository, mode repo_model.D
 		return ErrNoPullRequests
 	}
 	cfg := u.PullRequestsConfig()
+	before := cfg.GetDeleteBranchAfterMerge()
 	cfg.DeleteBranchAfterMerge, cfg.DefaultDeleteBranchAfterMerge = mode, false
-	return repo_model.UpdateRepoUnit(ctx, u)
+	return db.WithTx(ctx, func(ctx context.Context) error {
+		if err := repo_model.UpdateRepoUnit(ctx, u); err != nil {
+			return err
+		}
+		if changes := audit_model.Changes(map[string]any{"mode": before.String()}, map[string]any{"mode": mode.String()}); changes != nil {
+			return repo_model.RecordRepo(ctx, "repo.branch_workflow.changed", repo, changes)
+		}
+		return nil
+	})
 }
 
 // SetByText says who decided the value, for the merge box and the settings pages.

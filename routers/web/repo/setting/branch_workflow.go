@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"forgejo.org/models/organization"
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/modules/base"
 	"forgejo.org/modules/web"
@@ -48,6 +49,13 @@ func PrepareMergedBranches(ctx *context.Context, scope repo_service.MergedBranch
 	ctx.Data["MergedBackLink"] = back
 	ctx.Data["MergedShowRepos"] = scope.Repo == nil
 	ctx.Data["MergedConfirmName"] = mergedConfirmName(ctx, scope)
+	if hours, ok := branchworkflow.RestoreWindow(); ok {
+		if hours == 0 {
+			ctx.Data["RestoreText"] = ctx.Tr("repo.settings.delete_merged.restore")
+		} else {
+			ctx.Data["RestoreText"] = ctx.Locale.TrPluralString(hours, "repo.settings.delete_merged.restore_hours", hours)
+		}
+	}
 	if !preview {
 		return true
 	}
@@ -151,6 +159,40 @@ func prepareBranchWorkflow(ctx *context.Context) bool {
 	ctx.Data["MergeForwardNeverBypass"] = shownModel.MergeForwardNeverBypass
 	ctx.Data["MergeForwardAnyoneMaySkip"] = shownModel.MergeForwardAnyoneMaySkip
 	ctx.Data["ProductionBranch"] = shownModel.ProductionBranch
+	ctx.Data["ModelTypes"] = shownModel.Types
+	ctx.Data["DefaultPRTarget"] = shownModel.DefaultPRTarget
+	if model.Locked && ctx.Doer != nil {
+		isOwner, err := organization.OrgFromUser(ctx.Repo.Owner).IsActingOwner(ctx, ctx.Doer)
+		if err != nil {
+			ctx.ServerError("IsActingOwner", err)
+			return false
+		}
+		if isOwner || ctx.Doer.IsAdmin {
+			ctx.Data["ModelSettingsLink"] = ctx.Repo.Owner.OrganisationLink() + "/settings/branch_workflow#branching-model"
+		}
+	}
+	missing, err := branchworkflow.MissingBases(ctx, ctx.Repo.Repository, shownModel)
+	if err != nil {
+		ctx.ServerError("MissingBases", err)
+		return false
+	}
+	ctx.Data["MissingBases"] = missing
+	counts, err := branchworkflow.CountUntyped(ctx, ctx.Repo.Repository, shownModel)
+	if err != nil {
+		ctx.ServerError("CountUntyped", err)
+		return false
+	}
+	type untyped struct {
+		Prefix string
+		Count  int
+	}
+	var lost []untyped
+	for _, t := range shownModel.Types {
+		if counts[t.Prefix] > 0 {
+			lost = append(lost, untyped{t.Prefix, counts[t.Prefix]})
+		}
+	}
+	ctx.Data["UntypedCounts"] = lost
 	chain, err := branchworkflow.GetChain(ctx, ctx.Repo.Repository, model)
 	if err != nil {
 		ctx.ServerError("GetChain", err)
@@ -173,7 +215,7 @@ func BranchingModelPost(ctx *context.Context) {
 	form := web.GetForm(ctx).(*forms.BranchingModelForm)
 	var model *repo_model.BranchingModel
 	if !form.Inherit || !ctx.Repo.Owner.IsOrganization() {
-		model = &repo_model.BranchingModel{DevelopmentBranch: form.DevelopmentBranch, ProductionBranch: form.ProductionBranch, ReleasePrefixes: strings.Split(form.ReleasePrefixes, ","), MergeForward: form.MergeForward, MergeForwardNeverBypass: form.MergeForwardNeverBypass, MergeForwardAnyoneMaySkip: form.MergeForwardAnyoneMaySkip}
+		model = form.Model()
 	}
 	err := branchworkflow.SetRepoModel(ctx, ctx.Repo.Repository, model)
 	if value, ok := branchworkflow.IsInvalidBranchingModel(err); ok {
@@ -182,6 +224,8 @@ func BranchingModelPost(ctx *context.Context) {
 		switch {
 		case errors.Is(err, branchworkflow.ErrTooManyReleasePrefixes):
 			ctx.Flash.Error(ctx.Tr("repo.settings.branching_model.too_many_prefixes"))
+		case errors.Is(err, branchworkflow.ErrTooManyBranchTypes):
+			ctx.Flash.Error(ctx.Tr("repo.settings.branching_model.too_many_types"))
 		case errors.Is(err, branchworkflow.ErrLocked):
 			ctx.Error(http.StatusForbidden, ctx.Locale.TrString("repo.settings.branching_model.locked"))
 			return

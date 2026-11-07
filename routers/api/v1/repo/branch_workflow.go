@@ -130,6 +130,8 @@ func renderBranchingModel(ctx *context.APIContext) {
 			DevelopmentBranch:         eff.DevelopmentBranch(repo),
 			ReleasePrefixes:           append([]string{}, eff.Model.ReleasePrefixes...),
 			ProductionBranch:          eff.Model.ProductionBranch,
+			Types:                     branchworkflow.TypesToAPI(eff.Model.Types),
+			DefaultPRTarget:           eff.Model.DefaultPRTarget,
 			MergeForward:              eff.Model.MergeForward,
 			MergeForwardNeverBypass:   eff.Model.MergeForwardNeverBypass,
 			MergeForwardAnyoneMaySkip: eff.Model.MergeForwardAnyoneMaySkip,
@@ -140,7 +142,7 @@ func renderBranchingModel(ctx *context.APIContext) {
 		IgnoredBranches: append([]string{}, chain.Ignored...),
 	}
 	if eff.Configured != nil {
-		res.Own = &api.BranchingModel{DevelopmentBranch: eff.Configured.DevelopmentBranch, ReleasePrefixes: append([]string{}, eff.Configured.ReleasePrefixes...), ProductionBranch: eff.Configured.ProductionBranch, MergeForward: eff.Configured.MergeForward, MergeForwardNeverBypass: eff.Configured.MergeForwardNeverBypass, MergeForwardAnyoneMaySkip: eff.Configured.MergeForwardAnyoneMaySkip}
+		res.Own = &api.BranchingModel{DevelopmentBranch: eff.Configured.DevelopmentBranch, ReleasePrefixes: append([]string{}, eff.Configured.ReleasePrefixes...), ProductionBranch: eff.Configured.ProductionBranch, Types: branchworkflow.TypesToAPI(eff.Configured.Types), DefaultPRTarget: eff.Configured.DefaultPRTarget, MergeForward: eff.Configured.MergeForward, MergeForwardNeverBypass: eff.Configured.MergeForwardNeverBypass, MergeForwardAnyoneMaySkip: eff.Configured.MergeForwardAnyoneMaySkip}
 	}
 	if eff.Locked {
 		res.LockedBy = eff.SetBy
@@ -213,10 +215,10 @@ func EditBranchingModel(ctx *context.APIContext) {
 	form := web.GetForm(ctx).(*api.EditRepoBranchingModelOption)
 	var model *repo_model.BranchingModel
 	if !form.Inherit {
-		model = &repo_model.BranchingModel{DevelopmentBranch: form.DevelopmentBranch, ReleasePrefixes: form.ReleasePrefixes, ProductionBranch: form.ProductionBranch, MergeForward: form.MergeForward, MergeForwardNeverBypass: form.MergeForwardNeverBypass, MergeForwardAnyoneMaySkip: form.MergeForwardAnyoneMaySkip}
+		model = &repo_model.BranchingModel{DevelopmentBranch: form.DevelopmentBranch, ReleasePrefixes: form.ReleasePrefixes, ProductionBranch: form.ProductionBranch, Types: branchworkflow.TypesFromAPI(form.Types), DefaultPRTarget: form.DefaultPRTarget, MergeForward: form.MergeForward, MergeForwardNeverBypass: form.MergeForwardNeverBypass, MergeForwardAnyoneMaySkip: form.MergeForwardAnyoneMaySkip}
 	}
 	err := branchworkflow.SetRepoModel(ctx, ctx.Repo().Repository, model)
-	if _, ok := branchworkflow.IsInvalidBranchingModel(err); ok || errors.Is(err, branchworkflow.ErrTooManyReleasePrefixes) {
+	if _, ok := branchworkflow.IsInvalidBranchingModel(err); ok || errors.Is(err, branchworkflow.ErrTooManyReleasePrefixes) || errors.Is(err, branchworkflow.ErrTooManyBranchTypes) {
 		ctx.Error(http.StatusUnprocessableEntity, "SetRepoModel", err)
 		return
 	}

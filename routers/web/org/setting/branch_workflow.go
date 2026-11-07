@@ -58,6 +58,8 @@ func renderBranchWorkflow(ctx *context.Context, preview bool) {
 		ctx.Data["MergeForwardNeverBypass"] = model.MergeForwardNeverBypass
 		ctx.Data["MergeForwardAnyoneMaySkip"] = model.MergeForwardAnyoneMaySkip
 		ctx.Data["ProductionBranch"] = model.ProductionBranch
+		ctx.Data["ModelTypes"] = model.Types
+		ctx.Data["DefaultPRTarget"] = model.DefaultPRTarget
 	}
 	ctx.Data["EnforceModel"] = modelLocked
 	if !repo_setting.PrepareMergedBranches(ctx, repo_service.MergedBranchScope{Org: ctx.Org.Organization.AsUser()}, ctx.Org.OrgLink+"/settings/branch_workflow", preview) {
@@ -90,14 +92,15 @@ func BranchWorkflowPost(ctx *context.Context) {
 // BranchingModelPost saves the organization's branching model.
 func BranchingModelPost(ctx *context.Context) {
 	form := web.GetForm(ctx).(*forms.BranchingModelForm)
-	model := &repo_model.BranchingModel{DevelopmentBranch: form.DevelopmentBranch, ProductionBranch: form.ProductionBranch, ReleasePrefixes: strings.Split(form.ReleasePrefixes, ","), MergeForward: form.MergeForward, MergeForwardNeverBypass: form.MergeForwardNeverBypass, MergeForwardAnyoneMaySkip: form.MergeForwardAnyoneMaySkip}
-	err := branchworkflow.SetOrgModel(ctx, ctx.Org.Organization.AsUser(), model, form.EnforceModel)
+	err := branchworkflow.SetOrgModel(ctx, ctx.Org.Organization.AsUser(), form.Model(), form.EnforceModel)
 	if value, ok := branchworkflow.IsInvalidBranchingModel(err); ok {
 		ctx.Flash.Error(ctx.Tr("repo.settings.branching_model.invalid", value))
 	} else {
 		switch {
 		case errors.Is(err, branchworkflow.ErrTooManyReleasePrefixes):
 			ctx.Flash.Error(ctx.Tr("repo.settings.branching_model.too_many_prefixes"))
+		case errors.Is(err, branchworkflow.ErrTooManyBranchTypes):
+			ctx.Flash.Error(ctx.Tr("repo.settings.branching_model.too_many_types"))
 		case errors.Is(err, branchworkflow.ErrLockWithoutValue):
 			ctx.Flash.Error(ctx.Tr("org.settings.branching_model.enforce_needs_value"))
 		case err != nil:

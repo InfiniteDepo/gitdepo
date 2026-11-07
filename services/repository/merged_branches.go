@@ -10,13 +10,12 @@ import (
 	"strings"
 
 	"forgejo.org/models/db"
-	git_model "forgejo.org/models/git"
-	issues_model "forgejo.org/models/issues"
 	repo_model "forgejo.org/models/repo"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/git"
 	"forgejo.org/modules/gitrepo"
 	"forgejo.org/modules/log"
+	"forgejo.org/services/branchworkflow"
 
 	"xorm.io/builder"
 )
@@ -58,8 +57,9 @@ func mergedBranchRepos(ctx context.Context, scope MergedBranchScope, ids ...int6
 	return repos, sess.OrderBy("group_name, lower_name").Find(&repos)
 }
 
-// mergedBranches returns the branches of repo whose tip is in the default branch, without the default branch, branches
-// at its tip, branches matched by a protection rule and the head or base branches of open pull requests.
+// mergedBranches returns the branches of repo whose tip is in the default branch, without those at its tip and those
+// branchworkflow.KeptReason keeps: default, development, production, release and protected branches, merge queue
+// branches and the head or base branches of open pull requests.
 func mergedBranches(ctx context.Context, repo *repo_model.Repository, gitRepo *git.Repository) ([]mergedBranch, error) {
 	tip, err := gitRepo.GetBranchCommitID(repo.DefaultBranch)
 	if err != nil {
@@ -73,31 +73,15 @@ func mergedBranches(ctx context.Context, repo *repo_model.Repository, gitRepo *g
 	if err != nil {
 		return nil, err
 	}
-	rules, err := git_model.FindProtectedBranchRulesForRepo(ctx, repo)
+	kept, err := branchworkflow.NewKeptChecker(ctx, repo, true)
 	if err != nil {
 		return nil, err
-	}
-	var prs []*issues_model.PullRequest
-	if err := db.GetEngine(ctx).Join("INNER", "issue", "issue.id = pull_request.issue_id").
-		Where(builder.Eq{"issue.is_closed": false, "pull_request.has_merged": false}).
-		And(builder.Eq{"pull_request.head_repo_id": repo.ID}.Or(builder.Eq{"pull_request.base_repo_id": repo.ID})).
-		Find(&prs); err != nil {
-		return nil, err
-	}
-	inUse := map[string]bool{repo.DefaultBranch: true}
-	for _, pr := range prs {
-		if pr.HeadRepoID == repo.ID {
-			inUse[pr.HeadBranch] = true
-		}
-		if pr.BaseRepoID == repo.ID {
-			inUse[pr.BaseBranch] = true
-		}
 	}
 	var branches []mergedBranch
 	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 		sha, ref, ok := strings.Cut(line, " ")
 		name, isBranch := strings.CutPrefix(ref, git.BranchPrefix)
-		if !ok || !isBranch || sha == tip || inUse[name] || rules.GetFirstMatched(name) != nil {
+		if !ok || !isBranch || sha == tip || kept.Reason(name) != "" {
 			continue
 		}
 		branches = append(branches, mergedBranch{name, sha})

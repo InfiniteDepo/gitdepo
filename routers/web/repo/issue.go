@@ -2168,6 +2168,18 @@ func ViewIssue(ctx *context.Context) {
 			isPullBranchDeletable = !exist
 		}
 		ctx.Data["IsPullBranchDeletable"] = isPullBranchDeletable
+		ctx.Data["DeleteBranchKept"] = ""
+		if isPullBranchDeletable && !pull.HasMerged {
+			// say it before the merge: the branching model keeps this head branch whatever the merger ticks
+			reason, err := branchworkflow.KeptReason(ctx, pull.HeadRepo, pull.HeadBranch, false)
+			if err != nil {
+				ctx.ServerError("KeptReason", err)
+				return
+			}
+			if reason != "" {
+				ctx.Data["DeleteBranchKept"] = keptWillBeText(ctx, pull.HeadBranch, reason)
+			}
+		}
 
 		deleteBranch, err := branchworkflow.GetEffective(ctx, ctx.Repo.Repository)
 		if err != nil {

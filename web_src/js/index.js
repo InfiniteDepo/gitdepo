@@ -64,6 +64,7 @@ import {
   initRepoSettingSearchTeamBox,
 } from './features/repo-settings.js';
 import {initRepoSettingsEnvironment} from './features/repo-settings-environments.js';
+import {initBranchingModel} from './features/branching-model.js';
 import {initRepoDiffView} from './features/repo-diff.js';
 import {initRepoSuggestionApply} from './features/repo-suggestion.js';
 import {initOrgTeamSearchRepoBox, initOrgTeamSearchUserGroupBox} from './features/org-team.js';
@@ -185,6 +186,7 @@ onDomReady(() => {
   initRepoReleaseNew();
   initRepoSettingGitHook();
   initRepoSettingsEnvironment();
+  initBranchingModel();
   initRepoSettingSearchTeamBox();
   initRepoSettingsCollaboration();
   initRepoTemplateSearch();

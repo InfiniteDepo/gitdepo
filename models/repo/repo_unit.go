@@ -266,6 +266,26 @@ type BranchingModel struct {
 	// MergeForwardAnyoneMaySkip lets everyone who merges choose "Don't merge forward"; otherwise only those who may
 	// change the branching model
 	MergeForwardAnyoneMaySkip bool `json:",omitempty"`
+	// Types are the branch types besides Release, whose prefixes are ReleasePrefixes
+	Types []BranchType `json:",omitempty"`
+	// DefaultPRTarget is the branch new pull requests target when their branch has no type; "" is the default branch
+	DefaultPRTarget string `json:",omitempty"`
+}
+
+// The branch a branch type is created from and its pull requests target.
+const (
+	BranchTypeBaseDevelopment = "development"
+	BranchTypeBaseProduction  = "production"
+	BranchTypeBaseBranch      = "branch" // the branch named in BaseBranch
+)
+
+// BranchType is a kind of branch told by the start of its name.
+type BranchType struct {
+	Name       string
+	Prefix     string
+	Base       string // one of the BranchTypeBase constants
+	BaseBranch string `json:",omitempty"` // only for BranchTypeBaseBranch
+	Off        bool   `json:",omitempty"` // a type that is turned off doesn't match branches
 }
 
 // FromDB fills up a PullRequestsConfig from serialized format.

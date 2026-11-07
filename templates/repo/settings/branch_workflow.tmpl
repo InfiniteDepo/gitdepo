@@ -30,7 +30,7 @@
 			<form class="ui form" action="{{.RepoLink}}/settings/branch_workflow/branching_model" method="post">
 				<p>{{ctx.Locale.Tr "repo.settings.branching_model.desc"}}</p>
 				{{if .ModelLocked}}
-				<p class="help">{{.ModelSetBy}}</p>
+				<p class="help">{{.ModelSetBy}}{{if .ModelSettingsLink}} <a href="{{.ModelSettingsLink}}">{{ctx.Locale.Tr "repo.settings.branching_model.change_in_org"}}</a>{{end}}</p>
 				{{else if .OwnerIsOrg}}
 				<div class="field">
 					<div class="ui checkbox">
@@ -40,23 +40,17 @@
 					</div>
 				</div>
 				{{end}}
-				<div class="two fields">
-					<div class="field">
-						<label for="development_branch">{{ctx.Locale.Tr "repo.settings.branching_model.development_branch"}}</label>
-						<input id="development_branch" name="development_branch" value="{{.DevelopmentBranch}}" placeholder="{{.Repository.DefaultBranch}}" maxlength="255" {{if .ModelLocked}}disabled{{end}}>
-						<p class="help">{{ctx.Locale.Tr "repo.settings.branching_model.development_branch_desc"}}</p>
-					</div>
-					<div class="field">
-						<label for="release_prefixes">{{ctx.Locale.Tr "repo.settings.branching_model.release_prefixes"}}</label>
-						<input id="release_prefixes" name="release_prefixes" value="{{.ReleasePrefixes}}" placeholder="release/" maxlength="1100" {{if .ModelLocked}}disabled{{end}}>
-						<p class="help">{{ctx.Locale.Tr "repo.settings.branching_model.release_prefixes_desc"}}</p>
-					</div>
+				<div class="field">
+					<label for="development_branch">{{ctx.Locale.Tr "repo.settings.branching_model.development_branch"}}</label>
+					<input id="development_branch" name="development_branch" value="{{.DevelopmentBranch}}" placeholder="{{.Repository.DefaultBranch}}" maxlength="255" {{if .ModelLocked}}disabled{{end}}>
+					<p class="help">{{ctx.Locale.Tr "repo.settings.branching_model.development_branch_desc"}}</p>
 				</div>
 				<div class="field">
 					<label for="production_branch">{{ctx.Locale.Tr "repo.settings.branching_model.production_branch"}}</label>
 					<input id="production_branch" name="production_branch" value="{{.ProductionBranch}}" placeholder="main" maxlength="255" {{if .ModelLocked}}disabled{{end}}>
 					<p class="help">{{ctx.Locale.Tr "repo.settings.branching_model.production_branch_desc"}}</p>
 				</div>
+				{{template "shared/branching_model_types" .}}
 				<div class="field">
 					<div class="ui checkbox">
 						<input id="merge_forward" name="merge_forward" type="checkbox" {{if .MergeForward}}checked{{end}} {{if .ModelLocked}}disabled{{end}}>

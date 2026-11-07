@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"html/template"
 	"io"
 	"net/http"
 	"net/url"
@@ -37,6 +38,7 @@ import (
 	"forgejo.org/modules/util"
 	"forgejo.org/routers/common"
 	"forgejo.org/routers/utils"
+	"forgejo.org/services/branchworkflow"
 	"forgejo.org/services/context"
 	"forgejo.org/services/context/upload"
 	"forgejo.org/services/gitdiff"
@@ -188,6 +190,22 @@ func setCsvCompareContext(ctx *context.Context) {
 	}
 }
 
+// baseTargetText says which rule of the branching model chose the base branch of a compare page without a base.
+func baseTargetText(ctx *context.Context, t branchworkflow.Target) template.HTML {
+	switch t.Rule {
+	case branchworkflow.TargetRuleType:
+		return ctx.Tr("repo.compare.base_rule.type", t.Branch, t.TypeName)
+	case branchworkflow.TargetRuleTarget:
+		return ctx.Tr("repo.compare.base_rule.target", t.Branch)
+	case branchworkflow.TargetRuleFallback:
+		if t.Missing == "" {
+			return ctx.Tr("repo.compare.base_rule.fallback_unset", t.TypeName, t.Branch)
+		}
+		return ctx.Tr("repo.compare.base_rule.fallback", t.Missing, t.Branch)
+	}
+	return ctx.Tr("repo.compare.base_rule.default", t.Branch)
+}
+
 // ParseCompareInfo parse compare info between two commit for preparing comparing references
 func ParseCompareInfo(ctx *context.Context) *common.CompareInfo {
 	baseRepo := ctx.Repo.Repository
@@ -229,6 +247,7 @@ func ParseCompareInfo(ctx *context.Context) *common.CompareInfo {
 
 	infoPath = ctx.Params("*")
 	var infos []string
+	baseGiven := true
 	if infoPath == "" {
 		infos = []string{baseRepo.DefaultBranch, baseRepo.DefaultBranch}
 	} else {
@@ -239,6 +258,7 @@ func ParseCompareInfo(ctx *context.Context) *common.CompareInfo {
 				ctx.Data["PageIsComparePull"] = false
 			} else {
 				infos = []string{baseRepo.DefaultBranch, infoPath}
+				baseGiven = false
 			}
 		}
 		var isDiff bool
@@ -249,6 +269,16 @@ func ParseCompareInfo(ctx *context.Context) *common.CompareInfo {
 			infos[1], isPatch = strings.CutSuffix(infos[1], ".patch")
 			ctx.Data["ComparingPatch"] = isPatch
 		}
+	}
+	if !baseGiven {
+		// no base in the URL: the base repository's branching model suggests one; an explicit base always wins
+		target, err := branchworkflow.ResolveTarget(ctx, baseRepo, infos[1][strings.LastIndex(infos[1], ":")+1:])
+		if err != nil {
+			ctx.ServerError("ResolveTarget", err)
+			return nil
+		}
+		infos[0] = target.Branch
+		ctx.Data["BaseTargetText"] = baseTargetText(ctx, target)
 	}
 
 	ctx.Data["BaseName"] = baseRepo.OwnerName

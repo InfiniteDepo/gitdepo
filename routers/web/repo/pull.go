@@ -1482,19 +1482,54 @@ func mergeCheckMessage(ctx *context.Context, issue *issues_model.Issue, err erro
 
 // branchKeptMessage returns why the head branch of a merged pull request was not deleted, false for any other error.
 func branchKeptMessage(ctx *context.Context, err error) (template.HTML, bool) {
-	switch {
-	case errors.Is(err, repo_service.ErrBranchIsDefault):
-		return ctx.Tr("repo.pulls.delete_after_merge.head_branch.is_default"), true
-	case errors.Is(err, git_model.ErrBranchIsProtected):
-		return ctx.Tr("repo.pulls.delete_after_merge.head_branch.is_protected"), true
-	case errors.Is(err, util.ErrPermissionDenied):
-		return ctx.Tr("repo.pulls.delete_after_merge.head_branch.insufficient_branch"), true
-	case errors.Is(err, repo_service.ErrBranchInUse):
-		return ctx.Tr("repo.pulls.delete_after_merge.head_branch.in_use"), true
-	case errors.Is(err, repo_service.ErrBranchHasNewCommits):
-		return ctx.Tr("repo.pulls.delete_after_merge.head_branch.has_new_commits"), true
+	code, ok := repo_service.KeptCode(err)
+	if !ok {
+		return "", false
 	}
-	return "", false
+	return keptReasonText(ctx, code), true
+}
+
+// keptReasonText says why a head branch was kept; the codes are a closed set, shown through literal keys.
+func keptReasonText(ctx *context.Context, code string) template.HTML {
+	switch code {
+	case branchworkflow.KeptDefault:
+		return ctx.Tr("repo.pulls.delete_after_merge.head_branch.is_default")
+	case branchworkflow.KeptDevelopment:
+		return ctx.Tr("repo.pulls.delete_after_merge.kept.development")
+	case branchworkflow.KeptProduction:
+		return ctx.Tr("repo.pulls.delete_after_merge.kept.production")
+	case branchworkflow.KeptRelease:
+		return ctx.Tr("repo.pulls.delete_after_merge.kept.release")
+	case branchworkflow.KeptProtected:
+		return ctx.Tr("repo.pulls.delete_after_merge.head_branch.is_protected")
+	case branchworkflow.KeptMergeQueue:
+		return ctx.Tr("repo.pulls.delete_after_merge.kept.merge_queue")
+	case branchworkflow.KeptOpenPR:
+		return ctx.Tr("repo.pulls.delete_after_merge.head_branch.in_use")
+	case repo_service.KeptNewCommits:
+		return ctx.Tr("repo.pulls.delete_after_merge.head_branch.has_new_commits")
+	}
+	return ctx.Tr("repo.pulls.delete_after_merge.head_branch.insufficient_branch")
+}
+
+// keptWillBeText is the note of the merge box for a head branch that will be kept.
+func keptWillBeText(ctx *context.Context, branch, code string) string {
+	var reason string
+	switch code {
+	case branchworkflow.KeptDefault:
+		reason = ctx.Locale.TrString("repo.pulls.delete_after_merge.reason.default")
+	case branchworkflow.KeptDevelopment:
+		reason = ctx.Locale.TrString("repo.pulls.delete_after_merge.reason.development")
+	case branchworkflow.KeptProduction:
+		reason = ctx.Locale.TrString("repo.pulls.delete_after_merge.reason.production")
+	case branchworkflow.KeptRelease:
+		reason = ctx.Locale.TrString("repo.pulls.delete_after_merge.reason.release")
+	case branchworkflow.KeptProtected:
+		reason = ctx.Locale.TrString("repo.pulls.delete_after_merge.reason.protected")
+	default:
+		reason = ctx.Locale.TrString("repo.pulls.delete_after_merge.reason.merge_queue")
+	}
+	return ctx.Locale.TrString("repo.pulls.delete_after_merge.will_be_kept", branch, reason)
 }
 
 // MergePullRequest response for merging pull request
