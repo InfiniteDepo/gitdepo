@@ -141,7 +141,7 @@ func TestOrgEnvironmentSecretsAndLifecycle(t *testing.T) {
 	_, err = InsertEnvironmentVariable(ctx, 3, 0, prod.ID, "kept", "x")
 	require.NoError(t, err)
 
-	secrets, variables, err := CountEnvironmentSecretsAndVariables(ctx, 3, 0, []int64{prod.ID})
+	secrets, variables, err := CountEnvironmentSecretsAndVariables(ctx, []int64{prod.ID})
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, secrets[prod.ID])
 	assert.EqualValues(t, 1, variables[prod.ID])

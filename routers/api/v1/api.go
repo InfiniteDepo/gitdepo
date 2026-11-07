@@ -1507,21 +1507,21 @@ func Routes() *web.Route {
 			addActionsRoutes(m, reqOrgActions, org.NewAction())
 			// environments its repositories inherit: acting owners only, with their own organization-wide credential
 			m.Group("/actions/environments", func() {
-				m.Get("", org.ListActionEnvironments)
+				m.Get("", repo.ListActionEnvironments)
 				m.Group("/{environment}", func() {
-					m.Combo("").Get(org.GetActionEnvironment).
-						Put(bind(api.CreateOrUpdateEnvironmentOption{}), org.CreateOrUpdateActionEnvironment).
-						Delete(org.DeleteActionEnvironment)
-					m.Get("/secrets", org.ListActionEnvironmentSecrets)
+					m.Combo("").Get(repo.GetActionEnvironment).
+						Put(bind(api.CreateOrUpdateEnvironmentOption{}), repo.CreateOrUpdateActionEnvironment).
+						Delete(repo.DeleteActionEnvironment)
+					m.Get("/secrets", repo.ListActionEnvironmentSecrets)
 					m.Combo("/secrets/{secretname}").
-						Put(bind(api.CreateOrUpdateSecretOption{}), org.CreateOrUpdateActionEnvironmentSecret).
-						Delete(org.DeleteActionEnvironmentSecret)
-					m.Get("/variables", org.ListActionEnvironmentVariables)
+						Put(bind(api.CreateOrUpdateSecretOption{}), repo.CreateOrUpdateActionEnvironmentSecret).
+						Delete(repo.DeleteActionEnvironmentSecret)
+					m.Get("/variables", repo.ListActionEnvironmentVariables)
 					m.Combo("/variables/{variablename}").
-						Get(org.GetActionEnvironmentVariable).
-						Delete(org.DeleteActionEnvironmentVariable).
-						Post(bind(api.CreateVariableOption{}), org.CreateActionEnvironmentVariable).
-						Put(bind(api.UpdateVariableOption{}), org.UpdateActionEnvironmentVariable)
+						Get(repo.GetActionEnvironmentVariable).
+						Delete(repo.DeleteActionEnvironmentVariable).
+						Post(bind(api.CreateVariableOption{}), repo.CreateActionEnvironmentVariable).
+						Put(bind(api.UpdateVariableOption{}), repo.UpdateActionEnvironmentVariable)
 				})
 			}, reqToken(), org.HideInvisibleOrg, reqOrgActions, org.EnvironmentToken)
 			m.Group("/public_members", func() {

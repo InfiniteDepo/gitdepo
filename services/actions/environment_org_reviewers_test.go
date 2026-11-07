@@ -15,6 +15,7 @@ import (
 	"forgejo.org/models/unit"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/test"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -81,6 +82,14 @@ func TestCheckOrgEnvironmentReviewers(t *testing.T) {
 		readers = append(readers, u.ID)
 	}
 	assert.Equal(t, []int64{2, 4}, readers, "usable members, in name order")
+	assert.Equal(t, []int64{4}, check.Approvers[1])
+
+	// only the first members are offered, whatever the size of the organization; the listed ones are still decided
+	defer test.MockVariableValue(&MaxOrgReviewerReaders, 1)()
+	check, err = CheckOrgEnvironmentReviewers(ctx, org, []*actions_model.ActionEnvironment{env}, reviewers, true)
+	require.NoError(t, err)
+	require.Len(t, check.Readers, 1)
+	assert.EqualValues(t, 2, check.Readers[0].ID)
 	assert.Equal(t, []int64{4}, check.Approvers[1])
 
 	// the organization requires two-factor authentication, which nobody here has

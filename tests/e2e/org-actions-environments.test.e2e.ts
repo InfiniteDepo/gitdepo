@@ -66,3 +66,38 @@ test('an organization environment is inherited by its repositories', async ({pag
   const removed = await request.delete(`/api/v1/repos/org3/${repo}`, {headers: basicAuth('user2', 'password')});
   expect(removed.status()).toBe(204);
 });
+
+test('a run waits for an organization environment and its reviewer approves it', async ({page, request}) => {
+  const id = dynamic_id();
+  const name = `org-review-${id}`;
+  const repo = `oenv-run-${id}`;
+  const headers = basicAuth('user2', 'password');
+  let response = await request.post('/api/v1/orgs/org3/repos', {headers, data: {name: repo, auto_init: true, default_branch: 'main'}});
+  expect(response.ok(), await response.text()).toBeTruthy();
+  response = await request.put(`/api/v1/orgs/org3/actions/environments/${name}`, {headers, data: {
+    ref_policy: 'any', ref_patterns: [], wait_timer: 0, prevent_self_review: false, reviewers: [{type: 'user', id: 2}],
+    runner_labels: [], allowed_workflows: [], repository_selection: 'selected', repositories: [repo],
+  }});
+  expect(response.ok(), await response.text()).toBeTruthy();
+  const workflow = `on: workflow_dispatch\njobs:\n  release:\n    runs-on: e2e-no-runner\n    environment: ${name}\n    steps:\n      - run: echo deploy\n`;
+  response = await request.post(`/api/v1/repos/org3/${repo}/contents/.gitea/workflows/deploy.yml`, {headers, data: {
+    message: 'add deploy', branch: 'main', content: Buffer.from(workflow).toString('base64'),
+  }});
+  expect(response.ok(), await response.text()).toBeTruthy();
+  response = await request.post(`/api/v1/repos/org3/${repo}/actions/workflows/deploy.yml/dispatches`, {headers, data: {ref: 'main', return_run_info: true}});
+  expect(response.ok(), await response.text()).toBeTruthy();
+  const run = await response.json();
+
+  await page.goto(`/org3/${repo}/actions/runs/${run.run_number}`);
+  await expect(page.locator('.job-info-header-detail')).toHaveText(`Waiting for approval to deploy to ${name}`);
+  await page.locator('#review-deployments').click();
+  const dialog = page.locator('#review-deployments-modal');
+  await expect(dialog).toContainText(name);
+  await screenshot(page, dialog);
+  await dialog.getByRole('button', {name: 'Approve and deploy', exact: true}).dispatchEvent('click');
+  await expect(page.getByText('1 deployment was approved.')).toBeVisible();
+  await expect(page.locator('.deployments-panel')).toContainText('Approved by user2');
+
+  expect((await request.delete(`/api/v1/repos/org3/${repo}`, {headers})).status()).toBe(204);
+  expect((await request.delete(`/api/v1/orgs/org3/actions/environments/${name}`, {headers})).status()).toBe(204);
+});

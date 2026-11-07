@@ -416,6 +416,12 @@ func TestActionsOrgEnvironments(t *testing.T) {
 			body := owner.MakeRequest(t, NewRequest(t, "GET", fmt.Sprintf("/org3/%s/actions/deployments?environment=production", repoB.Name)), http.StatusOK).Body.String()
 			assert.Contains(t, body, "Production")
 			assert.Contains(t, body, runLink)
+
+			// the organization's delete dialog says what the deletion does and shows that last deployment
+			doc := NewHTMLParser(t, owner.MakeRequest(t, NewRequest(t, "GET", fmt.Sprintf("%s/%d", orgBase, production.ID)), http.StatusOK).Body)
+			modal := text(doc, "#delete-environment-modal")
+			assert.Contains(t, modal, "In every repository of org3, the next job that names Production runs without approval")
+			assert.Equal(t, 1, doc.Find(`#delete-environment-modal a[href="`+runLink+`"]`).Length())
 		})
 
 		t.Run("transfers: in is refused with a twin, out no longer inherits", func(t *testing.T) {
@@ -530,6 +536,17 @@ func TestActionsOrgEnvironments(t *testing.T) {
 		t.Run("archive and deletion of the organization", func(t *testing.T) {
 			org := &organization.Organization{Name: "oenv-gone"}
 			require.NoError(t, organization.CreateOrganization(ctx, org, user2))
+			// the organization's own empty state and limit
+			gone := "/org/oenv-gone/settings/actions/environments"
+			doc := NewHTMLParser(t, owner.MakeRequest(t, NewRequest(t, "GET", gone), http.StatusOK).Body)
+			assert.Contains(t, text(doc, ".org-setting-content"), "No organization environments")
+			for i := range actions_model.MaxEnvironments {
+				require.NoError(t, actions_model.CreateEnvironment(audit_model.WithSystem(ctx, "test"), &actions_model.ActionEnvironment{OwnerID: org.ID, Name: fmt.Sprint("cap-", i)}, nil))
+			}
+			body := post(owner, gone+"/new", url.Values{"name": {"one-more"}, "ref_policy": {"0"}, "wait_timer": {"0"}}, http.StatusOK)
+			assert.Contains(t, body, "The organization already has 100 environments, the most it can have.")
+			_, err := db.GetEngine(ctx).Where("owner_id = ? AND repo_id = 0", org.ID).Delete(new(actions_model.ActionEnvironment))
+			require.NoError(t, err)
 			team, err := org.GetOwnerTeam(ctx)
 			require.NoError(t, err)
 			MakeRequest(t, NewRequestWithJSON(t, "PUT", "/api/v1/orgs/oenv-gone/actions/environments/prod", envRules(api.CreateOrUpdateEnvironmentOption{

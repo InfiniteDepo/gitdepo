@@ -85,17 +85,12 @@ func orgRepoIDsByName(ctx *context.APIContext, orgID int64, names []string) ([]i
 
 // toActionEnvironments converts environments of the repository or organization of the request (with the
 // organization environments a repository inherits), with one query for each of their reviewers, the reviewers'
-// users and teams, the secret and variable counts of each scope and the last deployments.
+// users and teams, the secret and variable counts and the last deployments.
 func toActionEnvironments(ctx *context.APIContext, envs []*actions_model.ActionEnvironment) ([]*api.ActionEnvironment, error) {
 	_, repoID := environmentScope(ctx)
-	var ids, orgIDs []int64
-	var orgID int64
-	for _, e := range envs {
-		ids = append(ids, e.ID)
-		if e.RepoID == 0 {
-			orgID = e.OwnerID
-			orgIDs = append(orgIDs, e.ID)
-		}
+	ids := make([]int64, len(envs))
+	for i, e := range envs {
+		ids[i] = e.ID
 	}
 	reviewers, err := actions_model.FindReviewersOfEnvironments(ctx, ids)
 	if err != nil {
@@ -119,31 +114,17 @@ func toActionEnvironments(ctx *context.APIContext, envs []*actions_model.ActionE
 	if err != nil {
 		return nil, err
 	}
-	secrets, variables := map[int64]int64{}, map[int64]int64{}
-	if repoID != 0 {
-		if secrets, variables, err = actions_model.CountEnvironmentSecretsAndVariables(ctx, 0, repoID, ids); err != nil {
-			return nil, err
-		}
-	}
-	if len(orgIDs) > 0 {
-		orgSecrets, orgVariables, err := actions_model.CountEnvironmentSecretsAndVariables(ctx, orgID, 0, orgIDs)
-		if err != nil {
-			return nil, err
-		}
-		maps.Copy(secrets, orgSecrets)
-		maps.Copy(variables, orgVariables)
-	}
-	selected, err := actions_model.EnvironmentRepoIDs(ctx, orgIDs)
+	secrets, variables, err := actions_model.CountEnvironmentSecretsAndVariables(ctx, ids)
 	if err != nil {
 		return nil, err
 	}
+	var selected map[int64][]int64
 	var names map[int64]*repo_model.Repository
-	if repoID == 0 {
-		var ids []int64
-		for _, rs := range selected {
-			ids = append(ids, rs...)
+	if repoID == 0 { // the organization's own list: the repositories each selects
+		if selected, err = actions_model.EnvironmentRepoIDs(ctx, ids); err != nil {
+			return nil, err
 		}
-		if names, err = repo_model.GetRepositoriesMapByIDs(ctx, ids); err != nil {
+		if names, err = repo_model.GetRepositoriesMapByIDs(ctx, slices.Concat(slices.Collect(maps.Values(selected))...)); err != nil {
 			return nil, err
 		}
 	}

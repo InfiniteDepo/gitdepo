@@ -374,7 +374,7 @@ func (check *EnvironmentReviewerCheck) decide(envs []*actions_model.ActionEnviro
 }
 
 // MaxOrgReviewerReaders is how many members of an organization CheckOrgEnvironmentReviewers offers as readers at most.
-const MaxOrgReviewerReaders = 200
+var MaxOrgReviewerReaders = 200
 
 // CheckOrgEnvironmentReviewers is CheckEnvironmentReviewers for the settings pages of environments of the organization
 // org, by the rules that don't depend on a repository (who approves a run is decided for its repository by

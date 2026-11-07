@@ -804,15 +804,16 @@ func DeleteEnvironment(ctx context.Context, e *ActionEnvironment, failUnpickedJo
 	})
 }
 
-// countByEnvironment counts the rows of table (secret or action_variable) of each of the environments of the
-// repository (ownerID 0) or the organization (repoID 0), in one query.
-func countByEnvironment(ctx context.Context, table string, ownerID, repoID int64, ids []int64) (map[int64]int64, error) {
+// countByEnvironment counts the rows of table (secret or action_variable) of each of the environments, in one query.
+// The rows of an environment have its owner and repository, so the IDs of environments the caller found at its level
+// count only theirs.
+func countByEnvironment(ctx context.Context, table string, ids []int64) (map[int64]int64, error) {
 	var rows []struct {
 		EnvironmentID int64
 		N             int64
 	}
 	err := db.GetEngine(ctx).Table(table).Select("environment_id, COUNT(*) AS n").
-		Where(scopeCond(ownerID, repoID)).In("environment_id", ids).GroupBy("environment_id").Find(&rows)
+		In("environment_id", ids).GroupBy("environment_id").Find(&rows)
 	out := make(map[int64]int64, len(rows))
 	for _, r := range rows {
 		out[r.EnvironmentID] = r.N
@@ -820,12 +821,12 @@ func countByEnvironment(ctx context.Context, table string, ownerID, repoID int64
 	return out, err
 }
 
-// CountEnvironmentSecretsAndVariables counts the secrets and the variables of each of the environments of the
-// repository (ownerID 0) or the organization (repoID 0), with one query each.
-func CountEnvironmentSecretsAndVariables(ctx context.Context, ownerID, repoID int64, ids []int64) (secrets, variables map[int64]int64, err error) {
-	if secrets, err = countByEnvironment(ctx, "secret", ownerID, repoID, ids); err != nil {
+// CountEnvironmentSecretsAndVariables counts the secrets and the variables of each of the environments, with one query
+// each.
+func CountEnvironmentSecretsAndVariables(ctx context.Context, ids []int64) (secrets, variables map[int64]int64, err error) {
+	if secrets, err = countByEnvironment(ctx, "secret", ids); err != nil {
 		return nil, nil, err
 	}
-	variables, err = countByEnvironment(ctx, "action_variable", ownerID, repoID, ids)
+	variables, err = countByEnvironment(ctx, "action_variable", ids)
 	return secrets, variables, err
 }

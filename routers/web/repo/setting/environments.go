@@ -236,18 +236,10 @@ func Environments(ctx *context.Context) {
 		return
 	}
 	ids := make([]int64, len(envs))
-	inherited := false
 	for i, e := range envs {
 		ids[i] = e.ID
-		inherited = inherited || e.RepoID != repoID
 	}
-	secrets, variables, err := actions_model.CountEnvironmentSecretsAndVariables(ctx, ownerID, repoID, ids)
-	if err == nil && inherited {
-		var s, v map[int64]int64
-		s, v, err = actions_model.CountEnvironmentSecretsAndVariables(ctx, l.Owner.ID, 0, ids)
-		maps.Copy(secrets, s)
-		maps.Copy(variables, v)
-	}
+	secrets, variables, err := actions_model.CountEnvironmentSecretsAndVariables(ctx, ids)
 	if err != nil {
 		ctx.ServerError("CountEnvironmentSecretsAndVariables", err)
 		return
