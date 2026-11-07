@@ -2168,8 +2168,8 @@ func ViewIssue(ctx *context.Context) {
 			isPullBranchDeletable = !exist
 		}
 		ctx.Data["DeleteBranchKept"] = ""
-		// the kept reason of a branch in a fork is the fork's own business: show it only to those who can read the fork
-		ctx.Data["CanReadHeadRepo"] = pull.HeadRepo != nil && pull.HeadRepoID == pull.BaseRepoID
+		// the kept reason names a branch and the model's rules: show it only to those who can read the code of the repository that holds the branch
+		ctx.Data["CanReadHeadRepo"] = pull.HeadRepo != nil && pull.HeadRepoID == pull.BaseRepoID && ctx.Repo.CanRead(unit.TypeCode)
 		if pull.HeadRepo != nil && pull.HeadRepoID != pull.BaseRepoID {
 			headPerm, err := access_model.GetUserRepoPermission(ctx, pull.HeadRepo, ctx.Doer)
 			if err != nil {
@@ -2178,24 +2178,35 @@ func ViewIssue(ctx *context.Context) {
 			}
 			ctx.Data["CanReadHeadRepo"] = headPerm.CanRead(unit.TypeCode)
 		}
+		ctx.Data["DeleteBranchKeptNote"] = ""
 		if isPullBranchDeletable {
-			// the branching model keeps this head branch whatever the merger ticks: before the merge the box says so,
-			// after it the "Delete branch" button is not offered (CleanUpPullRequest refuses it too)
-			reason, err := branchworkflow.KeptReason(ctx, pull.HeadRepo, pull.HeadBranch, false)
+			// the branching model keeps this head branch whatever the merger ticks: an open pull request says so in the
+			// merge box, any other one says so instead of offering "Delete branch" (CleanUpPullRequest refuses it too)
+			kept, err := branchworkflow.NewKeptChecker(ctx, pull.HeadRepo, false)
 			if err != nil {
-				ctx.ServerError("KeptReason", err)
+				ctx.ServerError("NewKeptChecker", err)
 				return
 			}
+			reason := kept.Reason(pull.HeadBranch)
 			if reason != "" {
-				// a pull request that merges a branch of the chain forward doesn't offer the box at all
+				text := keptWillBeText(ctx, pull.HeadBranch, reason)
 				mergeForward := false
-				if m, err := branchworkflow.GetEffectiveModel(ctx, pull.HeadRepo); err == nil {
-					mergeForward = m.Model.MergeForward && (reason == branchworkflow.KeptDevelopment || reason == branchworkflow.KeptProduction || reason == branchworkflow.KeptRelease)
+				if reason == branchworkflow.KeptDevelopment || reason == branchworkflow.KeptProduction || reason == branchworkflow.KeptRelease {
+					// only a pull request that carries the branch forward along the chain doesn't offer the box at all
+					if m := kept.Model(); m.Model.MergeForward {
+						if chain, err := branchworkflow.GetChain(ctx, pull.HeadRepo, m); err == nil {
+							mergeForward = slices.Contains(chain.Forward(pull.HeadBranch), pull.BaseBranch)
+						}
+					}
 				}
-				if pull.HasMerged || mergeForward {
+				switch {
+				case pull.HasMerged || pull.Issue.IsClosed:
 					isPullBranchDeletable = false
-				} else {
-					ctx.Data["DeleteBranchKept"] = keptWillBeText(ctx, pull.HeadBranch, reason)
+					ctx.Data["DeleteBranchKeptNote"] = keptNowText(ctx, pull.HeadBranch, reason)
+				case mergeForward:
+					isPullBranchDeletable = false
+				default:
+					ctx.Data["DeleteBranchKept"] = text
 				}
 			}
 		}
@@ -2216,6 +2227,7 @@ func ViewIssue(ctx *context.Context) {
 			return
 		}
 
+		ctx.Data["MergeForwardTarget"] = ""
 		if !pull.HasMerged {
 			_, targets, err := mergeforward.Targets(ctx, ctx.Repo.Repository, pull.BaseBranch)
 			if err != nil {

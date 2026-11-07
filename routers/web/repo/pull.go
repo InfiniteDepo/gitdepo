@@ -1516,6 +1516,15 @@ func keptReasonText(ctx *context.Context, code string) template.HTML {
 
 // keptWillBeText is the note of the merge box for a head branch that will be kept.
 func keptWillBeText(ctx *context.Context, branch, code string) string {
+	return ctx.Locale.TrString("repo.pulls.delete_after_merge.will_be_kept", branch, keptReasonPhrase(ctx, code))
+}
+
+// keptNowText is the note of a merged or closed pull request, where "Delete branch" is not offered for a kept branch.
+func keptNowText(ctx *context.Context, branch, code string) string {
+	return ctx.Locale.TrString("repo.pulls.delete_after_merge.is_kept", branch, keptReasonPhrase(ctx, code))
+}
+
+func keptReasonPhrase(ctx *context.Context, code string) string {
 	var reason string
 	switch code {
 	case branchworkflow.KeptDefault:
@@ -1535,7 +1544,7 @@ func keptWillBeText(ctx *context.Context, branch, code string) string {
 	default:
 		reason = ctx.Locale.TrString("repo.pulls.delete_after_merge.reason.merge_queue")
 	}
-	return ctx.Locale.TrString("repo.pulls.delete_after_merge.will_be_kept", branch, reason)
+	return reason
 }
 
 // MergePullRequest response for merging pull request

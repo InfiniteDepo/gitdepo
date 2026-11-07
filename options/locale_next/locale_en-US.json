@@ -141,6 +141,7 @@
 	"repo.pulls.branch_kept_comment_fork": "The branch in the fork was kept.",
 	"repo.pulls.branch_kept_comment_reason": "Kept because %s.",
 	"repo.pulls.delete_after_merge.will_be_kept": "%[1]s will be kept: %[2]s.",
+	"repo.pulls.delete_after_merge.is_kept": "%[1]s is kept: %[2]s.",
 	"repo.pulls.delete_after_merge.reason.default": "it is the default branch",
 	"repo.pulls.delete_after_merge.reason.development": "it is the development branch",
 	"repo.pulls.delete_after_merge.reason.production": "it is the production branch",
@@ -230,7 +231,7 @@
 	"org.settings.branching_model.enforce_desc": "Repositories show the branching model read-only and cannot set their own.",
 	"org.settings.branching_model.enforce_needs_value": "Enter a release branch prefix or a production branch to enforce a branching model.",
 	"repo.settings.delete_merged": "Delete merged branches",
-	"repo.settings.delete_merged.desc": "Deletes the branches whose last commit is already in the default branch. The default, development, production and release branches, branches covered by a protection rule, branches of open pull requests and of the merge queue, and branches still at the default branch's last commit are kept; archived, mirror and empty repositories are skipped. Each branch is deleted like on the Branches page and recorded in the audit log.",
+	"repo.settings.delete_merged.desc": "Deletes the branches whose last commit is already in the default branch. The default, development, production and release branches, the bases of branch types and the default pull request target, branches covered by a protection rule, branches of open pull requests and of the merge queue, and branches still at the default branch's last commit are kept; archived, mirror and empty repositories are skipped. Each branch is deleted like on the Branches page and recorded in the audit log.",
 	"repo.branch.delete_confirm_restorable": "Delete this branch?",
 	"repo.settings.delete_merged.restore": "Each deleted branch can be restored on the Branches page.",
 	"repo.settings.delete_merged.restore_hours": {
@@ -3065,6 +3066,11 @@
 	"repo.pulls.stack.delete_branches": {
 		"one": "Delete the merged branch",
 		"other": "Delete the %d merged branches"
+	},
+	"repo.pulls.stack.delete_none": "No merged branch is deleted: the default, development, production and release branches, bases of branch types and protected branches are kept.",
+	"repo.pulls.stack.delete_kept": {
+		"one": "%d branch is kept: the default, development, production and release branches, bases of branch types and protected branches are never deleted.",
+		"other": "%d branches are kept: the default, development, production and release branches, bases of branch types and protected branches are never deleted."
 	},
 	"repo.pulls.stack.confirm_button": {
 		"one": "Merge %d pull request",

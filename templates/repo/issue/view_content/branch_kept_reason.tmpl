@@ -1,10 +1,10 @@
-{{/* why the head branch was not deleted; an unknown code shows nothing */}}
+{{- /* why the head branch was not deleted; an unknown code shows nothing */ -}}
 {{if eq . "default"}}{{ctx.Locale.Tr "repo.pulls.delete_after_merge.reason.default"}}
-{{else if eq . "development"}}{{ctx.Locale.Tr "repo.pulls.delete_after_merge.reason.development"}}
-{{else if eq . "production"}}{{ctx.Locale.Tr "repo.pulls.delete_after_merge.reason.production"}}
-{{else if eq . "release"}}{{ctx.Locale.Tr "repo.pulls.delete_after_merge.reason.release"}}
-{{else if eq . "protected"}}{{ctx.Locale.Tr "repo.pulls.delete_after_merge.reason.protected"}}
-{{else if eq . "base"}}{{ctx.Locale.Tr "repo.pulls.delete_after_merge.reason.base"}}
-{{else if eq . "open_pr"}}{{ctx.Locale.Tr "repo.pulls.delete_after_merge.reason.open_pr"}}
-{{else if eq . "merge_queue"}}{{ctx.Locale.Tr "repo.pulls.delete_after_merge.reason.merge_queue"}}
-{{end}}
+{{- else if eq . "development"}}{{ctx.Locale.Tr "repo.pulls.delete_after_merge.reason.development"}}
+{{- else if eq . "production"}}{{ctx.Locale.Tr "repo.pulls.delete_after_merge.reason.production"}}
+{{- else if eq . "release"}}{{ctx.Locale.Tr "repo.pulls.delete_after_merge.reason.release"}}
+{{- else if eq . "protected"}}{{ctx.Locale.Tr "repo.pulls.delete_after_merge.reason.protected"}}
+{{- else if eq . "base"}}{{ctx.Locale.Tr "repo.pulls.delete_after_merge.reason.base"}}
+{{- else if eq . "open_pr"}}{{ctx.Locale.Tr "repo.pulls.delete_after_merge.reason.open_pr"}}
+{{- else if eq . "merge_queue"}}{{ctx.Locale.Tr "repo.pulls.delete_after_merge.reason.merge_queue"}}
+{{- end -}}
