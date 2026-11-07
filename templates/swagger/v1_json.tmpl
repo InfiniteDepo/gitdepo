@@ -32141,13 +32141,13 @@
           "x-go-name": "CanReview"
         },
         "teams": {
-          "description": "how many teams the environment lists as reviewers",
+          "description": "how many teams the environment lists as reviewers (0 unless the authenticated user may change the repository's Actions)",
           "type": "integer",
           "format": "int64",
           "x-go-name": "Teams"
         },
         "users": {
-          "description": "how many users the environment lists as reviewers",
+          "description": "how many users the environment lists as reviewers (0 unless the authenticated user may change the repository's Actions)",
           "type": "integer",
           "format": "int64",
           "x-go-name": "Users"

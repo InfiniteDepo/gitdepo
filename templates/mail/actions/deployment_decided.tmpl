@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<style>
+		.footer { font-size:small; color:#666;}
+	</style>
+	<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+</head>
+
+<body>
+	<p>
+		{{if .Reviewer}}
+			{{.locale.Tr "mail.actions.deployment_rejected_info" .Reviewer .Job .Environment .Repo}}
+		{{else}}
+			{{.locale.Tr "mail.actions.deployment_expired_info" .Job .Environment .Repo}}
+		{{end}}
+	</p>
+	{{if .Deployment.ReviewComment}}
+		<p>{{.locale.Tr "mail.actions.deployment_comment"}}</p>
+		<blockquote style="white-space: pre-wrap">{{.Deployment.ReviewComment}}</blockquote>
+	{{end}}
+	<p>
+		{{.locale.Tr "mail.actions.deployment_run" .Run.Title .Run.WorkflowID .Run.Index}}<br>
+		{{.locale.Tr "mail.actions.deployment_ref" .Ref .Commit}}
+	</p>
+	<p><a href="{{.Link}}">{{.locale.Tr "mail.actions.deployment_view_run"}}</a></p>
+	<div class="footer">
+		<p>
+			---
+			<br>
+			{{.locale.Tr "mail.actions.deployment_decided_footer"}}
+		</p>
+	</div>
+</body>
+</html>

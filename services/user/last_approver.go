@@ -17,6 +17,7 @@ import (
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/translation"
+	actions_service "forgejo.org/services/actions"
 	"forgejo.org/services/approvers"
 )
 
@@ -65,7 +66,31 @@ const (
 	LastApproverOrgRule     = "admin.users.last_approver.kind.org_rule"
 )
 
-func init() { RegisterLastApproverCheck(approvalRuleWarnings) }
+// LastApproverEnvironment is the kind of the warnings of the Actions environment check.
+const LastApproverEnvironment = "admin.users.last_approver.kind.environment"
+
+func init() {
+	RegisterLastApproverCheck(approvalRuleWarnings)
+	RegisterLastApproverCheck(environmentReviewerWarnings)
+}
+
+// environmentReviewerWarnings finds the Actions environments that require reviews where the users are the last who
+// can approve a deployment (actions_service.FindEnvironmentLastApprovers).
+func environmentReviewerWarnings(ctx context.Context, userIDs []int64) ([]LastApproverWarning, error) {
+	found, err := actions_service.FindEnvironmentLastApprovers(ctx, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	warnings := make([]LastApproverWarning, 0, len(found))
+	for _, f := range found {
+		warnings = append(warnings, LastApproverWarning{
+			UserID: f.UserID, Kind: LastApproverEnvironment,
+			Link: f.Repo.Link() + "/settings/actions/environments/" + strconv.FormatInt(f.Env.ID, 10),
+			Name: translation.NewLocale("").TrString("admin.users.last_approver.environment_item", f.Env.Name, f.Repo.FullName()),
+		})
+	}
+	return warnings, nil
+}
 
 // approvalRuleWarnings finds the approval rules, of repositories, projects and organizations, that list one of the
 // users or a team of theirs and would have fewer eligible approvers than their count without them. Eligible means
