@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -47,18 +46,15 @@ func testPullCreate(t *testing.T, session *TestSession, user, repo string, toSel
 		link = strings.Replace(link, targetUser, user, 1)
 	}
 
-	// get main out of /user/project/main...some:other/branch
-	defaultBranch := regexp.MustCompile(`^.*/(.*)\.\.\.`).FindStringSubmatch(link)[1]
-	if targetBranch != defaultBranch {
-		link = strings.Replace(link, defaultBranch+"...", targetBranch+"...", 1)
+	// the link names only the head (/user/project/compare/some:other/branch): the base is chosen by the page, so name it
+	cut := strings.Index(link, "/compare/") + len("/compare/")
+	head := link[cut:]
+	if targetUser == user {
+		head = sourceBranch
+	} else {
+		head = head[:strings.LastIndex(head, ":")+1] + sourceBranch
 	}
-	if sourceBranch != defaultBranch {
-		if targetUser == user {
-			link = strings.Replace(link, "..."+defaultBranch, "..."+sourceBranch, 1)
-		} else {
-			link = strings.Replace(link, ":"+defaultBranch, ":"+sourceBranch, 1)
-		}
-	}
+	link = link[:cut] + targetBranch + "..." + head
 
 	req = NewRequest(t, "GET", link)
 	resp = session.MakeRequest(t, req, http.StatusOK)

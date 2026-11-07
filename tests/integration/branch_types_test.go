@@ -56,7 +56,11 @@ func TestBranchTypesSettings(t *testing.T) {
 		btOrgModel(t, ctx, &api.OrgBranchingModel{ReleasePrefixes: []string{"release/"}, ProductionBranch: "prod", Types: types, DefaultPRTarget: "develop"}, http.StatusOK)
 		entry := auditOne(t, since, "org.branch_workflow.changed")
 		after, _ := auditData(t, entry)["after"].(map[string]any)
-		assert.Equal(t, []any{"Feature|feature/|development||on", "Hotfix|hotfix/|production||on", "Docs|docs/|branch|docs-base|on"}, after["types"])
+		assert.Equal(t, []any{
+			map[string]any{"name": "Feature", "prefix": "feature/", "base": "development", "base_branch": "", "on": true},
+			map[string]any{"name": "Hotfix", "prefix": "hotfix/", "base": "production", "base_branch": "", "on": true},
+			map[string]any{"name": "Docs", "prefix": "docs/", "base": "branch", "base_branch": "docs-base", "on": true},
+		}, after["types"])
 		assert.Equal(t, "develop", after["default_pr_target"])
 		var org api.OrgBranchingModel
 		req := NewRequest(t, "GET", "/api/v1/orgs/org3/branching-model").AddTokenAuth(ctx.Token)
@@ -120,8 +124,8 @@ func TestBranchTypesSettings(t *testing.T) {
 		assert.Equal(t, "develop", got.Own.DefaultPRTarget)
 
 		// the organization's lock refuses the repository's change, in the web form and the API
-		btOrgModel(t, ctx, &api.OrgBranchingModel{ReleasePrefixes: []string{"release/"}, Types: types, Enforce: true}, http.StatusOK)
-		btModel(t, ctx, repo, &api.EditRepoBranchingModelOption{ReleasePrefixes: []string{"release/"}, Types: types[1:2]}, http.StatusForbidden)
+		btOrgModel(t, ctx, &api.OrgBranchingModel{ReleasePrefixes: []string{"release/"}, ProductionBranch: "prod", Types: types, Enforce: true}, http.StatusOK)
+		btModel(t, ctx, repo, &api.EditRepoBranchingModelOption{ReleasePrefixes: []string{"release/"}, ProductionBranch: "prod", Types: types[1:2]}, http.StatusForbidden)
 		owner.MakeRequest(t, NewRequestWithValues(t, "POST", path.Join("org3", repo, "settings/branch_workflow/branching_model"), map[string]string{
 			"release_prefixes": "release/", "type_name": "A", "type_prefix": "a/", "type_base": "development", "type_on": "0",
 		}), http.StatusForbidden)
