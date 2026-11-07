@@ -93,8 +93,8 @@ func BranchWorkflowPost(ctx *context.Context) {
 func BranchingModelPost(ctx *context.Context) {
 	form := web.GetForm(ctx).(*forms.BranchingModelForm)
 	err := branchworkflow.SetOrgModel(ctx, ctx.Org.Organization.AsUser(), form.Model(), form.EnforceModel)
-	if value, ok := branchworkflow.IsInvalidBranchingModel(err); ok {
-		ctx.Flash.Error(ctx.Tr("repo.settings.branching_model.invalid", value))
+	if invalid, ok := branchworkflow.IsInvalidBranchingModel(err); ok {
+		ctx.Flash.Error(repo_setting.InvalidModelText(ctx, invalid))
 	} else {
 		switch {
 		case errors.Is(err, branchworkflow.ErrTooManyReleasePrefixes):

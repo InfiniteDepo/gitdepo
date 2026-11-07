@@ -215,4 +215,6 @@ test('delete branch checkbox is unchecked and disabled with the reason when the 
   expect(mergeform.get('#delete-branch-after-merge').element.disabled).toBe(true);
   expect(mergeform.get('.delete-branch-kept').text()).toBe('develop will be kept: it is the development branch.');
   expect(mergeform.find('.delete-branch-forced').exists()).toBe(false);
+  expect(mergeform.get('#delete-branch-after-merge').attributes('aria-describedby')).toBe('delete-branch-kept-reason');
+  expect(mergeform.get('#delete-branch-kept-reason').text()).toContain('will be kept');
 });

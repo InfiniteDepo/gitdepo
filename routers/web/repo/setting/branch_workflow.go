@@ -5,7 +5,9 @@ package setting
 
 import (
 	"errors"
+	"html/template"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -13,6 +15,7 @@ import (
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/modules/base"
 	"forgejo.org/modules/web"
+	"forgejo.org/routers/web/repo"
 	"forgejo.org/services/branchworkflow"
 	"forgejo.org/services/context"
 	"forgejo.org/services/forms"
@@ -49,13 +52,7 @@ func PrepareMergedBranches(ctx *context.Context, scope repo_service.MergedBranch
 	ctx.Data["MergedBackLink"] = back
 	ctx.Data["MergedShowRepos"] = scope.Repo == nil
 	ctx.Data["MergedConfirmName"] = mergedConfirmName(ctx, scope)
-	if hours, ok := branchworkflow.RestoreWindow(); ok {
-		if hours == 0 {
-			ctx.Data["RestoreText"] = ctx.Tr("repo.settings.delete_merged.restore")
-		} else {
-			ctx.Data["RestoreText"] = ctx.Locale.TrPluralString(hours, "repo.settings.delete_merged.restore_hours", hours)
-		}
-	}
+	ctx.Data["RestoreText"] = repo.RestoreText(ctx)
 	if !preview {
 		return true
 	}
@@ -217,9 +214,10 @@ func BranchingModelPost(ctx *context.Context) {
 	if !form.Inherit || !ctx.Repo.Owner.IsOrganization() {
 		model = form.Model()
 	}
+	before, beforeErr := branchworkflow.GetEffectiveModel(ctx, ctx.Repo.Repository)
 	err := branchworkflow.SetRepoModel(ctx, ctx.Repo.Repository, model)
-	if value, ok := branchworkflow.IsInvalidBranchingModel(err); ok {
-		ctx.Flash.Error(ctx.Tr("repo.settings.branching_model.invalid", value))
+	if invalid, ok := branchworkflow.IsInvalidBranchingModel(err); ok {
+		ctx.Flash.Error(InvalidModelText(ctx, invalid))
 	} else {
 		switch {
 		case errors.Is(err, branchworkflow.ErrTooManyReleasePrefixes):
@@ -236,9 +234,38 @@ func BranchingModelPost(ctx *context.Context) {
 			return
 		default:
 			ctx.Flash.Success(ctx.Tr("repo.settings.update_settings_success"))
+			if beforeErr == nil {
+				flashLostTypes(ctx, before.Model)
+			}
 		}
 	}
 	ctx.Redirect(ctx.Repo.RepoLink + "/settings/branch_workflow")
+}
+
+// flashLostTypes tells how many existing branches lost their type by this save, for the types that were removed or
+// turned off (the settings page shows the turned-off ones again; a removed type is gone from it).
+func flashLostTypes(ctx *context.Context, before repo_model.BranchingModel) {
+	after, err := branchworkflow.GetEffectiveModel(ctx, ctx.Repo.Repository)
+	if err != nil {
+		return
+	}
+	check := after.Model
+	check.Types = slices.Clone(after.Model.Types)
+	for _, t := range before.Types {
+		if !t.Off && !slices.ContainsFunc(check.Types, func(a repo_model.BranchType) bool { return a.Prefix == t.Prefix }) {
+			t.Off = true
+			check.Types = append(check.Types, t)
+		}
+	}
+	counts, err := branchworkflow.CountUntyped(ctx, ctx.Repo.Repository, check)
+	if err != nil {
+		return
+	}
+	for _, t := range check.Types {
+		if n := counts[t.Prefix]; n > 0 && t.Off {
+			ctx.Flash.Info(ctx.Locale.TrPluralString(n, "repo.settings.branching_model.untyped", n, t.Prefix))
+		}
+	}
 }
 
 // BranchWorkflowPost saves the repository's branch workflow settings.
@@ -263,4 +290,34 @@ func BranchWorkflowPost(ctx *context.Context) {
 		ctx.Flash.Success(ctx.Tr("repo.settings.update_settings_success"))
 	}
 	ctx.Redirect(ctx.Repo.RepoLink + "/settings/branch_workflow")
+}
+
+// InvalidModelText says what is wrong with a value of the branching model; the reasons are a closed set, shown through
+// literal keys.
+func InvalidModelText(ctx *context.Context, e branchworkflow.ErrInvalidBranchingModel) template.HTML {
+	switch e.Reason {
+	case branchworkflow.ReasonName:
+		return ctx.Tr("repo.settings.branching_model.invalid.name", e.Value)
+	case branchworkflow.ReasonNameRequired:
+		return ctx.Tr("repo.settings.branching_model.invalid.name_required")
+	case branchworkflow.ReasonNameDuplicate:
+		return ctx.Tr("repo.settings.branching_model.invalid.name_duplicate", e.Value)
+	case branchworkflow.ReasonNameReserved:
+		return ctx.Tr("repo.settings.branching_model.invalid.name_reserved", e.Value)
+	case branchworkflow.ReasonDuplicatePrefix:
+		return ctx.Tr("repo.settings.branching_model.invalid.duplicate_prefix", e.Value)
+	case branchworkflow.ReasonReleasePrefix:
+		return ctx.Tr("repo.settings.branching_model.invalid.release_prefix", e.Value)
+	case branchworkflow.ReasonPrefixIsBranch:
+		return ctx.Tr("repo.settings.branching_model.invalid.prefix_is_branch", e.Value)
+	case branchworkflow.ReasonMergeQueue:
+		return ctx.Tr("repo.settings.branching_model.invalid.merge_queue", e.Value)
+	case branchworkflow.ReasonBranchRequired:
+		return ctx.Tr("repo.settings.branching_model.invalid.branch_required", e.Value)
+	case branchworkflow.ReasonUnknownBase:
+		return ctx.Tr("repo.settings.branching_model.invalid.unknown_base", e.Value)
+	case branchworkflow.ReasonProductionRequired:
+		return ctx.Tr("repo.settings.branching_model.invalid.production_required", e.Value)
+	}
+	return ctx.Tr("repo.settings.branching_model.invalid", e.Value)
 }

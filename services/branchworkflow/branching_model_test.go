@@ -5,6 +5,7 @@ package branchworkflow
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -168,7 +169,8 @@ func TestSetOrgAndRepoModel(t *testing.T) {
 func TestNormalizeBranchTypes(t *testing.T) {
 	feature := repo_model.BranchType{Name: " Feature ", Prefix: " feature/ ", Base: repo_model.BranchTypeBaseDevelopment, BaseBranch: "ignored"}
 	m, err := NormalizeBranchingModel(&repo_model.BranchingModel{
-		DefaultPRTarget: " staging ",
+		DefaultPRTarget:  " staging ",
+		ProductionBranch: "main",
 		Types: []repo_model.BranchType{
 			feature,
 			{Name: "Chore", Prefix: "chore/", Base: repo_model.BranchTypeBaseBranch, BaseBranch: " next ", Off: true},
@@ -216,6 +218,27 @@ func TestNormalizeBranchTypes(t *testing.T) {
 		"prefix is the development branch": {DevelopmentBranch: "a/", Types: []repo_model.BranchType{ok}},
 		"duplicate":                        {Types: []repo_model.BranchType{ok, ok}},
 		"release prefix":                   {ReleasePrefixes: []string{"a/"}, Types: []repo_model.BranchType{ok}},
+		"reserved dev":                     {DevelopmentBranch: "HEAD"},
+		"refs prod":                        {ProductionBranch: "refs/heads/main"},
+		"dash dev":                         {DevelopmentBranch: "-x"},
+		"queue dev":                        {DevelopmentBranch: "merge-queue/main/1"},
+		"queue prod":                       {ProductionBranch: "merge-queue/x"},
+		"queue release":                    {ReleasePrefixes: []string{"merge-queue/"}},
+		"short release":                    {ReleasePrefixes: []string{"m"}},
+		"reserved release":                 {ReleasePrefixes: []string{"refs/"}},
+		"reserved target":                  {DefaultPRTarget: "HEAD"},
+		"dash target":                      {DefaultPRTarget: "-x"},
+		"refs prefix":                      {Types: []repo_model.BranchType{{Name: "A", Prefix: "refs/heads/", Base: repo_model.BranchTypeBaseDevelopment}}},
+		"head prefix":                      {Types: []repo_model.BranchType{{Name: "A", Prefix: "HEAD", Base: repo_model.BranchTypeBaseDevelopment}}},
+		"dash prefix":                      {Types: []repo_model.BranchType{{Name: "A", Prefix: "-x/", Base: repo_model.BranchTypeBaseDevelopment}}},
+		"short queue prefix":               {Types: []repo_model.BranchType{{Name: "A", Prefix: "merge-", Base: repo_model.BranchTypeBaseDevelopment}}},
+		"base head":                        {Types: []repo_model.BranchType{{Name: "A", Prefix: "a/", Base: repo_model.BranchTypeBaseBranch, BaseBranch: "HEAD"}}},
+		"base dash":                        {Types: []repo_model.BranchType{{Name: "A", Prefix: "a/", Base: repo_model.BranchTypeBaseBranch, BaseBranch: "-f"}}},
+		"same name":                        {Types: []repo_model.BranchType{ok, {Name: "a", Prefix: "b/", Base: repo_model.BranchTypeBaseDevelopment}}},
+		"reserved name":                    {Types: []repo_model.BranchType{{Name: "release", Prefix: "b/", Base: repo_model.BranchTypeBaseDevelopment}}},
+		"bidi name":                        {Types: []repo_model.BranchType{{Name: "a\u202eb", Prefix: "b/", Base: repo_model.BranchTypeBaseDevelopment}}},
+		"zero width name":                  {Types: []repo_model.BranchType{{Name: "\u200b", Prefix: "b/", Base: repo_model.BranchTypeBaseDevelopment}}},
+		"production without branch":        {Types: []repo_model.BranchType{{Name: "A", Prefix: "a/", Base: repo_model.BranchTypeBaseProduction}}},
 	} {
 		_, err := NormalizeBranchingModel(bad)
 		_, isInvalid := IsInvalidBranchingModel(err)
@@ -295,9 +318,9 @@ func TestResolveTarget(t *testing.T) {
 
 	// a missing development branch falls back to the default branch; so does a type whose base is not set
 	model.DevelopmentBranch, model.ProductionBranch, model.DefaultPRTarget = "no-dev", "", "no-target"
+	model.Types = slices.Delete(slices.Clone(model.Types), 1, 2) // a type based on a missing production branch is refused
 	require.NoError(t, SetRepoModel(t.Context(), repo, &model))
 	assert.Equal(t, Target{Branch: "master", Rule: TargetRuleFallback, TypeName: "Feature", Missing: "no-dev"}, target("feature/x"))
-	assert.Equal(t, Target{Branch: "master", Rule: TargetRuleFallback, TypeName: "Hotfix"}, target("hotfix/1"))
 	assert.Equal(t, Target{Branch: "master", Rule: TargetRuleFallback, Missing: "no-target"}, target("something"))
 
 	// the target is the default branch itself

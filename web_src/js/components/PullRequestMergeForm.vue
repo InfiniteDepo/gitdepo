@@ -167,12 +167,12 @@ export default {
       </button>
 
       <div class="ui checkbox tw-ml-1" v-if="mergeForm.isPullBranchDeletable">
-        <input name="delete_branch_after_merge" type="checkbox" v-model="deleteBranchAfterMerge" id="delete-branch-after-merge" :disabled="mergeForm.deleteBranchForced || !!mergeForm.textDeleteBranchKept">
+        <input name="delete_branch_after_merge" type="checkbox" v-model="deleteBranchAfterMerge" id="delete-branch-after-merge" :disabled="mergeForm.deleteBranchForced || !!mergeForm.textDeleteBranchKept" :aria-describedby="mergeForm.textDeleteBranchKept ? 'delete-branch-kept-reason' : (mergeForm.deleteBranchForced ? 'delete-branch-forced-reason' : null)">
         <label for="delete-branch-after-merge">{{ mergeForm.textDeleteBranch }}</label>
-        <div v-if="mergeForm.textDeleteBranchKept" class="delete-branch-kept help">
+        <div v-if="mergeForm.textDeleteBranchKept" id="delete-branch-kept-reason" class="delete-branch-kept help">
           {{ mergeForm.textDeleteBranchKept }}
         </div>
-        <div v-else-if="mergeForm.deleteBranchForced" class="delete-branch-forced help">
+        <div v-else-if="mergeForm.deleteBranchForced" id="delete-branch-forced-reason" class="delete-branch-forced help">
           {{ mergeForm.textDeleteBranchForced }}
         </div>
       </div>

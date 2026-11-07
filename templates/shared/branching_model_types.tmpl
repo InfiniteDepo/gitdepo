@@ -18,7 +18,7 @@
 				<td>
 					<label class="tw-sr-only" for="release_prefixes">{{ctx.Locale.Tr "repo.settings.branching_model.type_prefix"}}</label>
 					<input id="release_prefixes" name="release_prefixes" value="{{.ReleasePrefixes}}" placeholder="release/" maxlength="1100" {{if .ModelLocked}}disabled{{end}}>
-					<p class="help">{{ctx.Locale.Tr "repo.settings.branching_model.release_prefixes_desc"}} {{ctx.Locale.Tr "repo.settings.branching_model.release_prefixes_commas"}}</p>
+					<p class="help">{{ctx.Locale.Tr "repo.settings.branching_model.release_prefixes_desc"}}</p>
 				</td>
 				<td>{{ctx.Locale.Tr "repo.settings.branching_model.base_development"}}</td>
 				<td></td>
@@ -27,18 +27,17 @@
 			<tr class="branch-type-row">
 				<td><input type="checkbox" name="type_on" value="{{$i}}" {{if not $t.Off}}checked{{end}} aria-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_on"}}" {{if $.ModelLocked}}disabled{{end}}></td>
 				<td>
-					<label class="tw-sr-only">{{ctx.Locale.Tr "repo.settings.branching_model.type_name"}}<input name="type_name" value="{{$t.Name}}" maxlength="50" {{if $.ModelLocked}}disabled{{end}}></label>
+					<input name="type_name" aria-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_name"}}" value="{{$t.Name}}" maxlength="50" {{if $.ModelLocked}}disabled{{end}}>
 				</td>
 				<td>
-					<label class="tw-sr-only">{{ctx.Locale.Tr "repo.settings.branching_model.type_prefix"}}<input name="type_prefix" value="{{$t.Prefix}}" maxlength="100" {{if $.ModelLocked}}disabled{{end}}></label>
+					<input name="type_prefix" aria-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_prefix"}}" value="{{$t.Prefix}}" maxlength="100" {{if $.ModelLocked}}disabled{{end}}>
 				</td>
 				<td>
-					<label class="tw-sr-only">{{ctx.Locale.Tr "repo.settings.branching_model.type_base"}}
-					<select name="type_base" {{if $.ModelLocked}}disabled{{end}}>
+					<select name="type_base" aria-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_base"}}" {{if $.ModelLocked}}disabled{{end}}>
 						<option value="development" {{if eq $t.Base "development"}}selected{{end}}>{{ctx.Locale.Tr "repo.settings.branching_model.base_development"}}</option>
 						<option value="production" {{if eq $t.Base "production"}}selected{{end}}>{{ctx.Locale.Tr "repo.settings.branching_model.base_production"}}</option>
 						<option value="branch" {{if eq $t.Base "branch"}}selected{{end}}>{{ctx.Locale.Tr "repo.settings.branching_model.base_branch"}}</option>
-					</select></label>
+					</select>
 					<input name="type_branch" value="{{$t.BaseBranch}}" maxlength="255" placeholder="{{ctx.Locale.Tr "repo.settings.branching_model.type_branch_placeholder"}}" aria-label="{{ctx.Locale.Tr "repo.settings.branching_model.base_branch"}}" {{if $.ModelLocked}}disabled{{end}}>
 				</td>
 				<td>{{if not $.ModelLocked}}<button type="button" class="ui basic mini button remove-branch-type">{{ctx.Locale.Tr "repo.settings.branching_model.type_remove"}}</button>{{end}}</td>
@@ -49,15 +48,14 @@
 		<template>
 			<tr class="branch-type-row">
 				<td><input type="checkbox" name="type_on" value="0" aria-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_on"}}"></td>
-				<td><label class="tw-sr-only">{{ctx.Locale.Tr "repo.settings.branching_model.type_name"}}<input name="type_name" maxlength="50"></label></td>
-				<td><label class="tw-sr-only">{{ctx.Locale.Tr "repo.settings.branching_model.type_prefix"}}<input name="type_prefix" maxlength="100"></label></td>
+				<td><input name="type_name" aria-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_name"}}" maxlength="50"></td>
+				<td><input name="type_prefix" aria-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_prefix"}}" maxlength="100"></td>
 				<td>
-					<label class="tw-sr-only">{{ctx.Locale.Tr "repo.settings.branching_model.type_base"}}
-					<select name="type_base">
+					<select name="type_base" aria-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_base"}}">
 						<option value="development">{{ctx.Locale.Tr "repo.settings.branching_model.base_development"}}</option>
 						<option value="production">{{ctx.Locale.Tr "repo.settings.branching_model.base_production"}}</option>
 						<option value="branch">{{ctx.Locale.Tr "repo.settings.branching_model.base_branch"}}</option>
-					</select></label>
+					</select>
 					<input name="type_branch" maxlength="255" placeholder="{{ctx.Locale.Tr "repo.settings.branching_model.type_branch_placeholder"}}" aria-label="{{ctx.Locale.Tr "repo.settings.branching_model.base_branch"}}">
 				</td>
 				<td><button type="button" class="ui basic mini button remove-branch-type">{{ctx.Locale.Tr "repo.settings.branching_model.type_remove"}}</button></td>
@@ -70,7 +68,7 @@
 		<p class="help branching-model-untyped">{{ctx.Locale.TrPluralString .Count "repo.settings.branching_model.untyped" .Count .Prefix}}</p>
 	{{end}}
 	{{range .MissingBases}}
-		<div class="ui warning message branching-model-missing-base">{{ctx.Locale.Tr "repo.settings.branching_model.base_missing" .}}</div>
+		<div class="ui yellow message branching-model-missing-base">{{ctx.Locale.Tr "repo.settings.branching_model.base_missing" .}}</div>
 	{{end}}
 	{{if not .ModelLocked}}
 	<div class="tw-mt-2">
