@@ -428,8 +428,8 @@ func MergeStack(ctx *context.Context) {
 			if err := repo_service.DeleteBranchAfterMerge(workCtx, ctx.Doer, mpr, headRepo); err != nil {
 				message, ok := branchKeptMessage(ctx, err)
 				if !ok {
-					ctx.ServerError("DeleteBranchAfterMerge", err)
-					return
+					log.Error("DeleteBranchAfterMerge %-v: %v", mpr, err)
+					message = ctx.Tr("repo.branch.deletion_failed", mpr.HeadBranch)
 				}
 				kept = append(kept, string(ctx.Tr("repo.pulls.stack.branch_kept", index, message)))
 			}

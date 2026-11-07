@@ -194,7 +194,7 @@ func deleteMergedBranchesOf(ctx context.Context, doer *user_model.User, repo *re
 			failed++
 			continue
 		}
-		if err := DeleteBranch(ctx, doer, repo, gitRepo, b.name); err != nil {
+		if err := DeleteBranch(ctx, doer, repo, gitRepo, b.name, b.commit); err != nil {
 			log.Error("DeleteMergedBranches: branch %q of %-v: %v", b.name, repo, err)
 			failed++
 			continue

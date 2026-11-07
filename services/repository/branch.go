@@ -470,8 +470,16 @@ func (e ErrBranchKept) Error() string {
 	return "branch is kept: " + e.Reason
 }
 
-// DeleteBranch delete branch
-func DeleteBranch(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, gitRepo *git.Repository, branchName string) error {
+// DeleteBranchTestHook, when set by a test, runs in DeleteBranch after the checks and before the deletion, where a push
+// from another request can land.
+var DeleteBranchTestHook func(repo *repo_model.Repository, branchName string)
+
+var errBranchSwap = errors.New("the branch could not be deleted at the expected commit")
+
+// DeleteBranch deletes a branch only while it is at expected, the commit the caller checked (a merge, a merged-branch
+// scan, the page the doer saw); an empty expected means the tip as it is now. A branch that moved is refused with
+// ErrBranchHasNewCommits and nothing is recorded or deleted.
+func DeleteBranch(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, gitRepo *git.Repository, branchName, expected string) error {
 	err := repo.MustNotBeArchived()
 	if err != nil {
 		return err
@@ -502,9 +510,20 @@ func DeleteBranch(ctx context.Context, doer *user_model.User, repo *repo_model.R
 	// database branch record not exist or it's a deleted branch
 	notExist := git_model.IsErrBranchNotExist(err) || rawBranch.IsDeleted
 
-	commit, err := gitRepo.GetBranchCommit(branchName)
-	if err != nil {
+	tip, err := gitRepo.GetBranchCommitID(branchName)
+	if git.IsErrNotExist(err) {
+		return git.ErrBranchNotExist{Name: branchName}
+	} else if err != nil {
 		return err
+	}
+	if expected == "" {
+		expected = tip
+	}
+	if tip != expected {
+		return ErrBranchHasNewCommits
+	}
+	if DeleteBranchTestHook != nil {
+		DeleteBranchTestHook(repo, branchName)
 	}
 
 	if err := db.WithTx(ctx, func(ctx context.Context) error {
@@ -515,19 +534,21 @@ func DeleteBranch(ctx context.Context, doer *user_model.User, repo *repo_model.R
 		}
 		if err := repo_model.RecordRepoTarget(ctx, repo, audit_model.Event{
 			Action: "repo.branch.deleted", TargetType: "branch", TargetName: branchName,
-			Data: map[string]any{"name": branchName, "commit": commit.ID.String()},
+			Data: map[string]any{"name": branchName, "commit": expected},
 		}); err != nil {
 			return err
 		}
 
 		// compare-and-swap on the tip read above: a push in between is not deleted with its commits
-		return gitRepo.DeleteBranch(branchName, git.DeleteBranchOptions{
-			Force:          true,
-			ExpectedCommit: commit.ID.String(),
-		})
+		if err := gitRepo.DeleteBranch(branchName, git.DeleteBranchOptions{Force: true, ExpectedCommit: expected}); err != nil {
+			return fmt.Errorf("%w: %w", errBranchSwap, err)
+		}
+		return nil
 	}); err != nil {
-		if now, err2 := gitRepo.GetBranchCommitID(branchName); err2 == nil && now != commit.ID.String() {
-			return ErrBranchHasNewCommits
+		if errors.Is(err, errBranchSwap) {
+			if _, err2 := gitRepo.GetBranchCommitID(branchName); err2 == nil {
+				return ErrBranchHasNewCommits // moved, or locked by a push in flight: still there, try again
+			}
 		}
 		return err
 	}
@@ -538,7 +559,7 @@ func DeleteBranch(ctx context.Context, doer *user_model.User, repo *repo_model.R
 	if err := PushUpdate(
 		&repo_module.PushUpdateOptions{
 			RefFullName:  git.RefNameFromBranch(branchName),
-			OldCommitID:  commit.ID.String(),
+			OldCommitID:  expected,
 			NewCommitID:  objectFormat.EmptyObjectID().String(),
 			PusherID:     doer.ID,
 			PusherName:   doer.Name,
@@ -587,7 +608,17 @@ func DeleteBranchAfterMerge(ctx context.Context, doer *user_model.User, pr *issu
 		return nil
 	}
 
+	// Ensure the doer has write permissions to the head repository of the branch it wants to delete.
+	perm, err := access.GetUserRepoPermission(ctx, pr.HeadRepo, doer)
+	if err != nil {
+		return err
+	}
+	if !perm.CanWrite(unit.TypeCode) {
+		return util.NewPermissionDeniedErrorf("Must have write permission to the head repository")
+	}
+
 	// Never delete the default, development, production, release or a protected branch of the repository that owns it.
+	// This runs after the permission check: the model of a repository the doer can't write is not told to them.
 	reason, err := branchworkflow.KeptReason(ctx, pr.HeadRepo, pr.HeadBranch, false)
 	if err != nil {
 		return err
@@ -625,15 +656,6 @@ func DeleteBranchAfterMerge(ctx context.Context, doer *user_model.User, pr *issu
 		}
 	}
 
-	// Ensure the doer has write permissions to the head repository of the branch it wants to delete.
-	perm, err := access.GetUserRepoPermission(ctx, pr.HeadRepo, doer)
-	if err != nil {
-		return err
-	}
-	if !perm.CanWrite(unit.TypeCode) {
-		return util.NewPermissionDeniedErrorf("Must have write permission to the head repository")
-	}
-
 	// Don't delete a branch that was pushed to after the merge; the PR ref lives in the base repository.
 	baseRepo := headRepo
 	if pr.BaseRepoID != pr.HeadRepoID {
@@ -658,9 +680,12 @@ func DeleteBranchAfterMerge(ctx context.Context, doer *user_model.User, pr *issu
 	}
 
 	if err := pull_service.RetargetChildrenOnMerge(ctx, doer, pr); err != nil {
+		if errors.Is(err, pull_service.ErrChildPullsNotRetargeted) {
+			return ErrBranchInUse // an open pull request still needs this branch
+		}
 		return err
 	}
-	if err := DeleteBranch(ctx, doer, pr.HeadRepo, headRepo, pr.HeadBranch); err != nil {
+	if err := DeleteBranch(ctx, doer, pr.HeadRepo, headRepo, pr.HeadBranch, prHead); err != nil {
 		return err
 	}
 

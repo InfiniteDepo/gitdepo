@@ -21785,7 +21785,7 @@
         }
       },
       "post": {
-        "description": "When the head branch is kept although deleting it was asked or enforced, the response header X-Branch-Kept holds the reason (default, development, production, release, protected, open_pr, merge_queue, new_commits or permission); a kept branch never fails a merge that enforced the deletion, and answers 403 when the request asked for it.",
+        "description": "When the head branch is kept although deleting it was asked or enforced, the response header X-Branch-Kept holds the reason (default, development, production, release, protected, base, open_pr, merge_queue, new_commits, permission or failed); a kept branch never fails a merge that enforced the deletion, and answers 403 when the request asked for it.",
         "produces": [
           "application/json"
         ],

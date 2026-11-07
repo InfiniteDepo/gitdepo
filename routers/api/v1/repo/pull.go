@@ -473,6 +473,10 @@ func CreatePullRequest(ctx *context.APIContext) {
 			return
 		}
 		form.Base = target.Branch
+		if form.Head == form.Base {
+			ctx.Error(http.StatusUnprocessableEntity, "BaseHeadSame", fmt.Sprintf("The branching model targets %s, the head branch itself: name a base", form.Base))
+			return
+		}
 	}
 	if form.Head == form.Base {
 		ctx.Error(http.StatusUnprocessableEntity, "BaseHeadSame",
@@ -622,6 +626,9 @@ func CreatePullRequest(ctx *context.APIContext) {
 			return
 		} else if message, ok := issue_service.PRTitleRuleMessage(ctx.Locale, err); ok {
 			ctx.Error(http.StatusUnprocessableEntity, "PRTitleRule", message)
+			return
+		} else if git_model.IsErrBranchesEqual(err) {
+			ctx.Error(http.StatusUnprocessableEntity, "BaseHeadSame", "Invalid PullRequest: There are no changes between the head and the base")
 			return
 		}
 		ctx.Error(http.StatusInternalServerError, "NewPullRequest", err)
@@ -931,7 +938,7 @@ func MergePullRequest(ctx *context.APIContext) {
 	// swagger:operation POST /repos/{owner}/{repo}/pulls/{index}/merge repository repoMergePullRequest
 	// ---
 	// summary: Merge a pull request
-	// description: When the head branch is kept although deleting it was asked or enforced, the response header X-Branch-Kept holds the reason (default, development, production, release, protected, open_pr, merge_queue, new_commits or permission); a kept branch never fails a merge that enforced the deletion, and answers 403 when the request asked for it.
+	// description: When the head branch is kept although deleting it was asked or enforced, the response header X-Branch-Kept holds the reason (default, development, production, release, protected, base, open_pr, merge_queue, new_commits, permission or failed); a kept branch never fails a merge that enforced the deletion, and answers 403 when the request asked for it.
 	// produces:
 	// - application/json
 	// parameters:
@@ -1201,7 +1208,10 @@ func MergePullRequest(ctx *context.APIContext) {
 				code, _ := repo_service.KeptCode(err)
 				ctx.Error(http.StatusForbidden, "HeadBranch", fmt.Errorf("the head branch was kept: %s", code))
 			default:
-				ctx.Error(http.StatusInternalServerError, "DeleteBranchAfterMerge", err)
+				// the pull request is merged: a failed cleanup is not a server error
+				log.Error("DeleteBranchAfterMerge %-v: %v", pr, err)
+				ctx.Resp.Header().Set("X-Branch-Kept", "failed")
+				ctx.Status(http.StatusOK)
 			}
 			return
 		}

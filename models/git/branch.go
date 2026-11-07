@@ -112,7 +112,7 @@ func IsErrBranchesEqual(err error) bool {
 }
 
 func (err ErrBranchesEqual) Error() string {
-	return fmt.Sprintf("branches are equal [head: %sm base: %s]", err.HeadBranchName, err.BaseBranchName)
+	return fmt.Sprintf("branches are equal [head: %s base: %s]", err.HeadBranchName, err.BaseBranchName)
 }
 
 func (err ErrBranchesEqual) Unwrap() error {

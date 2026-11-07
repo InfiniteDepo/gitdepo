@@ -7,14 +7,12 @@ import (
 	"context"
 	"slices"
 	"strings"
-	"time"
 
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
 	issues_model "forgejo.org/models/issues"
 	pull_model "forgejo.org/models/pull"
 	repo_model "forgejo.org/models/repo"
-	"forgejo.org/modules/setting"
 
 	"xorm.io/builder"
 )
@@ -28,6 +26,7 @@ const (
 	KeptProtected   = "protected"
 	KeptOpenPR      = "open_pr"
 	KeptMergeQueue  = "merge_queue"
+	KeptBase        = "base" // the named base of a branch type, or the default pull request target
 )
 
 // KeptChecker says why branches of one repository must never be deleted. It loads what it needs once, so a list of
@@ -38,6 +37,7 @@ type KeptChecker struct {
 	dev   string
 	rules git_model.ProtectedBranchRules
 	inUse map[string]bool
+	bases map[string]bool
 }
 
 // NewKeptChecker loads the model, the protection rules and, with openPRs, the branches the open pull requests use.
@@ -50,7 +50,15 @@ func NewKeptChecker(ctx context.Context, repo *repo_model.Repository, openPRs bo
 	if err != nil {
 		return nil, err
 	}
-	k := &KeptChecker{repo: repo, model: model, dev: model.DevelopmentBranch(repo), rules: rules, inUse: map[string]bool{}}
+	k := &KeptChecker{repo: repo, model: model, dev: model.DevelopmentBranch(repo), rules: rules, inUse: map[string]bool{}, bases: map[string]bool{}}
+	for _, t := range model.Model.Types {
+		if !t.Off && t.Base == repo_model.BranchTypeBaseBranch {
+			k.bases[t.BaseBranch] = true
+		}
+	}
+	if model.Model.DefaultPRTarget != "" {
+		k.bases[model.Model.DefaultPRTarget] = true
+	}
 	if !openPRs {
 		return k, nil
 	}
@@ -86,6 +94,8 @@ func (k *KeptChecker) Reason(name string) string {
 		return KeptRelease
 	case k.rules.GetFirstMatched(name) != nil:
 		return KeptProtected
+	case k.bases[name]:
+		return KeptBase
 	case pull_model.IsMergeQueueBranch(name):
 		return KeptMergeQueue
 	case k.inUse[name]:
@@ -103,19 +113,4 @@ func KeptReason(ctx context.Context, repo *repo_model.Repository, name string, o
 		return "", err
 	}
 	return k.Reason(name), nil
-}
-
-// RestoreWindow tells how a deleted branch can be restored, from the configured deleted-branch cleanup: restorable
-// is false when the cleanup purges at once, and hours is the time a deleted branch stays restorable, 0 when the
-// cleanup is switched off and a branch stays restorable until the repository is deleted.
-func RestoreWindow() (hours int, restorable bool) {
-	sec := setting.CfgProvider.Section("cron.deleted_branches_cleanup")
-	if !sec.Key("ENABLED").MustBool(true) {
-		return 0, true
-	}
-	d, err := time.ParseDuration(sec.Key("OLDER_THAN").MustString("24h"))
-	if err != nil {
-		d = 24 * time.Hour
-	}
-	return int((d + time.Hour - 1) / time.Hour), d > 0
 }

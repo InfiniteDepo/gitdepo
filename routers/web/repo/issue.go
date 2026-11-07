@@ -2167,19 +2167,40 @@ func ViewIssue(ctx *context.Context) {
 
 			isPullBranchDeletable = !exist
 		}
-		ctx.Data["IsPullBranchDeletable"] = isPullBranchDeletable
 		ctx.Data["DeleteBranchKept"] = ""
-		if isPullBranchDeletable && !pull.HasMerged {
-			// say it before the merge: the branching model keeps this head branch whatever the merger ticks
+		// the kept reason of a branch in a fork is the fork's own business: show it only to those who can read the fork
+		ctx.Data["CanReadHeadRepo"] = pull.HeadRepo != nil && pull.HeadRepoID == pull.BaseRepoID
+		if pull.HeadRepo != nil && pull.HeadRepoID != pull.BaseRepoID {
+			headPerm, err := access_model.GetUserRepoPermission(ctx, pull.HeadRepo, ctx.Doer)
+			if err != nil {
+				ctx.ServerError("GetUserRepoPermission", err)
+				return
+			}
+			ctx.Data["CanReadHeadRepo"] = headPerm.CanRead(unit.TypeCode)
+		}
+		if isPullBranchDeletable {
+			// the branching model keeps this head branch whatever the merger ticks: before the merge the box says so,
+			// after it the "Delete branch" button is not offered (CleanUpPullRequest refuses it too)
 			reason, err := branchworkflow.KeptReason(ctx, pull.HeadRepo, pull.HeadBranch, false)
 			if err != nil {
 				ctx.ServerError("KeptReason", err)
 				return
 			}
 			if reason != "" {
-				ctx.Data["DeleteBranchKept"] = keptWillBeText(ctx, pull.HeadBranch, reason)
+				// a pull request that merges a branch of the chain forward doesn't offer the box at all
+				mergeForward := false
+				if m, err := branchworkflow.GetEffectiveModel(ctx, pull.HeadRepo); err == nil {
+					mergeForward = m.Model.MergeForward && (reason == branchworkflow.KeptDevelopment || reason == branchworkflow.KeptProduction || reason == branchworkflow.KeptRelease)
+				}
+				if pull.HasMerged || mergeForward {
+					isPullBranchDeletable = false
+				} else {
+					ctx.Data["DeleteBranchKept"] = keptWillBeText(ctx, pull.HeadBranch, reason)
+				}
 			}
 		}
+		ctx.Data["IsPullBranchDeletable"] = isPullBranchDeletable
+		ctx.Data["RestoreText"] = RestoreText(ctx)
 
 		deleteBranch, err := branchworkflow.GetEffective(ctx, ctx.Repo.Repository)
 		if err != nil {

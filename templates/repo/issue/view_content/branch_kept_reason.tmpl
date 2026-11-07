@@ -4,5 +4,7 @@
 {{else if eq . "production"}}{{ctx.Locale.Tr "repo.pulls.delete_after_merge.reason.production"}}
 {{else if eq . "release"}}{{ctx.Locale.Tr "repo.pulls.delete_after_merge.reason.release"}}
 {{else if eq . "protected"}}{{ctx.Locale.Tr "repo.pulls.delete_after_merge.reason.protected"}}
+{{else if eq . "base"}}{{ctx.Locale.Tr "repo.pulls.delete_after_merge.reason.base"}}
+{{else if eq . "open_pr"}}{{ctx.Locale.Tr "repo.pulls.delete_after_merge.reason.open_pr"}}
 {{else if eq . "merge_queue"}}{{ctx.Locale.Tr "repo.pulls.delete_after_merge.reason.merge_queue"}}
 {{end}}
