@@ -48,9 +48,10 @@
 					</div>
 					<div class="field">
 						<div class="ui checkbox">
-							<input type="checkbox" id="merge-stack-delete" name="delete_branch_after_merge" {{if or $stack.DeleteDefault $stack.DeleteForced}}checked{{end}} {{if $stack.DeleteForced}}disabled{{end}}>
-							<label for="merge-stack-delete">{{ctx.Locale.TrPluralString $count "repo.pulls.stack.delete_branches" $count}}</label>
+							<input type="checkbox" id="merge-stack-delete" name="delete_branch_after_merge" {{if and $stack.Deletable (or $stack.DeleteDefault $stack.DeleteForced)}}checked{{end}} {{if or $stack.DeleteForced (not $stack.Deletable)}}disabled{{end}} {{if $stack.Kept}}aria-describedby="merge-stack-kept"{{end}}>
+							<label for="merge-stack-delete">{{if $stack.Deletable}}{{ctx.Locale.TrPluralString $stack.Deletable "repo.pulls.stack.delete_branches" $stack.Deletable}}{{else}}{{ctx.Locale.Tr "repo.pulls.stack.delete_none"}}{{end}}</label>
 						</div>
+						{{if and $stack.Kept $stack.Deletable}}<p class="help" id="merge-stack-kept">{{ctx.Locale.TrPluralString $stack.Kept "repo.pulls.stack.delete_kept" $stack.Kept}}</p>{{end}}
 					</div>
 					{{range $stack.Chain}}
 						<input type="hidden" name="head" value="{{.Index}}:{{.HeadCommitID}}">

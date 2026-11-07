@@ -82,6 +82,8 @@ type stackView struct {
 	DefaultStyle  string
 	DeleteDefault bool
 	DeleteForced  bool
+	Deletable     int // the branches of the merged pull requests that are deleted after the merge
+	Kept          int // the ones that are not: the branching model, a protection rule or the repository keeps them
 }
 
 func stackReviewState(ctx *context.Context, review string) stackState {
@@ -235,6 +237,19 @@ func prepareStack(ctx *context.Context, pull *issues_model.PullRequest, allowMer
 	view.DefaultStyle = string(cfg.GetDefaultMergeStyle())
 	view.DeleteDefault, _ = ctx.Data["DefaultDeleteBranchAfterMerge"].(bool)
 	view.DeleteForced, _ = ctx.Data["DeleteBranchForced"].(bool)
+	// the same decision as after the merge: only branches that DeleteBranchAfterMerge would delete are counted
+	kept, err := branchworkflow.NewKeptChecker(ctx, ctx.Repo.Repository, false)
+	if err != nil {
+		ctx.ServerError("NewKeptChecker", err)
+		return
+	}
+	for _, e := range stack.Entries[:current+1] {
+		if e.PR.HeadRepoID == e.PR.BaseRepoID && e.PR.Flow != issues_model.PullRequestFlowAGit && kept.Reason(e.PR.HeadBranch) == "" {
+			view.Deletable++
+		} else {
+			view.Kept++
+		}
+	}
 	if view.MergeQueue, err = pull_service.StackRequiresMergeQueue(ctx, ctx.Repo.Repository.ID, stack.BaseBranch); err != nil {
 		ctx.ServerError("StackRequiresMergeQueue", err)
 		return
