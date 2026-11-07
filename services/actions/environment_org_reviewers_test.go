@@ -10,6 +10,7 @@ import (
 	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	"forgejo.org/models/perm"
+	access_model "forgejo.org/models/perm/access"
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unit"
 	"forgejo.org/models/unittest"
@@ -71,7 +72,7 @@ func TestCheckOrgEnvironmentReviewers(t *testing.T) {
 	env := &actions_model.ActionEnvironment{ID: 1, OwnerID: 3, ReviewsRequired: true}
 	reviewers := map[int64][]*actions_model.ActionEnvironmentReviewer{1: {{UserID: 4}, {UserID: 5}, {UserID: 28}, {TeamID: 7}}}
 
-	check, err := CheckOrgEnvironmentReviewers(ctx, org, []*actions_model.ActionEnvironment{env}, reviewers)
+	check, err := CheckOrgEnvironmentReviewers(ctx, org, []*actions_model.ActionEnvironment{env}, reviewers, true)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"user:5": ReviewerOutsider, "user:28": ReviewerNotUsable, "team:7": ReviewerNoneInTeam}, check.Ineligible)
 	assert.False(t, check.NoReviewer[1])
@@ -84,30 +85,41 @@ func TestCheckOrgEnvironmentReviewers(t *testing.T) {
 
 	// the organization requires two-factor authentication, which nobody here has
 	org.RequireTwoFactor = true
-	check, err = CheckOrgEnvironmentReviewers(ctx, org, []*actions_model.ActionEnvironment{env}, reviewers)
+	check, err = CheckOrgEnvironmentReviewers(ctx, org, []*actions_model.ActionEnvironment{env}, reviewers, true)
 	require.NoError(t, err)
 	assert.Equal(t, ReviewerTwoFactor, check.Ineligible["user:4"])
 	assert.True(t, check.NoReviewer[1])
 	assert.Empty(t, check.Readers)
 }
 
-// A user who is the only one who can approve an organization environment (in any repository of the organization)
-// is its last approver.
+// A user who is the only one who can approve an organization environment in a repository it applies to is its last
+// approver there, even when someone else can approve in another repository.
 func TestFindOrgEnvironmentLastApprovers(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	ctx := audit_model.WithSystem(t.Context(), "test")
 	require.NoError(t, db.Insert(ctx, &repo_model.RepoUnit{RepoID: 3, Type: unit.TypeActions}))
 	require.NoError(t, db.Insert(ctx, &repo_model.Collaboration{RepoID: 3, UserID: 4, Mode: perm.AccessModeRead}))
-	env := &actions_model.ActionEnvironment{OwnerID: 3, Name: "prod"}
+	require.NoError(t, db.Insert(ctx, &repo_model.RepoUnit{RepoID: 5, Type: unit.TypeActions}))
+	require.NoError(t, db.Insert(ctx, &repo_model.Collaboration{RepoID: 5, UserID: 5, Mode: perm.AccessModeRead}))
+	require.NoError(t, db.Insert(ctx, &access_model.Access{RepoID: 5, UserID: 5, Mode: perm.AccessModeRead}))
+	env := &actions_model.ActionEnvironment{OwnerID: 3, Name: "prod", AllRepos: true}
 	require.NoError(t, actions_model.CreateEnvironment(ctx, env, []actions_model.ActionEnvironmentReviewer{{UserID: 4}, {UserID: 5}}))
 
 	found, err := FindEnvironmentLastApprovers(ctx, []int64{4})
 	require.NoError(t, err)
-	require.Len(t, found, 1)
+	require.Len(t, found, 1, "user 5 approves in repository 5, not in repository 3")
 	assert.Equal(t, env.ID, found[0].Env.ID)
-	assert.Nil(t, found[0].Repo)
+	assert.EqualValues(t, 3, found[0].Repo.ID)
 	assert.EqualValues(t, 3, found[0].Org.ID)
 	found, err = FindEnvironmentLastApprovers(ctx, []int64{5})
 	require.NoError(t, err)
-	assert.Empty(t, found, "user 5 can't approve in any repository of the organization")
+	require.Len(t, found, 1)
+	assert.EqualValues(t, 5, found[0].Repo.ID)
+
+	// not selected, repository 3 doesn't count
+	env.AllRepos, env.RepoIDs = false, []int64{5, 32}
+	require.NoError(t, actions_model.UpdateEnvironment(ctx, env, []actions_model.ActionEnvironmentReviewer{{UserID: 4}, {UserID: 5}}))
+	found, err = FindEnvironmentLastApprovers(ctx, []int64{4})
+	require.NoError(t, err)
+	assert.Empty(t, found)
 }

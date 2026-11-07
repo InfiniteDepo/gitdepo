@@ -32803,6 +32803,19 @@
           ],
           "x-go-name": "RefPolicy"
         },
+        "repositories": {
+          "description": "the names of the selected repositories",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-name": "Repositories"
+        },
+        "repository_selection": {
+          "description": "of an environment on the organization's routes: \"all\" repositories of the organization, or the \"selected\" ones",
+          "type": "string",
+          "x-go-name": "RepositorySelection"
+        },
         "reviewers": {
           "type": "array",
           "items": {
@@ -35807,6 +35820,23 @@
             "patterns"
           ],
           "x-go-name": "RefPolicy"
+        },
+        "repositories": {
+          "description": "with \"selected\", the names of the repositories of the organization, at most 1000",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-name": "Repositories"
+        },
+        "repository_selection": {
+          "description": "required on the organization's routes: \"all\" repositories of the organization (which needs reviewers while\nthe environment has secrets), or the \"selected\" ones; ignored for a repository",
+          "type": "string",
+          "enum": [
+            "all",
+            "selected"
+          ],
+          "x-go-name": "RepositorySelection"
         },
         "reviewers": {
           "description": "at most 6 users and teams together, each named by type and id; an empty list means no review is required",

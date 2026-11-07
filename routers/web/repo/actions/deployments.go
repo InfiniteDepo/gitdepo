@@ -99,6 +99,8 @@ func refusalText(ctx *app_context.Context, d *actions_model.ActionDeployment) st
 		return ctx.Locale.TrString("actions.deployments.refused.environment_not_found")
 	case actions_model.DeploymentReasonUnsupported:
 		return ctx.Locale.TrString("actions.deployments.refused.environment_unsupported")
+	case actions_model.DeploymentReasonNotAvailable:
+		return ctx.Locale.TrString("actions.deployments.refused.environment_not_available")
 	}
 	return ctx.Locale.TrString("actions.deployments.refused.other")
 }
@@ -469,7 +471,7 @@ func Deployments(ctx *app_context.Context) {
 		for _, e := range envs {
 			ids = append(ids, e.ID)
 		}
-		last, err := actions_model.FindLastDeployments(ctx, repo.ID, ids)
+		last, err := actions_model.FindLastDeployments(ctx, 0, repo.ID, ids)
 		if err != nil {
 			ctx.ServerError("FindLastDeployments", err)
 			return

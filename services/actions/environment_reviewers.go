@@ -162,13 +162,11 @@ func environmentReviewers(ctx context.Context, doer *user_model.User, e *actions
 func checkReviewerMembers(ctx context.Context, repo *repo_model.Repository, orgID int64, userIDs []int64) error {
 	members := container.Set[int64]{}
 	if repo == nil {
-		for _, id := range userIDs {
-			if ok, err := org_model.IsOrganizationMember(ctx, orgID, id); err != nil {
-				return err
-			} else if ok {
-				members.Add(id)
-			}
+		var ids []int64
+		if err := db.GetEngine(ctx).Table("org_user").Where("org_id = ?", orgID).In("uid", userIDs).Cols("uid").Find(&ids); err != nil {
+			return err
 		}
+		members.AddMultiple(ids...)
 	} else {
 		rows, err := accessreport.Compute(ctx, accessreport.Options{RepoIDs: []int64{repo.ID}, Users: userIDs, RepoPermission: true})
 		if err != nil {
@@ -229,20 +227,21 @@ func emitEnvironmentRuns(ctx context.Context, e *actions_model.ActionEnvironment
 	}
 }
 
-// EnvironmentLastApprover is an environment that requires reviews, of the repository or of the organization (Repo
-// nil), where the user is one of the last who can approve.
+// EnvironmentLastApprover is an environment that requires reviews, of the repository Repo or of the organization Org
+// for its repository Repo, where the user is one of the last who can approve.
 type EnvironmentLastApprover struct {
 	UserID int64
 	Repo   *repo_model.Repository
-	Org    *user_model.User
+	Org    *user_model.User // nil for an environment of the repository
 	Env    *actions_model.ActionEnvironment
 }
 
 // FindEnvironmentLastApprovers returns the environments that require reviews where some of the users (about to be
 // deactivated or barred from signing in) can approve now and nobody else can, by the rule of CheckEnvironmentReviewers
-// (approverReason), once for each of those users; for an environment of an organization, a user can approve who could
-// in one of its repositories. The number of queries doesn't depend on the number of environments or repositories: the
-// access of every candidate to every repository comes from one accessreport.Compute.
+// (approverReason), once for each of those users and repository: an organization environment is decided for each
+// repository it applies to (actions_model.FindEnvironmentRepos), as its runs are. The number of queries doesn't depend
+// on the number of environments or repositories: the access of every candidate to every repository comes from one
+// accessreport.Compute.
 func FindEnvironmentLastApprovers(ctx context.Context, userIDs []int64) ([]*EnvironmentLastApprover, error) {
 	teamIDs, err := org_model.GetTeamIDsOfUsers(ctx, userIDs)
 	if err != nil {
@@ -257,21 +256,24 @@ func FindEnvironmentLastApprovers(ctx context.Context, userIDs []int64) ([]*Envi
 		builder.Select("environment_id").From("action_environment_reviewer").Where(cond))).OrderBy("id").Find(&envs); err != nil || len(envs) == 0 {
 		return nil, err
 	}
-	var envIDs, repoIDs, orgIDs, listedTeams, candidates []int64
+	var envIDs, repoIDs, orgEnvIDs, listedTeams, candidates []int64
+	envRepos := map[int64][]int64{} // the repositories each environment applies to
 	for _, e := range envs {
 		envIDs = append(envIDs, e.ID)
 		if e.RepoID != 0 {
 			repoIDs = append(repoIDs, e.RepoID)
+			envRepos[e.ID] = []int64{e.RepoID}
 		} else {
-			orgIDs = append(orgIDs, e.OwnerID)
+			orgEnvIDs = append(orgEnvIDs, e.ID)
 		}
 	}
-	if len(orgIDs) > 0 {
-		var ids []int64
-		if err := db.GetEngine(ctx).Table("repository").In("owner_id", orgIDs).Cols("id").Find(&ids); err != nil {
-			return nil, err
-		}
-		repoIDs = append(repoIDs, ids...)
+	covered, err := actions_model.FindEnvironmentRepos(ctx, orgEnvIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range covered {
+		repoIDs = append(repoIDs, c.RepoID)
+		envRepos[c.EnvironmentID] = append(envRepos[c.EnvironmentID], c.RepoID)
 	}
 	reviewers, err := actions_model.FindReviewersOfEnvironments(ctx, envIDs)
 	if err != nil {
@@ -297,16 +299,15 @@ func FindEnvironmentLastApprovers(ctx context.Context, userIDs []int64) ([]*Envi
 		members[tu.TeamID] = append(members[tu.TeamID], tu)
 		candidates = append(candidates, tu.UID)
 	}
-	rows, err := accessreport.Compute(ctx, accessreport.Options{RepoIDs: repoIDs, Users: candidates, RepoPermission: true})
+	rows, err := accessreport.Compute(ctx, accessreport.Options{RepoIDs: slices.Compact(slices.Sorted(slices.Values(repoIDs))), Users: candidates, RepoPermission: true})
 	if err != nil {
 		return nil, err
 	}
 	// who lacks two-factor authentication doesn't depend on the organization, only whether one requires it
 	repos := map[int64]*repo_model.Repository{}
-	owners := map[int64]*user_model.User{}
 	anyRequired := false
 	for _, row := range rows {
-		repos[row.Repo.ID], owners[row.Repo.OwnerID] = row.Repo, row.Repo.Owner
+		repos[row.Repo.ID] = row.Repo
 		anyRequired = anyRequired || twoFactorRequired(row.Repo.Owner)
 	}
 	missing := container.Set[int64]{}
@@ -316,7 +317,7 @@ func FindEnvironmentLastApprovers(ctx context.Context, userIDs []int64) ([]*Envi
 		}
 	}
 	type repoUser struct{ repo, user int64 }
-	eligible, eligibleInOrg := container.Set[repoUser]{}, container.Set[repoUser]{}
+	eligible := container.Set[repoUser]{}
 	for _, row := range rows {
 		var m container.Set[int64]
 		if twoFactorRequired(row.Repo.Owner) {
@@ -324,39 +325,37 @@ func FindEnvironmentLastApprovers(ctx context.Context, userIDs []int64) ([]*Envi
 		}
 		if row.User != nil && approverReason(row, m) == "" {
 			eligible.Add(repoUser{row.Repo.ID, row.User.ID})
-			eligibleInOrg.Add(repoUser{row.Repo.OwnerID, row.User.ID})
 		}
 	}
 	leaving := container.SetOf(userIDs...)
 	var out []*EnvironmentLastApprover
 	for _, e := range envs {
-		repo, org := repos[e.RepoID], owners[e.OwnerID]
-		orgID, may := e.OwnerID, func(uid int64) bool { return eligibleInOrg.Contains(repoUser{e.OwnerID, uid}) }
-		if e.RepoID != 0 {
-			org = nil
+		for _, repoID := range envRepos[e.ID] {
+			repo := repos[repoID]
 			if repo == nil {
 				continue // in the trash, or nobody has access: nobody can approve already
 			}
-			orgID, may = repo.OwnerID, func(uid int64) bool { return eligible.Contains(repoUser{e.RepoID, uid}) }
-		} else if org == nil {
-			continue // no repository: nobody can approve already
-		}
-		approvers := container.Set[int64]{}
-		for _, r := range reviewers[e.ID] {
-			if r.TeamID == 0 && may(r.UserID) {
-				approvers.Add(r.UserID)
-			}
-			for _, tu := range members[r.TeamID] {
-				if tu.OrgID == orgID && may(tu.UID) {
-					approvers.Add(tu.UID)
+			approvers := container.Set[int64]{}
+			for _, r := range reviewers[e.ID] {
+				if r.TeamID == 0 && eligible.Contains(repoUser{repoID, r.UserID}) {
+					approvers.Add(r.UserID)
+				}
+				for _, tu := range members[r.TeamID] {
+					if tu.OrgID == repo.OwnerID && eligible.Contains(repoUser{repoID, tu.UID}) {
+						approvers.Add(tu.UID)
+					}
 				}
 			}
-		}
-		if len(approvers) == 0 || slices.ContainsFunc(approvers.Values(), func(id int64) bool { return !leaving.Contains(id) }) {
-			continue // nobody can approve already, or someone stays
-		}
-		for _, id := range slices.Sorted(maps.Keys(approvers)) {
-			out = append(out, &EnvironmentLastApprover{UserID: id, Repo: repo, Org: org, Env: e})
+			if len(approvers) == 0 || slices.ContainsFunc(approvers.Values(), func(id int64) bool { return !leaving.Contains(id) }) {
+				continue // nobody can approve already, or someone stays
+			}
+			var org *user_model.User
+			if e.RepoID == 0 {
+				org = repo.Owner
+			}
+			for _, id := range slices.Sorted(maps.Keys(approvers)) {
+				out = append(out, &EnvironmentLastApprover{UserID: id, Repo: repo, Org: org, Env: e})
+			}
 		}
 	}
 	return out, nil

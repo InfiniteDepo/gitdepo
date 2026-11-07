@@ -5,13 +5,16 @@ package repo
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"slices"
+	"strings"
 
 	actions_model "forgejo.org/models/actions"
 	"forgejo.org/models/db"
 	org_model "forgejo.org/models/organization"
+	repo_model "forgejo.org/models/repo"
 	user_model "forgejo.org/models/user"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/util"
@@ -51,6 +54,33 @@ func environmentOfRepo(ctx *context.APIContext) *actions_model.ActionEnvironment
 		return nil
 	}
 	return env
+}
+
+// orgRepoIDsByName resolves the names of repositories of the organization (not in a project, as the other org routes
+// name them) in one query; a name of no such repository, or more than MaxEnvironmentRepos, is a 422.
+func orgRepoIDsByName(ctx *context.APIContext, orgID int64, names []string) ([]int64, bool) {
+	lower := make([]string, len(names))
+	for i, name := range names {
+		lower[i] = strings.ToLower(name)
+	}
+	lower = slices.Compact(slices.Sorted(slices.Values(lower)))
+	if len(lower) > actions_model.MaxEnvironmentRepos {
+		ctx.Error(http.StatusUnprocessableEntity, "repositories", fmt.Sprintf("at most %d repositories", actions_model.MaxEnvironmentRepos))
+		return nil, false
+	}
+	var ids []int64
+	if len(lower) > 0 {
+		if err := db.GetEngine(ctx).Table("repository").Where("owner_id = ? AND group_id = 0 AND trashed_unix = 0", orgID).
+			In("lower_name", lower).Cols("id").Find(&ids); err != nil {
+			ctx.InternalServerError(err)
+			return nil, false
+		}
+	}
+	if len(ids) != len(lower) {
+		ctx.Error(http.StatusUnprocessableEntity, "repositories", "a repository is not found in the organization")
+		return nil, false
+	}
+	return ids, true
 }
 
 // toActionEnvironments converts environments of the repository or organization of the request (with the
@@ -103,10 +133,24 @@ func toActionEnvironments(ctx *context.APIContext, envs []*actions_model.ActionE
 		maps.Copy(secrets, orgSecrets)
 		maps.Copy(variables, orgVariables)
 	}
+	selected, err := actions_model.EnvironmentRepoIDs(ctx, orgIDs)
+	if err != nil {
+		return nil, err
+	}
+	var names map[int64]*repo_model.Repository
+	if repoID == 0 {
+		var ids []int64
+		for _, rs := range selected {
+			ids = append(ids, rs...)
+		}
+		if names, err = repo_model.GetRepositoriesMapByIDs(ctx, ids); err != nil {
+			return nil, err
+		}
+	}
 	last := map[int64]*actions_model.ActionDeployment{}
 	var data *actions_service.DeploymentData
 	if repoID != 0 {
-		if last, err = actions_model.FindLastDeployments(ctx, repoID, ids); err != nil {
+		if last, err = actions_model.FindLastDeployments(ctx, 0, repoID, ids); err != nil {
 			return nil, err
 		}
 		if data, err = actions_service.LoadDeploymentData(ctx, ctx.Doer(), repoID, slices.Collect(maps.Values(last))); err != nil {
@@ -122,6 +166,14 @@ func toActionEnvironments(ctx *context.APIContext, envs []*actions_model.ActionE
 			ReviewsRequired: e.ReviewsRequired, RunnerLabels: e.RunnerLabels, AllowedWorkflows: e.AllowedWorkflows,
 			CreatedByWorkflow: e.CreatedByWorkflow, SecretsCount: secrets[e.ID], VariablesCount: variables[e.ID],
 			Inherited: repoID != 0 && e.RepoID == 0, Created: e.Created.AsTime(), Updated: e.Updated.AsTime(),
+		}
+		if repoID == 0 {
+			item.RepositorySelection = util.Iif(e.AllRepos, "all", "selected")
+			for _, id := range selected[e.ID] {
+				if r := names[id]; r != nil {
+					item.Repositories = append(item.Repositories, r.Name)
+				}
+			}
 		}
 		for _, p := range e.RefPatterns {
 			item.RefPatterns = append(item.RefPatterns, &api.ActionEnvironmentRefPattern{Type: p.Type, Pattern: p.Pattern})
@@ -232,8 +284,18 @@ func GetActionEnvironment(ctx *context.APIContext) {
 	//   "404":
 	//     "$ref": "#/responses/notFound"
 
-	env := environmentOfRepo(ctx)
-	if env == nil {
+	var env *actions_model.ActionEnvironment
+	if _, repoID := environmentScope(ctx); repoID != 0 {
+		// as the list, an organization environment the repository inherits, marked inherited (read-only here)
+		var err error
+		if env, err = actions_model.ResolveEnvironment(ctx, repoID, ctx.Params("environment")); errors.Is(err, actions_model.ErrEnvironmentNotFound) {
+			ctx.NotFound()
+			return
+		} else if err != nil {
+			ctx.InternalServerError(err)
+			return
+		}
+	} else if env = environmentOfRepo(ctx); env == nil {
 		return
 	}
 	items, err := toActionEnvironments(ctx, []*actions_model.ActionEnvironment{env})
@@ -295,17 +357,22 @@ func CreateOrUpdateActionEnvironment(ctx *context.APIContext) {
 	//     "$ref": "#/responses/validationError"
 
 	form := web.GetForm(ctx).(*api.CreateOrUpdateEnvironmentOption)
+	env := &actions_model.ActionEnvironment{Name: ctx.Params("environment")}
+	env.OwnerID, env.RepoID = environmentScope(ctx)
 	// every rule is required: a field left out would remove a rule the client may not know about
 	if form.RefPolicy == "" || form.RefPatterns == nil || form.WaitTimer == nil || form.PreventSelfReview == nil ||
-		form.Reviewers == nil || form.RunnerLabels == nil || form.AllowedWorkflows == nil {
-		ctx.Error(http.StatusUnprocessableEntity, "CreateOrUpdateEnvironmentOption", "every rule is required: ref_policy, ref_patterns, wait_timer, prevent_self_review, reviewers, runner_labels and allowed_workflows")
+		form.Reviewers == nil || form.RunnerLabels == nil || form.AllowedWorkflows == nil ||
+		env.RepoID == 0 && form.RepositorySelection != "all" && form.RepositorySelection != "selected" {
+		ctx.Error(http.StatusUnprocessableEntity, "CreateOrUpdateEnvironmentOption", "every rule is required: ref_policy, ref_patterns, wait_timer, prevent_self_review, reviewers, runner_labels, allowed_workflows and, for an organization, repository_selection (all or selected)")
 		return
 	}
-	env := &actions_model.ActionEnvironment{
-		Name: ctx.Params("environment"), WaitTimerMinutes: *form.WaitTimer,
-		PreventSelfReview: *form.PreventSelfReview, RunnerLabels: form.RunnerLabels, AllowedWorkflows: form.AllowedWorkflows,
+	env.WaitTimerMinutes, env.PreventSelfReview, env.RunnerLabels, env.AllowedWorkflows = *form.WaitTimer, *form.PreventSelfReview, form.RunnerLabels, form.AllowedWorkflows
+	if env.AllRepos = form.RepositorySelection == "all"; env.RepoID == 0 && !env.AllRepos {
+		var ok bool
+		if env.RepoIDs, ok = orgRepoIDsByName(ctx, env.OwnerID, form.Repositories); !ok {
+			return
+		}
 	}
-	env.OwnerID, env.RepoID = environmentScope(ctx)
 	if env.RefPolicy = slices.Index(refPolicies, form.RefPolicy); env.RefPolicy < 0 {
 		ctx.Error(http.StatusUnprocessableEntity, "ref_policy", "ref_policy must be any, protected_branches or patterns")
 		return

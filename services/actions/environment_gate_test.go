@@ -256,7 +256,7 @@ func TestGateEnvironment(t *testing.T) {
 
 	t.Run("the environment limit", func(t *testing.T) {
 		require.NoError(t, unittest.PrepareTestDatabase())
-		for i := range actions_model.MaxEnvironmentsPerRepo {
+		for i := range actions_model.MaxEnvironments {
 			_, err := actions_model.GetOrCreateRepoEnvironment(audit_model.WithSystem(t.Context(), "test"), 63, fmt.Sprint("e", i))
 			require.NoError(t, err)
 		}
@@ -265,7 +265,7 @@ func TestGateEnvironment(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, behaviourFailJob, b)
 		assert.Equal(t, actions_model.DeploymentReasonEnvironmentLimit, deploymentOf(t, job).Reason)
-		assert.Equal(t, actions_model.MaxEnvironmentsPerRepo, unittest.GetCount(t, &actions_model.ActionEnvironment{}))
+		assert.Equal(t, actions_model.MaxEnvironments, unittest.GetCount(t, &actions_model.ActionEnvironment{}))
 		_, err = db.GetEngine(t.Context()).Exec("DELETE FROM action_deployment")
 		require.NoError(t, err)
 		job = gateJob(t, envWorkflow("    environment: E3\n"), "refs/heads/main")
@@ -352,6 +352,43 @@ func TestGateEnvironment(t *testing.T) {
 
 		require.NoError(t, db.Insert(ctx, &git_model.ProtectedBranch{RepoID: 63, RuleName: "release/*"}))
 		assert.Equal(t, behaviourExecuteJob, run("refs/heads/release/1"), "a rule of the repository")
+	})
+
+	t.Run("protected branches of an organization environment: a rule of the repository doesn't count", func(t *testing.T) {
+		require.NoError(t, unittest.PrepareTestDatabase())
+		ctx := t.Context()
+		_, err := db.GetEngine(ctx).Exec("UPDATE repository SET owner_id = 3 WHERE id = 63")
+		require.NoError(t, err)
+		require.NoError(t, actions_model.CreateEnvironment(audit_model.WithSystem(ctx, "test"), &actions_model.ActionEnvironment{
+			OwnerID: 3, Name: "prod", RefPolicy: actions_model.EnvironmentRefProtectedBranches, RepoIDs: []int64{63},
+		}, nil))
+		run := func(ref string) behaviour {
+			_, err := db.GetEngine(ctx).Exec("DELETE FROM action_deployment")
+			require.NoError(t, err)
+			b, err := gateEnvironment(ctx, gateJob(t, envWorkflow("    environment: prod\n"), ref))
+			require.NoError(t, err)
+			return b
+		}
+		// a repository administrator writes the repository's rules, never the organization owner's policy
+		require.NoError(t, db.Insert(ctx, &git_model.ProtectedBranch{RepoID: 63, RuleName: "*"}))
+		assert.Equal(t, behaviourFailJob, run("refs/heads/attacker"))
+		require.NoError(t, db.Insert(ctx, &git_model.ProtectedBranch{OrgID: 3, RuleName: "main"}))
+		assert.Equal(t, behaviourExecuteJob, run("refs/heads/main"), "a rule of the organization")
+		assert.Equal(t, behaviourFailJob, run("refs/heads/attacker"))
+	})
+
+	t.Run("an organization environment not selected for the repository", func(t *testing.T) {
+		require.NoError(t, unittest.PrepareTestDatabase())
+		ctx := t.Context()
+		_, err := db.GetEngine(ctx).Exec("UPDATE repository SET owner_id = 3 WHERE id = 63")
+		require.NoError(t, err)
+		require.NoError(t, actions_model.CreateEnvironment(audit_model.WithSystem(ctx, "test"), &actions_model.ActionEnvironment{OwnerID: 3, Name: "prod", RepoIDs: []int64{3}}, nil))
+		job := gateJob(t, envWorkflow("    environment: prod\n"), "refs/heads/main")
+		b, err := gateEnvironment(ctx, job)
+		require.NoError(t, err)
+		assert.Equal(t, behaviourFailJob, b)
+		assert.Equal(t, actions_model.DeploymentReasonNotAvailable, deploymentOf(t, job).Reason)
+		unittest.AssertNotExistsBean(t, &actions_model.ActionEnvironment{RepoID: 63, LowerName: "prod"})
 	})
 
 	t.Run("the wait timer", func(t *testing.T) {

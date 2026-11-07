@@ -21,3 +21,11 @@
   display: inline;
   margin-inline-start: 0.25em;
 }
+
+/* a chosen reviewer stays on one line on a narrow screen, cut at its end, never inside a word */
+#environment-reviewers .ui.label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

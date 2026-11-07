@@ -356,6 +356,10 @@ type ActionEnvironment struct {
 	VariablesCount    int64 `json:"variables_count"`
 	// an environment of the organization that the repository inherits; it is changed on the organization's routes
 	Inherited bool `json:"inherited"`
+	// of an environment on the organization's routes: "all" repositories of the organization, or the "selected" ones
+	RepositorySelection string `json:"repository_selection,omitempty"`
+	// the names of the selected repositories
+	Repositories []string `json:"repositories,omitempty"`
 	// the newest deployment to the environment
 	LastDeployment *ActionDeployment `json:"last_deployment,omitempty"`
 	// swagger:strfmt date-time
@@ -386,4 +390,10 @@ type CreateOrUpdateEnvironmentOption struct {
 	RunnerLabels []string `json:"runner_labels"`
 	// required: true
 	AllowedWorkflows []string `json:"allowed_workflows"`
+	// required on the organization's routes: "all" repositories of the organization (which needs reviewers while
+	// the environment has secrets), or the "selected" ones; ignored for a repository
+	// enum: all,selected
+	RepositorySelection string `json:"repository_selection"`
+	// with "selected", the names of the repositories of the organization, at most 1000
+	Repositories []string `json:"repositories"`
 }

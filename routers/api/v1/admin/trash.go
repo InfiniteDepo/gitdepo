@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	actions_model "forgejo.org/models/actions"
 	repo_model "forgejo.org/models/repo"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/json"
@@ -124,7 +125,7 @@ func trashError(ctx *context.APIContext, err error) {
 	case errors.Is(err, trash_service.ErrTrashConflict):
 		ctx.Error(http.StatusConflict, "ErrTrashConflict", err)
 	case errors.Is(err, trash_service.ErrNeedNewOwner), errors.Is(err, trash_service.ErrInvalidNewOwner),
-		errors.Is(err, trash_service.ErrTrashedWithOrg), trash_service.IsBadTarget(err):
+		errors.Is(err, trash_service.ErrTrashedWithOrg), trash_service.IsBadTarget(err), errors.Is(err, actions_model.ErrEnvironmentTwin):
 		ctx.Error(http.StatusUnprocessableEntity, "restore", err)
 	case errors.Is(err, trash_service.ErrOrgHasLiveRepos):
 		ctx.Error(http.StatusConflict, "ErrOrgHasLiveRepos", err)

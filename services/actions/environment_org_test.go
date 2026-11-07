@@ -31,7 +31,7 @@ func TestOrgEnvironmentSecretsAndVariables(t *testing.T) {
 	_, err = db.GetEngine(ctx).Exec("UPDATE repository SET owner_id = 3, group_id = ? WHERE id = 63", project.ID)
 	require.NoError(t, err)
 
-	live := &actions_model.ActionEnvironment{OwnerID: 3, Name: "live"}
+	live := &actions_model.ActionEnvironment{OwnerID: 3, Name: "live", RepoIDs: []int64{63}}
 	require.NoError(t, actions_model.CreateEnvironment(ctx, live, nil))
 	for _, s := range []struct {
 		owner, group, repo, env int64

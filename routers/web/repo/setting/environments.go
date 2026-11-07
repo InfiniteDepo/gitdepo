@@ -105,34 +105,43 @@ type environmentDeployment struct {
 	When    timeutil.TimeStamp        // the last change: of the task, else of the deployment
 }
 
-// lastDeployments returns the newest deployment of each environment with the link of its run and, once released,
-// its job attempt's task.
-func lastDeployments(ctx *context.Context, repo *repo_model.Repository, ids []int64) (map[int64]*environmentDeployment, error) {
-	last, err := actions_model.FindLastDeployments(ctx, repo.ID, ids)
+// lastDeployments returns the newest deployment of each environment of the level (for an organization, of its
+// repositories now) with the link of its run and, once released, its job attempt's task.
+func lastDeployments(ctx *context.Context, l environmentLevel, ids []int64) (map[int64]*environmentDeployment, error) {
+	ownerID, repoID := l.scope()
+	last, err := actions_model.FindLastDeployments(ctx, ownerID, repoID, ids)
 	if err != nil {
 		return nil, err
 	}
 	runIDs := make([]int64, 0, len(last))
+	ds := make([]*actions_model.ActionDeployment, 0, len(last))
+	repos := map[int64]*repo_model.Repository{repoID: l.Repo}
 	for _, d := range last {
-		runIDs = append(runIDs, d.RunID)
+		runIDs, ds = append(runIDs, d.RunID), append(ds, d)
+		if l.Repo == nil {
+			repos[d.RepoID] = nil
+		}
 	}
-	var runs []*actions_model.ActionRun
-	if len(runIDs) > 0 {
-		if err := db.GetEngine(ctx).In("id", runIDs).And("repo_id = ?", repo.ID).Cols("id", "index").Find(&runs); err != nil {
+	if l.Repo == nil {
+		if repos, err = repo_model.GetRepositoriesMapByIDs(ctx, slices.Collect(maps.Keys(repos))); err != nil {
 			return nil, err
 		}
 	}
-	ds := make([]*actions_model.ActionDeployment, 0, len(last))
-	for _, d := range last {
-		ds = append(ds, d)
+	var runs []*actions_model.ActionRun
+	if len(runIDs) > 0 {
+		if err := db.GetEngine(ctx).In("id", runIDs).Cols("id", "index", "repo_id").Find(&runs); err != nil {
+			return nil, err
+		}
 	}
-	tasks, err := actions_model.FindDeploymentTasks(ctx, repo.ID, ds)
+	tasks, err := actions_model.FindDeploymentTasks(ctx, repoID, ds)
 	if err != nil {
 		return nil, err
 	}
 	links := make(map[int64]string, len(runs))
 	for _, r := range runs {
-		links[r.ID] = repo.Link() + "/actions/runs/" + strconv.FormatInt(r.Index, 10)
+		if repo := repos[r.RepoID]; repo != nil {
+			links[r.ID] = repo.Link() + "/actions/runs/" + strconv.FormatInt(r.Index, 10)
+		}
 	}
 	out := make(map[int64]*environmentDeployment, len(last))
 	for id, d := range last {
@@ -141,6 +150,9 @@ func lastDeployments(ctx *context.Context, repo *repo_model.Repository, ids []in
 			name = d.Ref
 		}
 		row := &environmentDeployment{ActionDeployment: d, RefName: name, RunLink: links[d.RunID], Task: tasks[d.ID], When: d.Updated}
+		if repo := repos[d.RepoID]; l.Repo == nil && repo != nil {
+			row.RefName = repo.Name + ": " + name
+		}
 		if row.Task != nil && row.Task.Updated > row.When {
 			row.When = row.Task.Updated
 		}
@@ -157,6 +169,7 @@ type environmentRow struct {
 	Last       *environmentDeployment
 	NoReviewer bool
 	Summary    template.HTML
+	Repos      template.HTML // of an organization environment: the repositories it applies to and that deployed
 }
 
 // HasRules tells if the environment protects anything.
@@ -199,11 +212,11 @@ func environmentSummary(ctx *context.Context, e *actions_model.ActionEnvironment
 
 // checkReviewers decides the reviewers of the environments for the page's level: for a repository by the access to it
 // (its inherited environments included), for an organization by the rules that don't depend on a repository.
-func checkReviewers(ctx *context.Context, l environmentLevel, envs []*actions_model.ActionEnvironment, reviewers map[int64][]*actions_model.ActionEnvironmentReviewer) (*actions_service.EnvironmentReviewerCheck, error) {
+func checkReviewers(ctx *context.Context, l environmentLevel, envs []*actions_model.ActionEnvironment, reviewers map[int64][]*actions_model.ActionEnvironmentReviewer, readers bool) (*actions_service.EnvironmentReviewerCheck, error) {
 	if l.Repo != nil {
 		return actions_service.CheckEnvironmentReviewers(ctx, l.Repo, ctx.Doer, envs, reviewers)
 	}
-	return actions_service.CheckOrgEnvironmentReviewers(ctx, l.Owner, envs, reviewers)
+	return actions_service.CheckOrgEnvironmentReviewers(ctx, l.Owner, envs, reviewers, readers)
 }
 
 // Environments lists the environments of the repository, with those it inherits from its organization apart and
@@ -244,15 +257,24 @@ func Environments(ctx *context.Context) {
 		ctx.ServerError("FindReviewersOfEnvironments", err)
 		return
 	}
-	check, err := checkReviewers(ctx, l, envs, reviewers)
+	check, err := checkReviewers(ctx, l, envs, reviewers, false)
 	if err != nil {
 		ctx.ServerError("CheckEnvironmentReviewers", err)
 		return
 	}
-	last := map[int64]*environmentDeployment{}
-	if l.Repo != nil {
-		if last, err = lastDeployments(ctx, l.Repo, ids); err != nil {
-			ctx.ServerError("lastDeployments", err)
+	last, err := lastDeployments(ctx, l, ids)
+	if err != nil {
+		ctx.ServerError("lastDeployments", err)
+		return
+	}
+	var selected map[int64][]int64
+	var deployed map[int64]int64
+	if l.Repo == nil {
+		if selected, err = actions_model.EnvironmentRepoIDs(ctx, ids); err == nil {
+			deployed, err = actions_model.CountDeployedRepos(ctx, ownerID, ids)
+		}
+		if err != nil {
+			ctx.ServerError("EnvironmentRepoIDs", err)
 			return
 		}
 	}
@@ -262,26 +284,27 @@ func Environments(ctx *context.Context) {
 			ActionEnvironment: e, Secrets: secrets[e.ID], Variables: variables[e.ID], Last: last[e.ID],
 			NoReviewer: check.NoReviewer[e.ID], Summary: environmentSummary(ctx, e, len(reviewers[e.ID])),
 		}
+		if l.Repo == nil {
+			n := len(selected[e.ID])
+			row.Repos = ctx.TrN(n, "actions.environments.org.repos_1", "actions.environments.org.repos_n", n)
+			if e.AllRepos {
+				row.Repos = ctx.Tr("actions.environments.org.repos_all")
+			}
+			row.Repos += " · " + ctx.TrN(deployed[e.ID], "actions.environments.org.used_by_1", "actions.environments.org.used_by_n", deployed[e.ID])
+		}
 		if e.RepoID != repoID {
 			inheritedRows = append(inheritedRows, row)
 		} else {
 			rows = append(rows, row)
 		}
 	}
-	if len(inheritedRows) > 0 {
-		// only who may change them gets the link to the organization's page (OrgAssignment(true, true))
-		isOwner, err := org_model.OrgFromUser(l.Owner).IsActingOwner(ctx, ctx.Doer)
-		if err != nil {
-			ctx.ServerError("IsActingOwner", err)
-			return
-		}
-		ctx.Data["InheritedEnvironments"] = inheritedRows
-		ctx.Data["OrgEnvironmentsLink"] = l.Owner.OrganisationLink() + "/settings/actions/environments"
-		ctx.Data["CanEditInherited"] = isOwner || ctx.Doer.IsAdmin
-	}
+	// the page is behind RequireEnvironmentManager: only owners of the organization and site administrators see it,
+	// who may change the inherited environments on the organization's page (OrgAssignment(true, true))
+	ctx.Data["InheritedEnvironments"] = inheritedRows
+	ctx.Data["OrgEnvironmentsLink"] = l.Owner.OrganisationLink() + "/settings/actions/environments"
 	ctx.Data["Environments"] = rows
 	ctx.Data["EnvironmentsLink"] = l.Link
-	ctx.Data["MaxEnvironments"] = actions_model.MaxEnvironmentsPerRepo
+	ctx.Data["MaxEnvironments"] = actions_model.MaxEnvironments
 	ctx.HTML(http.StatusOK, tplEnvironments)
 }
 
@@ -295,6 +318,8 @@ type environmentFormView struct {
 	Patterns          []actions_model.EnvironmentRefPattern
 	RunnerLabels      string
 	AllowedWorkflows  string
+	AllRepos          bool   // of an organization environment
+	RepoIDs           string // its selected repositories, comma-separated
 }
 
 // reviewerOption is one entry of the reviewer picker.
@@ -348,6 +373,16 @@ func prepareEnvironmentForm(ctx *context.Context, env *actions_model.ActionEnvir
 	ctx.Data["MaxWaitTimerDays"] = actions_model.MaxWaitTimerMinutes / (24 * 60)
 	ctx.Data["EmptyPattern"] = actions_model.EnvironmentRefPattern{}
 	ctx.Data["ReviewerTeams"] = l.Owner.IsOrganization()
+	if l.Repo == nil { // the repository picker: the organization's repositories, not in the trash
+		repos, err := org_model.GetOrgRepositories(ctx, l.Owner.ID)
+		if err != nil {
+			ctx.ServerError("GetOrgRepositories", err)
+			return
+		}
+		repos = slices.DeleteFunc(repos, (*repo_model.Repository).IsTrashed)
+		slices.SortFunc(repos, func(a, b *repo_model.Repository) int { return strings.Compare(a.LowerName, b.LowerName) })
+		ctx.Data["Repos"] = repos
+	}
 
 	// The picker offers the users who can approve through their access to the repository (the members of the
 	// organization for its own environments) and the teams of the organization, and keeps the listed entries (one it can't name is an unknown reviewer, to be removed); nobody the doer
@@ -373,7 +408,7 @@ func prepareEnvironmentForm(ctx *context.Context, env *actions_model.ActionEnvir
 		envs = append(envs, env)
 		reviewers[env.ID] = stored
 	}
-	check, err := checkReviewers(ctx, l, envs, reviewers)
+	check, err := checkReviewers(ctx, l, envs, reviewers, true)
 	if err != nil {
 		ctx.ServerError("CheckEnvironmentReviewers", err)
 		return
@@ -414,14 +449,12 @@ func prepareEnvironmentForm(ctx *context.Context, env *actions_model.ActionEnvir
 		return
 	}
 	ctx.Data["NoReviewer"] = check.NoReviewer[env.ID]
-	if l.Repo != nil {
-		last, err := lastDeployments(ctx, l.Repo, []int64{env.ID})
-		if err != nil {
-			ctx.ServerError("lastDeployments", err)
-			return
-		}
-		ctx.Data["LastDeployment"] = last[env.ID]
+	last, err := lastDeployments(ctx, l, []int64{env.ID})
+	if err != nil {
+		ctx.ServerError("lastDeployments", err)
+		return
 	}
+	ctx.Data["LastDeployment"] = last[env.ID]
 
 	link := ctx.Data["EnvironmentLink"].(string)
 	ctx.Data["SecretsLink"], ctx.Data["VariablesLink"] = link+"/secrets", link+"/variables"
@@ -484,10 +517,16 @@ func EnvironmentEdit(ctx *context.Context) {
 	for i, r := range reviewers {
 		keys[i] = r.Key()
 	}
+	selected, err := actions_model.EnvironmentRepoIDs(ctx, []int64{env.ID})
+	if err != nil {
+		ctx.ServerError("EnvironmentRepoIDs", err)
+		return
+	}
 	prepareEnvironmentForm(ctx, env, reviewers, &environmentFormView{
 		Name: env.Name, Reviewers: strings.Join(keys, ","), PreventSelfReview: env.PreventSelfReview,
 		WaitTimer: env.WaitTimerMinutes, RefPolicy: env.RefPolicy, Patterns: env.RefPatterns,
 		RunnerLabels: strings.Join(env.RunnerLabels, "\n"), AllowedWorkflows: strings.Join(env.AllowedWorkflows, "\n"),
+		AllRepos: env.AllRepos, RepoIDs: strings.Join(base.Int64sToStrings(selected[env.ID]), ","),
 	})
 	if !ctx.Written() {
 		ctx.HTML(http.StatusOK, tplEnvironment)
@@ -510,7 +549,7 @@ func lines(s string) []string {
 func environmentFromForm(form *forms.EnvironmentForm, l environmentLevel) (env *actions_model.ActionEnvironment, view *environmentFormView, userIDs, teamIDs []int64, err error) {
 	view = &environmentFormView{
 		Name: form.Name, Reviewers: form.Reviewers, PreventSelfReview: form.PreventSelfReview,
-		RunnerLabels: form.RunnerLabels, AllowedWorkflows: form.AllowedWorkflows,
+		RunnerLabels: form.RunnerLabels, AllowedWorkflows: form.AllowedWorkflows, AllRepos: form.Scope == "all", RepoIDs: form.RepoIDs,
 	}
 	var parseErr error
 	if wait := strings.TrimSpace(form.WaitTimer); wait != "" {
@@ -531,6 +570,13 @@ func environmentFromForm(form *forms.EnvironmentForm, l environmentLevel) (env *
 		RefPolicy: view.RefPolicy, RunnerLabels: lines(form.RunnerLabels), AllowedWorkflows: lines(form.AllowedWorkflows),
 	}
 	env.OwnerID, env.RepoID = l.scope()
+	if l.Repo == nil {
+		env.AllRepos = view.AllRepos
+		ids := slices.DeleteFunc(strings.Split(form.RepoIDs, ","), func(s string) bool { return strings.TrimSpace(s) == "" })
+		if env.RepoIDs, parseErr = base.StringsToInt64s(ids); parseErr != nil {
+			err = actions_model.ErrInvalidEnvironmentRule{Field: "repositories"}
+		}
+	}
 	if env.RefPolicy == actions_model.EnvironmentRefPatterns {
 		env.RefPatterns = view.Patterns // the rows of another choice are left in the page, not saved
 	}
@@ -578,15 +624,31 @@ func environmentError(ctx *context.Context, err error) template.HTML {
 				return ctx.Tr("actions.environments.error.workflow", rule.Value)
 			}
 			return ctx.Tr("actions.environments.error.workflows", actions_model.MaxAllowedWorkflows)
+		case "repositories":
+			return ctx.Tr("actions.environments.error.repositories", actions_model.MaxEnvironmentRepos)
 		}
 	case errors.Is(err, actions_model.ErrEnvironmentExists):
 		return ctx.Tr("actions.environments.error.name_taken")
 	case errors.Is(err, actions_model.ErrEnvironmentTakenByOrg):
 		return ctx.Tr("actions.environments.error.name_taken_by_org", ctx.Repo.Owner.Name)
 	case errors.As(err, &usedBy):
-		return ctx.TrN(usedBy.N, "actions.environments.error.name_used_1", "actions.environments.error.name_used_n", usedBy.N)
+		names := make([]string, len(usedBy.Repos))
+		for i, r := range usedBy.Repos {
+			names[i] = r.Name
+			if r.GroupName != "" {
+				names[i] = r.GroupName + "/" + r.Name
+			}
+			if r.IsTrashed() {
+				names[i] += " " + ctx.Locale.TrString("actions.environments.error.in_trash")
+			}
+		}
+		return ctx.TrN(usedBy.N, "actions.environments.error.name_used_1", "actions.environments.error.name_used_n", usedBy.N, levelOf(ctx).Owner.Name, strings.Join(names, ", "))
+	case errors.Is(err, actions_model.ErrEnvironmentLimit) && ctx.Repo.Repository == nil:
+		return ctx.Tr("actions.environments.error.org_limit", actions_model.MaxEnvironments)
 	case errors.Is(err, actions_model.ErrEnvironmentLimit):
-		return ctx.Tr("actions.environments.error.limit", actions_model.MaxEnvironmentsPerRepo)
+		return ctx.Tr("actions.environments.error.limit", actions_model.MaxEnvironments)
+	case errors.Is(err, actions_model.ErrEnvironmentOpenSecrets):
+		return ctx.Tr("actions.environments.error.open_secrets")
 	case errors.Is(err, actions_service.ErrTooManyReviewers):
 		return ctx.Tr("actions.environments.error.too_many_reviewers", actions_model.MaxEnvironmentReviewers)
 	case errors.Is(err, actions_service.ErrReviewerNotMember):

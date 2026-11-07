@@ -373,20 +373,34 @@ func (check *EnvironmentReviewerCheck) decide(envs []*actions_model.ActionEnviro
 	}
 }
 
+// MaxOrgReviewerReaders is how many members of an organization CheckOrgEnvironmentReviewers offers as readers at most.
+const MaxOrgReviewerReaders = 200
+
 // CheckOrgEnvironmentReviewers is CheckEnvironmentReviewers for the settings pages of environments of the organization
 // org, by the rules that don't depend on a repository (who approves a run is decided for its repository by
 // approverReason): a listed user is a usable member of the organization (ReviewerOutsider for anyone else, whatever
-// their account), with two-factor authentication if the organization requires it. Readers are its members who pass.
-func CheckOrgEnvironmentReviewers(ctx context.Context, org *user_model.User, envs []*actions_model.ActionEnvironment, reviewers map[int64][]*actions_model.ActionEnvironmentReviewer) (*EnvironmentReviewerCheck, error) {
+// their account), with two-factor authentication if the organization requires it. Only the listed users and the
+// members of the listed teams are decided, plus, with readers, the first MaxOrgReviewerReaders members by name, of whom
+// those who pass are the Readers: the cost doesn't grow with the organization.
+func CheckOrgEnvironmentReviewers(ctx context.Context, org *user_model.User, envs []*actions_model.ActionEnvironment, reviewers map[int64][]*actions_model.ActionEnvironmentReviewer, readers bool) (*EnvironmentReviewerCheck, error) {
 	listedIDs, members, userIDs, err := listedReviewers(ctx, org.ID, reviewers)
 	if err != nil {
 		return nil, err
 	}
-	var memberIDs []int64
-	if err := db.GetEngine(ctx).Table("org_user").Where("org_id = ?", org.ID).Cols("uid").Find(&memberIDs); err != nil {
-		return nil, err
+	var memberIDs, offered []int64
+	if readers {
+		if err := db.GetEngine(ctx).Table("org_user").Join("INNER", "`user`", "`user`.id = org_user.uid").Where("org_user.org_id = ?", org.ID).
+			OrderBy("`user`.lower_name").Limit(MaxOrgReviewerReaders).Cols("org_user.uid").Find(&offered); err != nil {
+			return nil, err
+		}
 	}
-	users, err := user_model.GetUsersByIDs(ctx, slices.Compact(slices.Sorted(slices.Values(append(userIDs, memberIDs...)))))
+	if len(userIDs) > 0 {
+		if err := db.GetEngine(ctx).Table("org_user").Where("org_id = ?", org.ID).In("uid", userIDs).Cols("uid").Find(&memberIDs); err != nil {
+			return nil, err
+		}
+	}
+	memberIDs = append(memberIDs, offered...)
+	users, err := user_model.GetUsersByIDs(ctx, slices.Compact(slices.Sorted(slices.Values(append(userIDs, offered...)))))
 	if err != nil {
 		return nil, err
 	}
@@ -394,6 +408,7 @@ func CheckOrgEnvironmentReviewers(ctx context.Context, org *user_model.User, env
 	if err != nil {
 		return nil, err
 	}
+	isOffered := container.SetOf(offered...)
 	slices.SortFunc(users, func(a, b *user_model.User) int { return strings.Compare(a.LowerName, b.LowerName) })
 	check := &EnvironmentReviewerCheck{Ineligible: map[string]string{}, NoReviewer: map[int64]bool{}, Users: map[int64]*user_model.User{}, Approvers: map[int64][]int64{}}
 	isMember, listed := container.SetOf(memberIDs...), container.SetOf(listedIDs...)
@@ -409,7 +424,9 @@ func CheckOrgEnvironmentReviewers(ctx context.Context, org *user_model.User, env
 		default:
 			decided[u.ID] = ""
 			eligible.Add(u.ID)
-			check.Readers = append(check.Readers, u)
+			if isOffered.Contains(u.ID) {
+				check.Readers = append(check.Readers, u)
+			}
 		}
 		if listed.Contains(u.ID) {
 			check.Users[u.ID] = u

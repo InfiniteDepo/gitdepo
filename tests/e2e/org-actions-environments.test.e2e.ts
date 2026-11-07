@@ -33,6 +33,9 @@ test('an organization environment is inherited by its repositories', async ({pag
   await page.locator('#environment-reviewers input.search').click();
   await page.locator('#environment-reviewers .menu .item[data-value="user:2"]').click();
   await page.locator('#environment-wait-timer').fill('5');
+  // a new organization environment applies to no repository until some are chosen
+  await expect(page.locator('#deploy-key-scope-selected-environment')).toBeChecked();
+  await page.locator('label[for="deploy-key-scope-all-environment"]').click();
   await screenshot(page, page.locator('.org-setting-content'), 8);
   await page.locator('#environment-save').click();
   await expect(page.getByText(`The rules of environment "${name}" have been saved.`)).toBeVisible();

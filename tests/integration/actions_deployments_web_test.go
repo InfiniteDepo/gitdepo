@@ -236,7 +236,7 @@ func TestActionsDeploymentsWeb(t *testing.T) {
 			assert.Contains(t, flash(t, reviewer), "Choose at least one deployment to review.")
 
 			review(t, reviewer, run, "rejected", "not <b>now</b>", http.StatusSeeOther, job.ID)
-			assert.Contains(t, flash(t, reviewer), "The deployment was rejected.")
+			assert.Contains(t, flash(t, reviewer), "1 deployment was rejected.")
 			d := deployment(t, job)
 			assert.Equal(t, actions_model.DeploymentRejected, d.Status)
 			assert.Equal(t, user4.ID, d.ReviewedBy)
@@ -268,7 +268,7 @@ func TestActionsDeploymentsWeb(t *testing.T) {
 
 			since := auditNow(t)
 			review(t, reviewer, run, "approved", "", http.StatusSeeOther, job.ID)
-			assert.Contains(t, flash(t, reviewer), "The deployment was approved.")
+			assert.Contains(t, flash(t, reviewer), "1 deployment was approved.")
 			d := deployment(t, job)
 			assert.Equal(t, actions_model.DeploymentReleased, d.Status)
 			assert.Equal(t, user4.ID, d.ReviewedBy)

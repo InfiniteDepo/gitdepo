@@ -190,6 +190,10 @@ func AcceptTransfer(ctx *context.APIContext) {
 		ctx.Error(http.StatusForbidden, "acceptOrRejectRepoTransfer", err)
 		return
 	}
+	if errors.Is(err, actions_model.ErrEnvironmentTwin) {
+		ctx.Error(http.StatusUnprocessableEntity, "acceptOrRejectRepoTransfer", err)
+		return
+	}
 	if err != nil {
 		ctx.Error(http.StatusInternalServerError, "acceptOrRejectRepoTransfer", err)
 		return

@@ -5,9 +5,11 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"html"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -127,6 +129,35 @@ func checkLocaleNextContent(localeContent []byte) []string {
 	return errors
 }
 
+// formatVerb matches a fmt verb of a message, such as %d, %s or %[2]s (never %%).
+var formatVerb = regexp.MustCompile(`%(?:\[\d+\])?[-+# 0]*\d*(?:\.\d+)?[a-zA-Z]`)
+
+// checkPluralVerbs reports every plural form whose fmt verbs differ from those of its "other" form: the caller passes
+// the same arguments whatever form is chosen, so a form without one gets "%!(EXTRA ...)" appended.
+func checkPluralVerbs(localeContent []byte) []string {
+	verbs := map[string]map[string]string{}
+	if err := localeiter.IterateMessagesNextContent(localeContent, func(trKey, pluralForm, trValue string) error {
+		found := formatVerb.FindAllString(strings.ReplaceAll(trValue, "%%", ""), -1)
+		slices.Sort(found)
+		if verbs[trKey] == nil {
+			verbs[trKey] = map[string]string{}
+		}
+		verbs[trKey][cmp.Or(pluralForm, "other")] = strings.Join(found, " ") // the iterator gives "other" as ""
+		return nil
+	}); err != nil {
+		panic(err)
+	}
+	errors := []string{}
+	for _, key := range slices.Sorted(maps.Keys(verbs)) {
+		for _, form := range slices.Sorted(maps.Keys(verbs[key])) {
+			if verbs[key][form] != verbs[key]["other"] {
+				errors = append(errors, fmt.Sprintf("%s.%s: placeholders %q differ from those of the other form %q", key, form, verbs[key][form], verbs[key]["other"]))
+			}
+		}
+	}
+	return errors
+}
+
 func main() {
 	initBlueMondayPolicy()
 	initRemoveTags()
@@ -183,7 +214,11 @@ func main() {
 			panic(err)
 		}
 
-		if err := checkLocaleNextContent(localeContent); len(err) > 0 {
+		errs := checkLocaleNextContent(localeContent)
+		if localeFile.Name() == "locale_en-US.json" { // translations may word a form without the number
+			errs = append(errs, checkPluralVerbs(localeContent)...)
+		}
+		if err := errs; len(err) > 0 {
 			fmt.Println(localeFile.Name())
 			fmt.Println(strings.Join(err, "\n"))
 			fmt.Println()

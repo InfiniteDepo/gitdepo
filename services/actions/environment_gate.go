@@ -117,7 +117,9 @@ func isForkRun(run *actions_model.ActionRun) bool {
 }
 
 // refAllowed tells if the environment accepts a deployment of the run's ref. The ref is the one the server set on the
-// run, never a value of the workflow.
+// run, never a value of the workflow. For an organization environment only the organization's and its projects' branch
+// rules count: a repository administrator writes the repository's, and must not meet the organization owner's policy
+// with a rule of their own.
 func refAllowed(ctx context.Context, repoID int64, env *actions_model.ActionEnvironment, ref string) (bool, error) {
 	if env.RefPolicy != actions_model.EnvironmentRefProtectedBranches {
 		return env.AllowsRef(ref), nil
@@ -127,7 +129,7 @@ func refAllowed(ctx context.Context, repoID int64, env *actions_model.ActionEnvi
 		return false, nil
 	}
 	rules, err := git_model.GetMatchedProtectedBranchRules(ctx, repoID, name)
-	return len(rules) > 0, err
+	return slices.ContainsFunc(rules, func(r *git_model.ProtectedBranch) bool { return env.RepoID != 0 || r.OrgID != 0 }), err
 }
 
 // resolveNewEnvironment evaluates the name of the environment of a job that has no deployment yet and finds or creates
@@ -157,6 +159,8 @@ func resolveNewEnvironment(ctx context.Context, job *actions_model.ActionRunJob,
 		return env, actions_model.DeploymentReasonNotFound, nil
 	case errors.Is(err, actions_model.ErrEnvironmentLimit):
 		return env, actions_model.DeploymentReasonEnvironmentLimit, nil
+	case errors.Is(err, actions_model.ErrEnvironmentNotAvailable):
+		return env, actions_model.DeploymentReasonNotAvailable, nil
 	case errors.Is(err, util.ErrInvalidArgument):
 		return env, actions_model.DeploymentReasonInvalidName, nil
 	case err != nil:

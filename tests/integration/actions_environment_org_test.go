@@ -122,7 +122,7 @@ func TestActionsOrgEnvironments(t *testing.T) {
 			assert.Contains(t, body, `href="`+orgBase+`"`, "the settings menu links the page")
 
 			since := auditNow()
-			form := url.Values{"name": {"Production"}, "ref_policy": {"0"}, "wait_timer": {"0"}, "reviewers": {fmt.Sprintf("user:4,user:%d", member.ID)}}
+			form := url.Values{"name": {"Production"}, "ref_policy": {"0"}, "wait_timer": {"0"}, "reviewers": {fmt.Sprintf("user:4,user:%d", member.ID)}, "scope": {"all"}}
 			resp := owner.MakeRequest(t, NewRequestWithURLValues(t, "POST", orgBase+"/new", form), http.StatusSeeOther)
 			production = orgEnv("production")
 			assert.Equal(t, fmt.Sprintf("%s/%d", orgBase, production.ID), resp.Header().Get("Location"))
@@ -144,7 +144,7 @@ func TestActionsOrgEnvironments(t *testing.T) {
 			assert.NotContains(t, body, `data-value="user:5"`)
 			assert.NotContains(t, body, `data-value="team:3"`)
 
-			post(owner, link, url.Values{"name": {"Production"}, "ref_policy": {"0"}, "wait_timer": {"0"}, "prevent_self_review": {"on"}, "reviewers": {fmt.Sprintf("user:4,user:%d", member.ID)}}, http.StatusSeeOther)
+			post(owner, link, url.Values{"name": {"Production"}, "ref_policy": {"0"}, "wait_timer": {"0"}, "prevent_self_review": {"on"}, "reviewers": {fmt.Sprintf("user:4,user:%d", member.ID)}, "scope": {"all"}}, http.StatusSeeOther)
 			post(owner, link+"/secrets", url.Values{"name": {"ORG_ENV_KEY"}, "data": {"org-env-value"}}, http.StatusOK)
 			post(owner, link+"/variables/new", url.Values{"name": {"ORG_ENV_VAR"}, "data": {"org-env-var"}}, http.StatusOK)
 			s := unittest.AssertExistsAndLoadBean(t, &secret_model.Secret{EnvironmentID: production.ID, Name: "ORG_ENV_KEY"})
@@ -179,14 +179,20 @@ func TestActionsOrgEnvironments(t *testing.T) {
 			// a name repositories already use can't become an organization environment
 			post(owner, repoBase+"/new", url.Values{"name": {"staging"}, "ref_policy": {"0"}, "wait_timer": {"0"}}, http.StatusSeeOther)
 			body = post(owner, orgBase+"/new", url.Values{"name": {"Staging"}, "ref_policy": {"0"}, "wait_timer": {"0"}}, http.StatusOK)
-			assert.Contains(t, body, "1 repository of the organization already has an environment with this name.")
+			assert.Contains(t, body, "1 repository of org3 already has an environment named like this (oenv-a).")
 			unittest.AssertNotExistsBean(t, &actions_model.ActionEnvironment{OwnerID: 3, LowerName: "staging"})
+			since := auditNow()
+			resp := MakeRequest(t, NewRequestWithJSON(t, "PUT", apiBase+"/STAGING", envRules(api.CreateOrUpdateEnvironmentOption{})).AddTokenAuth(ownerToken), http.StatusUnprocessableEntity)
+			assert.Contains(t, resp.Body.String(), "environments of 1 repository of the organization (oenv-a)")
+			assert.Empty(t, auditActions(since, "org.actions_env"))
 		})
 
 		t.Run("web: the last reviewer of an organization environment is named to a site administrator", func(t *testing.T) {
 			doc := NewHTMLParser(t, loginUser(t, "user1").MakeRequest(t, NewRequest(t, "GET", "/admin/users/4/edit"), http.StatusOK).Body)
-			assert.Contains(t, text(doc, ".last-approver-warnings"), "Environment Production of org3 (Deployment environment)")
-			assert.Equal(t, 1, doc.Find(fmt.Sprintf(`.last-approver-warnings a[href="%s/%d"]`, orgBase, production.ID)).Length())
+			// decided for each repository it applies to: user4 is the only one who can approve in both
+			assert.Contains(t, text(doc, ".last-approver-warnings"), "Environment Production of org3, for its repository org3/oenv-a (Deployment environment)")
+			assert.Contains(t, text(doc, ".last-approver-warnings"), "Environment Production of org3, for its repository org3/oenv-b (Deployment environment)")
+			assert.Equal(t, 2, doc.Find(fmt.Sprintf(`.last-approver-warnings a[href="%s/%d"]`, orgBase, production.ID)).Length())
 		})
 
 		t.Run("web: only acting owners of the organization", func(t *testing.T) {
@@ -227,12 +233,14 @@ func TestActionsOrgEnvironments(t *testing.T) {
 		t.Run("API: the organization's routes", func(t *testing.T) {
 			since := auditNow()
 			resp := MakeRequest(t, NewRequestWithJSON(t, "PUT", apiBase+"/Canary", envRules(api.CreateOrUpdateEnvironmentOption{
-				Reviewers: []*api.ActionEnvironmentReviewer{{Type: "team", ID: deployers.ID}},
+				Reviewers: []*api.ActionEnvironmentReviewer{{Type: "team", ID: deployers.ID}}, Repositories: []string{"OENV-A", "oenv-a"},
 			})).AddTokenAuth(ownerToken), http.StatusCreated)
 			var canary api.ActionEnvironment
 			DecodeJSON(t, resp, &canary)
 			assert.Equal(t, "Canary", canary.Name)
 			assert.False(t, canary.Inherited)
+			assert.Equal(t, "selected", canary.RepositorySelection)
+			assert.Equal(t, []string{"oenv-a"}, canary.Repositories)
 			assert.Equal(t, "oenv-deployers", canary.Reviewers[0].Name)
 			MakeRequest(t, NewRequestWithJSON(t, "PUT", apiBase+"/canary", envRules(api.CreateOrUpdateEnvironmentOption{
 				Reviewers: []*api.ActionEnvironmentReviewer{{Type: "user", ID: 5}},
@@ -425,8 +433,93 @@ func TestActionsOrgEnvironments(t *testing.T) {
 			assert.Equal(t, production.ID, env.ID)
 		})
 
+		t.Run("repository selection: only selected repositories inherit, and all of them only with reviewers while it has secrets", func(t *testing.T) {
+			repoC := newOrgRepo("oenv-c", true)
+			since := auditNow()
+			post(owner, orgBase+"/new", url.Values{"name": {"limited"}, "ref_policy": {"0"}, "wait_timer": {"0"}, "scope": {"selected"}, "repo_ids": {strconv.FormatInt(repoC.ID, 10)}}, http.StatusSeeOther)
+			limited := orgEnv("limited")
+			link := fmt.Sprintf("%s/%d", orgBase, limited.ID)
+			post(owner, link+"/secrets", url.Values{"name": {"LIMITED_KEY"}, "data": {"limited-value"}}, http.StatusOK)
+			// a selection of another owner's repository is refused
+			body := post(owner, link, url.Values{"name": {"limited"}, "ref_policy": {"0"}, "wait_timer": {"0"}, "scope": {"selected"}, "repo_ids": {"1"}}, http.StatusOK)
+			assert.Contains(t, body, "Select at most 1000 repositories, each of the organization.")
+			// all repositories without reviewers while it has a secret: refused through the web and the API
+			body = post(owner, link, url.Values{"name": {"limited"}, "ref_policy": {"0"}, "wait_timer": {"0"}, "scope": {"all"}}, http.StatusOK)
+			assert.Contains(t, body, "An environment of all repositories that has secrets needs required reviewers")
+			resp := MakeRequest(t, NewRequestWithJSON(t, "PUT", apiBase+"/limited", envRules(api.CreateOrUpdateEnvironmentOption{RepositorySelection: "all"})).AddTokenAuth(ownerToken), http.StatusUnprocessableEntity)
+			assert.Contains(t, resp.Body.String(), "needs required reviewers")
+			MakeRequest(t, NewRequestWithJSON(t, "PUT", apiBase+"/limited", envRules(api.CreateOrUpdateEnvironmentOption{Repositories: []string{"oenv-c", "repo1"}})).AddTokenAuth(ownerToken), http.StatusUnprocessableEntity)
+			MakeRequest(t, NewRequestWithJSON(t, "PUT", apiBase+"/limited", envRules(api.CreateOrUpdateEnvironmentOption{RepositorySelection: "some"})).AddTokenAuth(ownerToken), http.StatusUnprocessableEntity)
+			// and a secret added to an environment of all repositories without reviewers
+			MakeRequest(t, NewRequestWithJSON(t, "PUT", apiBase+"/open", envRules(api.CreateOrUpdateEnvironmentOption{RepositorySelection: "all"})).AddTokenAuth(ownerToken), http.StatusCreated)
+			MakeRequest(t, NewRequestWithJSON(t, "PUT", apiBase+"/open/secrets/KEY", api.CreateOrUpdateSecretOption{Data: "x"}).AddTokenAuth(ownerToken), http.StatusBadRequest)
+			post(owner, fmt.Sprintf("%s/%d/secrets", orgBase, orgEnv("open").ID), url.Values{"name": {"KEY"}, "data": {"x"}}, http.StatusBadRequest)
+			unittest.AssertNotExistsBean(t, &secret_model.Secret{EnvironmentID: orgEnv("open").ID})
+			assert.False(t, unittest.AssertExistsAndLoadBean(t, &actions_model.ActionEnvironment{ID: limited.ID}).ReviewsRequired)
+			assert.False(t, unittest.AssertExistsAndLoadBean(t, &actions_model.ActionEnvironment{ID: limited.ID}).AllRepos)
+			assert.Equal(t, []string{"org.actions_env.created", "org.actions_env_secret.created", "org.actions_env.created"}, auditActions(since, "org.actions_env"))
+
+			// the organization's list says which repositories it applies to; the form selects them
+			doc := NewHTMLParser(t, owner.MakeRequest(t, NewRequest(t, "GET", orgBase), http.StatusOK).Body)
+			assert.Contains(t, text(doc, "#environment-list"), "1 selected repository · used by 0 repositories")
+			assert.Contains(t, text(doc, "#environment-list"), "All repositories · used by 1 repository")
+			doc = NewHTMLParser(t, owner.MakeRequest(t, NewRequest(t, "GET", link), http.StatusOK).Body)
+			assert.Equal(t, strconv.FormatInt(repoC.ID, 10), doc.Find(`#environment-repos input[name="repo_ids"]`).AttrOr("value", ""))
+			assert.Equal(t, 1, doc.Find(fmt.Sprintf(`#environment-repos .item[data-value="%d"]`, repoA.ID)).Length())
+
+			// a repository it doesn't apply to doesn't list it, can't read it, and a run there is refused
+			body = owner.MakeRequest(t, NewRequest(t, "GET", repoBase), http.StatusOK).Body.String()
+			assert.NotContains(t, body, ">limited<")
+			assert.Contains(t, owner.MakeRequest(t, NewRequest(t, "GET", "/org3/oenv-c/settings/actions/environments"), http.StatusOK).Body.String(), ">limited<")
+			MakeRequest(t, NewRequest(t, "GET", "/api/v1/repos/org3/oenv-a/actions/environments/limited").AddTokenAuth(ownerToken), http.StatusNotFound)
+			var inherited api.ActionEnvironment
+			DecodeJSON(t, MakeRequest(t, NewRequest(t, "GET", "/api/v1/repos/org3/oenv-c/actions/environments/LIMITED").AddTokenAuth(ownerToken), http.StatusOK), &inherited)
+			assert.True(t, inherited.Inherited, "read on the repository route like in its list")
+			assert.EqualValues(t, 1, inherited.SecretsCount)
+			path := ".gitea/workflows/limited.yml"
+			content := "on:\n  push:\n    paths:\n      - '" + path + "'\njobs:\n  deploy:\n    runs-on: oenv\n    environment: limited\n    steps:\n      - run: echo ${{ secrets.LIMITED_KEY }}\n"
+			fileResp := createWorkflowFile(t, ownerToken, "org3", repoA.Name, path, getWorkflowCreateFileOptions(user2, repoA.DefaultBranch, "limited", content))
+			run := new(actions_model.ActionRun)
+			require.Eventually(t, func() bool {
+				has, err := db.GetEngine(db.DefaultContext).Where("repo_id = ? AND commit_sha = ?", repoA.ID, fileResp.Commit.SHA).Get(run)
+				return err == nil && has
+			}, 10*time.Second, 100*time.Millisecond)
+			var d *actions_model.ActionDeployment
+			require.Eventually(t, func() bool {
+				var err error
+				d, err = actions_model.GetDeployment(db.DefaultContext, unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRunJob{RunID: run.ID}).ID, 1)
+				return err == nil && d != nil && d.Status != 0
+			}, 10*time.Second, 100*time.Millisecond)
+			assert.Equal(t, actions_model.DeploymentReasonNotAvailable, d.Reason)
+			unittest.AssertNotExistsBean(t, &actions_model.ActionEnvironment{RepoID: repoA.ID, LowerName: "limited"})
+			var view actions_web.ViewResponse
+			DecodeJSON(t, owner.MakeRequest(t, NewRequestWithJSON(t, "POST", fmt.Sprintf("/org3/oenv-a/actions/runs/%d/jobs/0/attempt/1", run.Index), map[string]any{"logCursors": []any{}}), http.StatusOK), &view)
+			assert.Contains(t, view.State.Run.Deployments.Items[0].Text, "isn't available to this repository")
+
+			// a transfer out drops the repository's selection
+			MakeRequest(t, NewRequestWithJSON(t, "POST", "/api/v1/repos/org3/oenv-c/transfer", &api.TransferRepoOption{NewOwner: "user2"}).AddTokenAuth(ownerToken), http.StatusAccepted)
+			unittest.AssertNotExistsBean(t, &actions_model.ActionEnvironmentRepo{RepoID: repoC.ID})
+		})
+
+		t.Run("accepting a pending transfer that would twin is refused, never a 500", func(t *testing.T) {
+			user5Token := getUserToken(t, "user5", scopes...)
+			repo := createActionsTestRepo(t, user5Token, "oenv-pending", false)
+			MakeRequest(t, NewRequestWithJSON(t, "POST", "/api/v1/repos/user5/oenv-pending/transfer", &api.TransferRepoOption{NewOwner: "org3"}).AddTokenAuth(user5Token), http.StatusCreated)
+			// the twin appears after the transfer was started
+			require.NoError(t, actions_model.CreateEnvironment(audit_model.WithSystem(ctx, "test"), &actions_model.ActionEnvironment{RepoID: repo.ID, Name: "late"}, nil))
+			MakeRequest(t, NewRequestWithJSON(t, "PUT", apiBase+"/late", envRules(api.CreateOrUpdateEnvironmentOption{})).AddTokenAuth(ownerToken), http.StatusCreated)
+			resp := MakeRequest(t, NewRequest(t, "POST", "/api/v1/repos/user5/oenv-pending/transfer/accept").AddTokenAuth(ownerToken), http.StatusUnprocessableEntity)
+			assert.Contains(t, resp.Body.String(), "environment named like one of the new owner")
+			owner.MakeRequest(t, NewRequest(t, "POST", "/user5/oenv-pending/action/accept_transfer"), http.StatusSeeOther)
+			assert.Contains(t, bwFlash(owner), "The repository has an environment named like an environment of the new owner")
+			assert.EqualValues(t, 5, unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: repo.ID}).OwnerID)
+			// a new transfer is refused up front
+			MakeRequest(t, NewRequest(t, "POST", "/api/v1/repos/user5/oenv-pending/transfer/reject").AddTokenAuth(ownerToken), http.StatusOK)
+			MakeRequest(t, NewRequestWithJSON(t, "POST", "/api/v1/repos/user5/oenv-pending/transfer", &api.TransferRepoOption{NewOwner: "org3"}).AddTokenAuth(user5Token), http.StatusUnprocessableEntity)
+		})
+
 		t.Run("names are escaped in every view", func(t *testing.T) {
-			require.NoError(t, actions_model.CreateEnvironment(audit_model.WithSystem(ctx, "test"), &actions_model.ActionEnvironment{OwnerID: 3, Name: "<i>x"}, nil))
+			require.NoError(t, actions_model.CreateEnvironment(audit_model.WithSystem(ctx, "test"), &actions_model.ActionEnvironment{OwnerID: 3, Name: "<i>x", AllRepos: true}, nil))
 			for _, link := range []string{orgBase, repoBase} {
 				body := owner.MakeRequest(t, NewRequest(t, "GET", link), http.StatusOK).Body.String()
 				assert.Contains(t, body, "&lt;i&gt;x", link)
@@ -490,7 +583,7 @@ func TestActionsOrgEnvironmentsQueries(t *testing.T) {
 			require.NoError(t, user_model.CreateUser(ctx, u))
 			require.NoError(t, models.AddTeamMemberByCooptation(ctx, team, u.ID, owner.ID))
 			members = append(members, u.ID)
-			e := &actions_model.ActionEnvironment{OwnerID: org.ID, Name: fmt.Sprintf("env-%d", i)}
+			e := &actions_model.ActionEnvironment{OwnerID: org.ID, Name: fmt.Sprintf("env-%d", i), AllRepos: true}
 			require.NoError(t, actions_model.CreateEnvironment(ctx, e, []actions_model.ActionEnvironmentReviewer{{TeamID: team.ID}, {UserID: u.ID}}))
 			_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, org.ID, 0, e.ID, "S", "x")
 			require.NoError(t, err)

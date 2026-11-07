@@ -114,6 +114,13 @@ func insertEncryptedSecret(ctx context.Context, ownerID, groupID, repoID, enviro
 		if err := CheckEnvironmentCount(ctx, "secret", secret.OwnerID, secret.RepoID, environmentID); err != nil {
 			return err
 		}
+		if environmentID != 0 && secret.OwnerID != 0 {
+			if open, err := db.GetEngine(ctx).Table("action_environment").Where("id = ? AND all_repos = ? AND reviews_required = ?", environmentID, true, false).Exist(); err != nil {
+				return err
+			} else if open {
+				return ErrEnvironmentOpenSecrets
+			}
+		}
 		if err := db.Insert(ctx, secret); err != nil {
 			return err
 		}
@@ -131,6 +138,10 @@ func insertEncryptedSecret(ctx context.Context, ownerID, groupID, repoID, enviro
 
 // ErrEnvironmentNotFound is the environment of a secret or variable that is gone (actions_model.ErrEnvironmentNotFound).
 var ErrEnvironmentNotFound = util.NewNotExistErrorf("environment does not exist")
+
+// ErrEnvironmentOpenSecrets refuses a secret of an organization environment of every repository without required
+// reviewers (actions_model.ErrEnvironmentOpenSecrets).
+var ErrEnvironmentOpenSecrets = util.NewInvalidArgumentErrorf("an environment of every repository of the organization needs required reviewers to hold secrets")
 
 // LockEnvironment takes the row lock of the environment (a no-op UPDATE: a write lock on SQLite, a row lock elsewhere)
 // and returns ErrEnvironmentNotFound if it is gone. It is the one lock of an environment: every write of

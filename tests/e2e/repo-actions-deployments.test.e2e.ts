@@ -65,7 +65,7 @@ test.describe('as the reviewer', () => {
     await dialog.locator('#review-comment').fill('Not <b>today</b>');
     await dialog.getByRole('button', {name: 'Reject', exact: true}).dispatchEvent('click');
 
-    await expect(page.getByText('The deployment was rejected.')).toBeVisible();
+    await expect(page.getByText('1 deployment was rejected.')).toBeVisible();
     await expect(panel).toHaveClass(/failed/);
     await expect(panel).toContainText('Deployment rejected');
     await expect(panel).toContainText('Rejected by user2');
@@ -94,7 +94,7 @@ test.describe('as the reviewer', () => {
     await page.goto(runLink);
     await page.locator('#review-deployments').click();
     await page.locator('#review-deployments-modal').getByRole('button', {name: 'Approve and deploy', exact: true}).dispatchEvent('click');
-    await expect(page.getByText('The deployment was approved.')).toBeVisible();
+    await expect(page.getByText('1 deployment was approved.')).toBeVisible();
     await expect(page.locator('.deployments-panel')).toContainText('Approved by user2');
     await expect(page.locator('#review-deployments')).toHaveCount(0);
   });

@@ -319,7 +319,7 @@ func TestEnvironmentConcurrentCreate(t *testing.T) {
 func TestEnvironmentLimit(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	ctx := auditCtx()
-	for i := range MaxEnvironmentsPerRepo {
+	for i := range MaxEnvironments {
 		_, err := GetOrCreateRepoEnvironment(ctx, 1, fmt.Sprint("env-", i))
 		require.NoError(t, err)
 	}

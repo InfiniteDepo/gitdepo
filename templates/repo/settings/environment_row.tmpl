@@ -1,0 +1,34 @@
+{{/* one environment of the list: Row (environmentRow), ctxData, Inherited: an organization environment on a repository's page, read-only there */}}
+{{$link := print .ctxData.EnvironmentsLink "/" .Row.ID}}{{if .Inherited}}{{$link = print .ctxData.OrgEnvironmentsLink "/" .Row.ID}}{{end}}
+<div class="flex-item tw-items-center">
+	<div class="flex-item-leading">{{svg "octicon-rocket"}}</div>
+	<div class="flex-item-main">
+		<div class="flex-item-title">
+			<a class="environment-name" href="{{$link}}">{{.Row.Name}}</a>
+			{{if .Inherited}}<span class="ui tiny blue label">{{svg "octicon-organization" 12}} {{ctx.Locale.Tr "actions.environments.inherited" .ctxData.EnvironmentOwner.Name}}</span>
+			{{- else if not .Row.HasRules}}<span class="ui tiny yellow label">{{ctx.Locale.Tr "actions.environments.no_protection"}}</span>{{end}}
+		</div>
+		<div class="flex-item-body">
+			{{if and .Row.CreatedByWorkflow (not .Row.HasRules)}}
+				<span>{{ctx.Locale.Tr "actions.environments.created_by_workflow"}} <a href="{{$link}}">{{ctx.Locale.Tr "actions.environments.add_rules"}}</a> ·</span>
+			{{else if .Row.HasRules}}
+				<span>{{svg "octicon-shield"}} {{.Row.Summary}} ·</span>
+			{{else if .Inherited}}
+				<span>{{ctx.Locale.Tr "actions.environments.no_rules"}} ·</span>
+			{{end}}
+			<span>{{ctx.Locale.TrN .Row.Secrets "actions.environments.secrets_count_1" "actions.environments.secrets_count_n" .Row.Secrets}} · {{ctx.Locale.TrN .Row.Variables "actions.environments.variables_count_1" "actions.environments.variables_count_n" .Row.Variables}}</span>
+			{{if .Row.Repos}}<div class="environment-repos">{{svg "octicon-repo"}} {{.Row.Repos}}</div>{{end}}
+		</div>
+		{{if .Row.NoReviewer}}
+			<div class="ui warning message tw-mt-2 tw-mb-0 environment-no-reviewer">{{svg "octicon-alert"}} {{ctx.Locale.Tr "actions.environments.no_eligible_reviewer"}}</div>
+		{{end}}
+	</div>
+	<div class="flex-item-trailing">
+		{{template "repo/settings/environment_deployment" .Row.Last}}
+		{{if .Inherited}}
+			<a class="ui small basic button tw-whitespace-nowrap" href="{{$link}}">{{ctx.Locale.Tr "actions.environments.edit_in" .ctxData.EnvironmentOwner.Name}}</a>
+		{{else}}
+			<a class="btn interact-bg tw-p-2" href="{{$link}}" data-tooltip-content="{{ctx.Locale.Tr "actions.environments.edit"}}" aria-label="{{ctx.Locale.Tr "actions.environments.edit"}}">{{svg "octicon-pencil"}}</a>
+		{{end}}
+	</div>
+</div>
