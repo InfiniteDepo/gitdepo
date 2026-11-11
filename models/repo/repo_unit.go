@@ -266,6 +266,26 @@ type BranchingModel struct {
 	// MergeForwardAnyoneMaySkip lets everyone who merges choose "Don't merge forward"; otherwise only those who may
 	// change the branching model
 	MergeForwardAnyoneMaySkip bool `json:",omitempty"`
+	// Types are the branch types besides Release, whose prefixes are ReleasePrefixes
+	Types []BranchType `json:",omitempty"`
+	// DefaultPRTarget is the branch new pull requests target when their branch has no type; "" is the default branch
+	DefaultPRTarget string `json:",omitempty"`
+}
+
+// The branch a branch type is created from and its pull requests target.
+const (
+	BranchTypeBaseDevelopment = "development"
+	BranchTypeBaseProduction  = "production"
+	BranchTypeBaseBranch      = "branch" // the branch named in BaseBranch
+)
+
+// BranchType is a kind of branch told by the start of its name.
+type BranchType struct {
+	Name       string
+	Prefix     string
+	Base       string // one of the BranchTypeBase constants
+	BaseBranch string `json:",omitempty"` // only for BranchTypeBaseBranch
+	Off        bool   `json:",omitempty"` // a type that is turned off doesn't match branches
 }
 
 // FromDB fills up a PullRequestsConfig from serialized format.
@@ -511,6 +531,17 @@ func availableUnitsSession(ctx context.Context) *xorm.Session {
 		return db.GetEngine(ctx).Where(builder.NewCond())
 	}
 	return db.GetEngine(ctx).Select("`repo_unit`.*").Join("INNER", "repository", "`repository`.id = `repo_unit`.repo_id").Where(cond)
+}
+
+// GetRepoUnitForUpdate locks the stored unit row of a repository with a no-op UPDATE (a row lock on PostgreSQL and
+// MySQL, the write lock on SQLite), then reads it, so that two writers in transactions can't overwrite each other.
+func GetRepoUnitForUpdate(ctx context.Context, repoID int64, tp unit.Type) (*RepoUnit, bool, error) {
+	if _, err := db.Exec(ctx, "UPDATE `repo_unit` SET type = type WHERE repo_id = ? AND type = ?", repoID, tp); err != nil {
+		return nil, false, err
+	}
+	u := &RepoUnit{}
+	has, err := db.GetEngine(ctx).Where("repo_id = ? AND type = ?", repoID, tp).Get(u)
+	return u, has, err
 }
 
 // UpdateRepoUnit updates the provided repo unit

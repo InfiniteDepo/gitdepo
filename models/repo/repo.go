@@ -707,7 +707,8 @@ func (repo *Repository) ComposeBranchCompareURL(baseRepo *Repository, branchName
 		cmpBranchEscaped = repo.EscapedPath() + ":"
 	}
 	cmpBranchEscaped = fmt.Sprintf("%s%s", cmpBranchEscaped, util.PathEscapeSegments(branchName))
-	return fmt.Sprintf("%s/compare/%s...%s", baseRepo.Link(), util.PathEscapeSegments(baseRepo.DefaultBranch), cmpBranchEscaped)
+	// no base: the compare page picks it from the branching model, or the default branch
+	return fmt.Sprintf("%s/compare/%s", baseRepo.Link(), cmpBranchEscaped)
 }
 
 // IsOwnedBy returns true when user owns this repository

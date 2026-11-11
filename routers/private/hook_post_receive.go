@@ -15,9 +15,11 @@ import (
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
 	issues_model "forgejo.org/models/issues"
+	access_model "forgejo.org/models/perm/access"
 	pull_model "forgejo.org/models/pull"
 	repo_model "forgejo.org/models/repo"
 	secretscan_model "forgejo.org/models/secretscan"
+	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/cache"
 	"forgejo.org/modules/git"
@@ -29,6 +31,7 @@ import (
 	timeutil "forgejo.org/modules/timeutil"
 	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
+	"forgejo.org/services/branchworkflow"
 	app_context "forgejo.org/services/context"
 	repo_service "forgejo.org/services/repository"
 	secretscan_service "forgejo.org/services/secretscan"
@@ -228,6 +231,9 @@ func HookPostReceive(ctx *app_context.PrivateContext) {
 	// We have to reload the repo in case its state is changed above
 	repo = nil
 	var baseRepo *repo_model.Repository
+	var baseReadable *bool
+	var baseModel branchworkflow.EffectiveModel
+	var err error
 
 	// Now handle the pull request notification trailers
 	for i := range opts.OldCommitIDs {
@@ -307,8 +313,35 @@ func HookPostReceive(ctx *app_context.PrivateContext) {
 
 			branch := refFullName.BranchName()
 
+			// The branching model of the base repository chooses the branch the pull request would target
+			// (only for a pusher who can read it: a fork's pusher may have lost access to the repository it was forked from)
+			if baseReadable == nil {
+				readable := repo.ID == baseRepo.ID || (opts.DeployKeyKeyID == 0 && opts.ActionTaskID == 0 && pusherCanReadCode(ctx, baseRepo, opts.UserID))
+				baseReadable = &readable
+				if readable {
+					if baseModel, err = branchworkflow.GetEffectiveModel(ctx, baseRepo); err != nil {
+						// the suggestion is cosmetic: an unreadable model must not fail every push
+						log.Error("Failed to read the branching model of %-v, suggesting the default branch: %v", baseRepo, err)
+						baseModel, *baseReadable = branchworkflow.EffectiveModel{}, false
+					}
+				}
+			}
+			target := branchworkflow.Target{Branch: baseRepo.DefaultBranch, Rule: branchworkflow.TargetRuleDefault}
+			var err error
+			if *baseReadable {
+				target, err = branchworkflow.ResolveTargetWith(ctx, baseRepo, baseModel, branch)
+			}
+			if err != nil {
+				log.Error("Failed to resolve the pull request target of %-v branch %s: %v", baseRepo, branch, err)
+				ctx.JSON(http.StatusInternalServerError, private.HookPostReceiveResult{
+					Err:          fmt.Sprintf("Failed to resolve the pull request target of %-v branch %s: %v", baseRepo, branch, err),
+					RepoWasEmpty: wasEmpty,
+				})
+				return
+			}
+
 			// If our branch is the default branch of an unforked repo - there's no PR to create or refer to
-			if !repo.IsFork && branch == baseRepo.DefaultBranch {
+			if !repo.IsFork && (branch == baseRepo.DefaultBranch || branch == target.Branch) {
 				results = append(results, private.HookPostReceiveBranchResult{})
 				continue
 			}
@@ -338,7 +371,7 @@ func HookPostReceive(ctx *app_context.PrivateContext) {
 			if repo.IsFork {
 				branch = fmt.Sprintf("%s:%s", repo.OwnerName, branch)
 			}
-			createURL := fmt.Sprintf("%s/compare/%s...%s", baseRepo.HTMLURL(), util.PathEscapeSegments(baseRepo.DefaultBranch), util.PathEscapeSegments(branch))
+			createURL := fmt.Sprintf("%s/compare/%s...%s", baseRepo.HTMLURL(), util.PathEscapeSegments(target.Branch), util.PathEscapeSegments(branch))
 			var urls []string
 			foundDefaultBranch := false
 			for _, pr := range prList {
@@ -351,7 +384,7 @@ func HookPostReceive(ctx *app_context.PrivateContext) {
 					baseBranchDisplay = fmt.Sprintf("%s:%s", pr.BaseRepo.FullName(), pr.BaseBranch)
 				}
 				urls = append(urls, fmt.Sprintf("%s/pulls/%d merges into %s", baseRepo.HTMLURL(), pr.Index, baseBranchDisplay))
-				if pr.BaseBranch == baseRepo.DefaultBranch {
+				if pr.BaseBranch == target.Branch {
 					foundDefaultBranch = true
 				}
 			}
@@ -433,4 +466,14 @@ func pusherActor(ctx *app_context.PrivateContext, userID int64) context.Context 
 		a.Name = u.Name
 	}
 	return audit_model.WithActor(ctx, a)
+}
+
+// pusherCanReadCode tells if the user may read the code of repo; an unknown user can't.
+func pusherCanReadCode(ctx *app_context.PrivateContext, repo *repo_model.Repository, userID int64) bool {
+	user, err := loadContextCacheUser(ctx, userID)
+	if err != nil {
+		return false
+	}
+	perm, err := access_model.GetUserRepoPermission(ctx, repo, user)
+	return err == nil && perm.CanRead(unit.TypeCode)
 }

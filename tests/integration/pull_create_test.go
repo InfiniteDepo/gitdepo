@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -47,18 +46,15 @@ func testPullCreate(t *testing.T, session *TestSession, user, repo string, toSel
 		link = strings.Replace(link, targetUser, user, 1)
 	}
 
-	// get main out of /user/project/main...some:other/branch
-	defaultBranch := regexp.MustCompile(`^.*/(.*)\.\.\.`).FindStringSubmatch(link)[1]
-	if targetBranch != defaultBranch {
-		link = strings.Replace(link, defaultBranch+"...", targetBranch+"...", 1)
+	// the link names only the head (/user/project/compare/some:other/branch): the base is chosen by the page, so name it
+	cut := strings.Index(link, "/compare/") + len("/compare/")
+	head := link[cut:]
+	if targetUser == user {
+		head = sourceBranch
+	} else {
+		head = head[:strings.LastIndex(head, ":")+1] + sourceBranch
 	}
-	if sourceBranch != defaultBranch {
-		if targetUser == user {
-			link = strings.Replace(link, "..."+defaultBranch, "..."+sourceBranch, 1)
-		} else {
-			link = strings.Replace(link, ":"+defaultBranch, ":"+sourceBranch, 1)
-		}
-	}
+	link = link[:cut] + targetBranch + "..." + head
 
 	req = NewRequest(t, "GET", link)
 	resp = session.MakeRequest(t, req, http.StatusOK)
@@ -458,7 +454,7 @@ func TestRecentlyPushed(t *testing.T) {
 			// branch link points to the same repo
 			assert.Equal(t, "/user2/repo1/src/branch/recent-push-base", baseBranchLink)
 			// PR link compares against the correct rep, and unqualified branch name
-			assert.Equal(t, "/user2/repo1/compare/master...recent-push-base", basePRLink)
+			assert.Equal(t, "/user2/repo1/compare/recent-push-base", basePRLink)
 
 			// ** forked repo tests **
 			forkPRLink, _ := prButtons.Last().Attr("href")
@@ -470,7 +466,13 @@ func TestRecentlyPushed(t *testing.T) {
 			// branch link points to the forked repo
 			assert.Equal(t, "/user1/repo1/src/branch/recent-push", forkBranchLink)
 			// PR link compares against the correct rep, and qualified branch name
-			assert.Equal(t, "/user2/repo1/compare/master...user1/repo1:recent-push", forkPRLink)
+			assert.Equal(t, "/user2/repo1/compare/user1/repo1:recent-push", forkPRLink)
+
+			// the head-only links open the compare page, which takes the default branch as the base of a repo without a model
+			for _, link := range []string{basePRLink, forkPRLink} {
+				resp := session.MakeRequest(t, NewRequest(t, "GET", link), http.StatusOK)
+				assert.Contains(t, resp.Body.String(), "user2:master</span>", link)
+			}
 		})
 
 		t.Run("unrelated branches are not shown", func(t *testing.T) {

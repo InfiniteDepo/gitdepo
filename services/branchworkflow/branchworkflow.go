@@ -15,6 +15,8 @@ import (
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/translation"
+
+	"code.forgejo.org/xorm/xorm/convert"
 )
 
 const (
@@ -156,9 +158,31 @@ func SetRepo(ctx context.Context, repo *repo_model.Repository, mode repo_model.D
 	if err != nil {
 		return ErrNoPullRequests
 	}
-	cfg := u.PullRequestsConfig()
-	cfg.DeleteBranchAfterMerge, cfg.DefaultDeleteBranchAfterMerge = mode, false
-	return repo_model.UpdateRepoUnit(ctx, u)
+	var newConfig convert.Conversion
+	if err := db.WithTx(ctx, func(ctx context.Context) error {
+		// the stored row, not the copy cached on the repository, is what changes and what the entry compares
+		stored := &repo_model.RepoUnit{}
+		if has, err := db.GetEngine(ctx).Where("repo_id = ? AND type = ?", repo.ID, unit.TypePullRequests).Get(stored); err != nil {
+			return err
+		} else if !has {
+			return ErrNoPullRequests
+		}
+		cfg := stored.PullRequestsConfig()
+		before := cfg.GetDeleteBranchAfterMerge()
+		cfg.DeleteBranchAfterMerge, cfg.DefaultDeleteBranchAfterMerge = mode, false
+		if err := repo_model.UpdateRepoUnit(ctx, stored); err != nil {
+			return err
+		}
+		newConfig = stored.Config
+		if changes := audit_model.Changes(map[string]any{"mode": before.String()}, map[string]any{"mode": mode.String()}); changes != nil {
+			return repo_model.RecordRepo(ctx, "repo.branch_workflow.changed", repo, changes)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	u.Config = newConfig // the copy cached on the repository follows only a stored change
+	return nil
 }
 
 // SetByText says who decided the value, for the merge box and the settings pages.

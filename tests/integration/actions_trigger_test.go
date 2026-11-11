@@ -1075,7 +1075,7 @@ func TestActionsCreateDeleteRefEvent(t *testing.T) {
 		assert.NotNil(t, run)
 
 		// delete the branch
-		err = repo_service.DeleteBranch(db.DefaultContext, user2, repo, gitRepo, "test-create-branch")
+		err = repo_service.DeleteBranch(db.DefaultContext, user2, repo, gitRepo, "test-create-branch", "")
 		require.NoError(t, err)
 		run = unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRun{
 			Title:      "add workflow",

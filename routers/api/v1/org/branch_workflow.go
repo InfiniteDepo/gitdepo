@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	repo_model "forgejo.org/models/repo"
+	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/web"
 	"forgejo.org/services/branchworkflow"
@@ -34,6 +35,10 @@ func GetBranchWorkflow(ctx *context.APIContext) {
 	//     "$ref": "#/responses/forbidden"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
+
+	if !orgWideToken(ctx) {
+		return
+	}
 
 	mode, locked, err := branchworkflow.GetOrg(ctx, ctx.Org().Organization.AsUser())
 	if err != nil {
@@ -73,6 +78,10 @@ func EditBranchWorkflow(ctx *context.APIContext) {
 	//   "422":
 	//     "$ref": "#/responses/validationError"
 
+	if !orgWideToken(ctx) {
+		return
+	}
+
 	form := web.GetForm(ctx).(*api.OrgBranchWorkflow)
 	mode, ok := repo_model.ParseDeleteBranchMode(form.DeleteBranchAfterMerge)
 	if !ok {
@@ -96,7 +105,7 @@ func renderBranchingModel(ctx *context.APIContext) {
 		ctx.ServerError("GetOrgModel", err)
 		return
 	}
-	res := &api.OrgBranchingModel{ReleasePrefixes: []string{}, Enforce: locked}
+	res := &api.OrgBranchingModel{ReleasePrefixes: []string{}, Types: []api.BranchType{}, Enforce: locked}
 	if model != nil {
 		res.DevelopmentBranch = model.DevelopmentBranch
 		res.ReleasePrefixes = append(res.ReleasePrefixes, model.ReleasePrefixes...)
@@ -104,6 +113,8 @@ func renderBranchingModel(ctx *context.APIContext) {
 		res.MergeForwardNeverBypass = model.MergeForwardNeverBypass
 		res.MergeForwardAnyoneMaySkip = model.MergeForwardAnyoneMaySkip
 		res.ProductionBranch = model.ProductionBranch
+		res.Types = branchworkflow.TypesToAPI(model.Types)
+		res.DefaultPRTarget = model.DefaultPRTarget
 	}
 	ctx.JSON(http.StatusOK, res)
 }
@@ -128,6 +139,10 @@ func GetBranchingModel(ctx *context.APIContext) {
 	//     "$ref": "#/responses/forbidden"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
+
+	if !orgWideToken(ctx) {
+		return
+	}
 
 	renderBranchingModel(ctx)
 }
@@ -162,9 +177,18 @@ func EditBranchingModel(ctx *context.APIContext) {
 	//   "422":
 	//     "$ref": "#/responses/validationError"
 
+	if !orgWideToken(ctx) {
+		return
+	}
+
 	form := web.GetForm(ctx).(*api.OrgBranchingModel)
-	err := branchworkflow.SetOrgModel(ctx, ctx.Org().Organization.AsUser(), &repo_model.BranchingModel{DevelopmentBranch: form.DevelopmentBranch, ReleasePrefixes: form.ReleasePrefixes, ProductionBranch: form.ProductionBranch, MergeForward: form.MergeForward, MergeForwardNeverBypass: form.MergeForwardNeverBypass, MergeForwardAnyoneMaySkip: form.MergeForwardAnyoneMaySkip}, form.Enforce)
-	if _, ok := branchworkflow.IsInvalidBranchingModel(err); ok || errors.Is(err, branchworkflow.ErrLockWithoutValue) || errors.Is(err, branchworkflow.ErrTooManyReleasePrefixes) {
+	err := branchworkflow.SetOrgModel(ctx, ctx.Org().Organization.AsUser(), &repo_model.BranchingModel{DevelopmentBranch: form.DevelopmentBranch, ReleasePrefixes: form.ReleasePrefixes, ProductionBranch: form.ProductionBranch, Types: branchworkflow.TypesFromAPI(form.Types), DefaultPRTarget: form.DefaultPRTarget, MergeForward: form.MergeForward, MergeForwardNeverBypass: form.MergeForwardNeverBypass, MergeForwardAnyoneMaySkip: form.MergeForwardAnyoneMaySkip}, form.Enforce)
+	if e, ok := branchworkflow.IsInvalidBranchingModel(err); ok {
+		// the cause code is its own field, the message is for people
+		ctx.JSON(http.StatusUnprocessableEntity, map[string]string{"message": e.Error(), "reason": e.Reason, "url": setting.API.SwaggerURL})
+		return
+	}
+	if errors.Is(err, branchworkflow.ErrLockWithoutValue) || errors.Is(err, branchworkflow.ErrTooManyReleasePrefixes) || errors.Is(err, branchworkflow.ErrTooManyBranchTypes) {
 		ctx.Error(http.StatusUnprocessableEntity, "SetOrgModel", err)
 		return
 	}

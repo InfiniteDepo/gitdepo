@@ -200,7 +200,7 @@ func TestProjectComparePullHeads(t *testing.T) {
 		session.MakeRequest(t, NewRequest(t, "GET", "/org3/proj/pub/compare/main..."+head), status)
 	}
 	assert.Equal(t, "org3/proj/pub/compare/a...b", f.pub.ComposeCompareURL("a", "b"))
-	assert.Equal(t, f.pub.Link()+"/compare/main...org3/proj/priv:feature", f.priv.ComposeBranchCompareURL(f.pub, "feature"))
+	assert.Equal(t, f.pub.Link()+"/compare/org3/proj/priv:feature", f.priv.ComposeBranchCompareURL(f.pub, "feature"))
 }
 
 func TestAPIPackageLinkProject(t *testing.T) {

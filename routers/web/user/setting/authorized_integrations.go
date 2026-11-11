@@ -26,7 +26,6 @@ import (
 	"forgejo.org/services/authz"
 	"forgejo.org/services/context"
 
-	"code.forgejo.org/go-chi/binding"
 	"xorm.io/builder"
 )
 
@@ -109,7 +108,9 @@ func DynamicBindAuthorizedIntegrationForm(ctx *context.Context) {
 	ui := authorizedIntegrationUI(ctx)
 	formObj := ui.form()
 	data := middleware.GetContextData(ctx)
-	binding.Bind(ctx.Req, formObj)
+	if !web.BindForm(ctx.Resp, ctx.Req, formObj) {
+		return
+	}
 	web.SetForm(data, formObj)
 }
 

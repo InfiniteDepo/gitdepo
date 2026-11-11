@@ -7,6 +7,7 @@ package repo
 import (
 	"errors"
 	"fmt"
+	"html/template"
 	"net/http"
 	"net/url"
 	"strings"
@@ -25,6 +26,7 @@ import (
 	"forgejo.org/modules/web"
 	"forgejo.org/routers/utils"
 	"forgejo.org/services/context"
+	"forgejo.org/services/cron"
 	"forgejo.org/services/forms"
 	release_service "forgejo.org/services/release"
 	repo_service "forgejo.org/services/repository"
@@ -91,7 +93,7 @@ func DeleteBranchPost(ctx *context.Context) {
 	branchName := ctx.FormString("name")
 
 	locked := repo_service.PersonalRepoLocked(ctx, ctx.Repo.Repository)
-	if err := repo_service.DeleteBranch(ctx, ctx.Doer, ctx.Repo.Repository, ctx.Repo.GitRepo, branchName); err != nil {
+	if err := repo_service.DeleteBranch(ctx, ctx.Doer, ctx.Repo.Repository, ctx.Repo.GitRepo, branchName, ""); err != nil {
 		switch {
 		case git.IsErrBranchNotExist(err):
 			log.Debug("DeleteBranch: Can't delete non existing branch '%s'", branchName)
@@ -102,6 +104,8 @@ func DeleteBranchPost(ctx *context.Context) {
 		case errors.Is(err, git_model.ErrBranchIsProtected):
 			log.Debug("DeleteBranch: Can't delete protected branch '%s'", branchName)
 			ctx.Flash.Error(ctx.Tr("repo.branch.protected_deletion_failed", branchName))
+		case errors.Is(err, repo_service.ErrBranchHasNewCommits):
+			ctx.Flash.Error(ctx.Tr("repo.branch.moved_deletion_failed", branchName))
 		default:
 			log.Error("DeleteBranch: %v", err)
 			ctx.Flash.Error(ctx.Tr("repo.branch.deletion_failed", branchName))
@@ -271,4 +275,17 @@ func CreateBranch(ctx *context.Context) {
 
 	ctx.Flash.Success(ctx.Tr("repo.branch.create_success", form.NewBranchName))
 	ctx.Redirect(ctx.Repo.RepoLink + "/src/branch/" + util.PathEscapeSegments(form.NewBranchName) + "/" + util.PathEscapeSegments(form.CurrentPath))
+}
+
+// RestoreText says for how long a deleted branch can be restored from the Branches page, from the configured
+// deleted-branch cleanup; empty when it can't be (the cleanup purges at once).
+func RestoreText(ctx *context.Context) template.HTML {
+	hours, ok := cron.DeletedBranchRestoreWindow()
+	switch {
+	case !ok:
+		return ""
+	case hours == 0:
+		return ctx.Tr("repo.settings.delete_merged.restore")
+	}
+	return ctx.Locale.TrPluralString(hours, "repo.settings.delete_merged.restore_hours", hours)
 }

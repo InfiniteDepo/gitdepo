@@ -100,10 +100,16 @@ func (repo *Repository) GetBranches(skip, limit int) ([]*Branch, int, error) {
 // DeleteBranchOptions Option(s) for delete branch
 type DeleteBranchOptions struct {
 	Force bool
+	// ExpectedCommit, when set, makes the delete compare-and-swap: it fails when the branch is no longer at this commit
+	ExpectedCommit string
 }
 
 // DeleteBranch delete a branch by name on repository.
 func (repo *Repository) DeleteBranch(name string, opts DeleteBranchOptions) error {
+	if opts.ExpectedCommit != "" {
+		_, _, err := NewCommand(repo.Ctx, "update-ref", "-d").AddDynamicArguments(BranchPrefix+name, opts.ExpectedCommit).RunStdString(&RunOpts{Dir: repo.Path})
+		return err
+	}
 	cmd := NewCommand(repo.Ctx, "branch")
 
 	if opts.Force {

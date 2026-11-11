@@ -161,7 +161,7 @@ var Fields = map[string][]string{
 		"name", "visibility", "require_two_factor", "restrict_repo_visibility_change", "private_fork_policy",
 		"repo_admin_change_team_access", "max_repo_creation", "category_id", "is_active", "prohibit_login", "user_id",
 		"counts", "purge", "domain", "verified_by_admin", "required", "units", "mode", "locked", "development_branch",
-		"release_prefixes", "production_branch", "merge_forward", "merge_forward_never_bypass", "merge_forward_anyone_may_skip", "model_locked",
+		"release_prefixes", "production_branch", "merge_forward", "merge_forward_never_bypass", "merge_forward_anyone_may_skip", "types", "default_pr_target", "model_locked", "model_sha256",
 		"dependency_graph", "dependency_graph_locked", "secret_scanning", "secret_scanning_locked",
 	},
 	"team": {
@@ -172,7 +172,7 @@ var Fields = map[string][]string{
 		"name", "owner_id", "owner_name", "group_id", "group_name", "is_private", "is_template", "default_branch",
 		"is_mirror", "fork_id", "template_id", "units", "counts", "purge", "to_owner_id", "to_owner_name", "team_ids",
 		"interval", "enable_prune", "branch_filter", "tag_filter", "lfs", "lfs_endpoint", "address", "url_changed",
-		"credentials_changed", "development_branch", "release_prefixes", "production_branch", "merge_forward", "merge_forward_never_bypass", "merge_forward_anyone_may_skip", "inherit",
+		"credentials_changed", "development_branch", "release_prefixes", "production_branch", "merge_forward", "merge_forward_never_bypass", "merge_forward_anyone_may_skip", "types", "default_pr_target", "inherit", "mode", "model_sha256",
 		"dependency_graph", "secret_scanning",
 	},
 	"collaborator":       {"user_id", "mode"},
@@ -419,15 +419,15 @@ func filterKeys(in map[string]any, allowed []string) map[string]any {
 	return out
 }
 
-// encodeData returns the JSON of data (keys sorted) cut to maxData: it halves the longest name list first, then the
-// longest ID list, and sets "truncated".
+// encodeData returns the JSON of data (keys sorted) cut to maxData: it halves the longest list of objects first, then
+// the longest name list, then the longest ID list, and sets "truncated".
 func encodeData(data map[string]any) (string, error) {
 	for {
 		b, err := json.Marshal(data)
 		if err != nil || len(b) <= maxData {
 			return string(b), err
 		}
-		if !halveLongest[string](data) && !halveLongest[int64](data) {
+		if !halveLongest[map[string]any](data) && !halveLongest[string](data) && !halveLongest[int64](data) {
 			return "", util.NewInvalidArgumentErrorf("audit data too large")
 		}
 		data["truncated"] = true

@@ -87,8 +87,9 @@ type ListPullRequestsOptions struct {
 
 // CreatePullRequestOption options when creating a pull request
 type CreatePullRequestOption struct {
-	Head      string   `json:"head" binding:"Required"`
-	Base      string   `json:"base" binding:"Required"`
+	Head string `json:"head" binding:"Required"`
+	// Base is the branch to merge into; an explicit base always wins. Empty: the base of the head branch's type in the branching model, else its default pull request target, else the default branch
+	Base      string   `json:"base"`
 	Title     string   `json:"title" binding:"Required"`
 	Body      string   `json:"body"`
 	Assignee  string   `json:"assignee"`

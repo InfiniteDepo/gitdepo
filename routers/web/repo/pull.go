@@ -1482,19 +1482,69 @@ func mergeCheckMessage(ctx *context.Context, issue *issues_model.Issue, err erro
 
 // branchKeptMessage returns why the head branch of a merged pull request was not deleted, false for any other error.
 func branchKeptMessage(ctx *context.Context, err error) (template.HTML, bool) {
-	switch {
-	case errors.Is(err, repo_service.ErrBranchIsDefault):
-		return ctx.Tr("repo.pulls.delete_after_merge.head_branch.is_default"), true
-	case errors.Is(err, git_model.ErrBranchIsProtected):
-		return ctx.Tr("repo.pulls.delete_after_merge.head_branch.is_protected"), true
-	case errors.Is(err, util.ErrPermissionDenied):
-		return ctx.Tr("repo.pulls.delete_after_merge.head_branch.insufficient_branch"), true
-	case errors.Is(err, repo_service.ErrBranchInUse):
-		return ctx.Tr("repo.pulls.delete_after_merge.head_branch.in_use"), true
-	case errors.Is(err, repo_service.ErrBranchHasNewCommits):
-		return ctx.Tr("repo.pulls.delete_after_merge.head_branch.has_new_commits"), true
+	code, ok := repo_service.KeptCode(err)
+	if !ok {
+		return "", false
 	}
-	return "", false
+	return keptReasonText(ctx, code), true
+}
+
+// keptReasonText says why a head branch was kept; the codes are a closed set, shown through literal keys.
+func keptReasonText(ctx *context.Context, code string) template.HTML {
+	switch code {
+	case branchworkflow.KeptDefault:
+		return ctx.Tr("repo.pulls.delete_after_merge.head_branch.is_default")
+	case branchworkflow.KeptDevelopment:
+		return ctx.Tr("repo.pulls.delete_after_merge.kept.development")
+	case branchworkflow.KeptProduction:
+		return ctx.Tr("repo.pulls.delete_after_merge.kept.production")
+	case branchworkflow.KeptRelease:
+		return ctx.Tr("repo.pulls.delete_after_merge.kept.release")
+	case branchworkflow.KeptProtected:
+		return ctx.Tr("repo.pulls.delete_after_merge.head_branch.is_protected")
+	case branchworkflow.KeptBase:
+		return ctx.Tr("repo.pulls.delete_after_merge.kept.base")
+	case branchworkflow.KeptMergeQueue:
+		return ctx.Tr("repo.pulls.delete_after_merge.kept.merge_queue")
+	case branchworkflow.KeptOpenPR:
+		return ctx.Tr("repo.pulls.delete_after_merge.head_branch.in_use")
+	case repo_service.KeptNewCommits:
+		return ctx.Tr("repo.pulls.delete_after_merge.head_branch.has_new_commits")
+	}
+	return ctx.Tr("repo.pulls.delete_after_merge.head_branch.insufficient_branch")
+}
+
+// keptWillBeText is the note of the merge box for a head branch that will be kept.
+func keptWillBeText(ctx *context.Context, branch, code string) string {
+	return ctx.Locale.TrString("repo.pulls.delete_after_merge.will_be_kept", branch, keptReasonPhrase(ctx, code))
+}
+
+// keptNowText is the note of a merged or closed pull request, where "Delete branch" is not offered for a kept branch.
+func keptNowText(ctx *context.Context, branch, code string) string {
+	return ctx.Locale.TrString("repo.pulls.delete_after_merge.is_kept", branch, keptReasonPhrase(ctx, code))
+}
+
+func keptReasonPhrase(ctx *context.Context, code string) string {
+	var reason string
+	switch code {
+	case branchworkflow.KeptDefault:
+		reason = ctx.Locale.TrString("repo.pulls.delete_after_merge.reason.default")
+	case branchworkflow.KeptDevelopment:
+		reason = ctx.Locale.TrString("repo.pulls.delete_after_merge.reason.development")
+	case branchworkflow.KeptProduction:
+		reason = ctx.Locale.TrString("repo.pulls.delete_after_merge.reason.production")
+	case branchworkflow.KeptRelease:
+		reason = ctx.Locale.TrString("repo.pulls.delete_after_merge.reason.release")
+	case branchworkflow.KeptProtected:
+		reason = ctx.Locale.TrString("repo.pulls.delete_after_merge.reason.protected")
+	case branchworkflow.KeptBase:
+		reason = ctx.Locale.TrString("repo.pulls.delete_after_merge.reason.base")
+	case branchworkflow.KeptOpenPR:
+		reason = ctx.Locale.TrString("repo.pulls.delete_after_merge.reason.open_pr")
+	default:
+		reason = ctx.Locale.TrString("repo.pulls.delete_after_merge.reason.merge_queue")
+	}
+	return reason
 }
 
 // MergePullRequest response for merging pull request
@@ -1742,8 +1792,9 @@ func MergePullRequest(ctx *context.Context) {
 			if message, ok := branchKeptMessage(ctx, err); ok {
 				flash(message)
 			} else {
-				ctx.ServerError("DeleteBranchAfterMerge", err)
-				return
+				// the pull request is merged: a failed cleanup is told, never an error page
+				log.Error("DeleteBranchAfterMerge %-v: %v", pr, err)
+				ctx.Flash.Error(ctx.Tr("repo.branch.deletion_failed", pr.HeadBranch))
 			}
 
 			ctx.JSONRedirect(issue.Link())
@@ -2033,6 +2084,8 @@ func CompareAndPullRequestPost(ctx *context.Context) {
 		case git_model.IsErrPRTitleRule(err):
 			message, _ := issue_service.PRTitleRuleMessage(ctx.Locale, err)
 			ctx.JSONError(message)
+		case git_model.IsErrBranchesEqual(err):
+			ctx.JSONError(ctx.Tr("repo.pulls.nothing_to_compare"))
 		case git.IsErrPushRejected(err):
 			pushrejErr := err.(*git.ErrPushRejected)
 			message := pushrejErr.Message
@@ -2168,6 +2221,16 @@ func CleanUpPullRequest(ctx *context.Context) {
 		return
 	}
 
+	// the button is the after-merge deletion: the branches the branching model keeps are not offered and not deleted
+	if reason, err := branchworkflow.KeptReason(ctx, pr.HeadRepo, pr.HeadBranch, false); err != nil {
+		ctx.ServerError("KeptReason", err)
+		return
+	} else if reason != "" {
+		ctx.Flash.Error(keptReasonText(ctx, reason))
+		ctx.JSONRedirect(issue.Link())
+		return
+	}
+
 	fullBranchName := pr.HeadRepo.Owner.Name + "/" + pr.HeadBranch
 
 	var gitBaseRepo *git.Repository
@@ -2222,10 +2285,10 @@ func CleanUpPullRequest(ctx *context.Context) {
 		return
 	}
 
-	deleteBranch(ctx, pr, gitRepo)
+	deleteBranch(ctx, pr, gitRepo, branchCommitID)
 }
 
-func deleteBranch(ctx *context.Context, pr *issues_model.PullRequest, gitRepo *git.Repository) {
+func deleteBranch(ctx *context.Context, pr *issues_model.PullRequest, gitRepo *git.Repository, commitID string) {
 	fullBranchName := pr.HeadRepo.FullName() + ":" + pr.HeadBranch
 
 	if err := pull_service.RetargetChildrenOnMerge(ctx, ctx.Doer, pr); err != nil {
@@ -2233,7 +2296,7 @@ func deleteBranch(ctx *context.Context, pr *issues_model.PullRequest, gitRepo *g
 		return
 	}
 
-	if err := repo_service.DeleteBranch(ctx, ctx.Doer, pr.HeadRepo, gitRepo, pr.HeadBranch); err != nil {
+	if err := repo_service.DeleteBranch(ctx, ctx.Doer, pr.HeadRepo, gitRepo, pr.HeadBranch, commitID); err != nil {
 		switch {
 		case git.IsErrBranchNotExist(err):
 			ctx.Flash.Error(ctx.Tr("repo.branch.deletion_failed", fullBranchName))
@@ -2241,6 +2304,8 @@ func deleteBranch(ctx *context.Context, pr *issues_model.PullRequest, gitRepo *g
 			ctx.Flash.Error(ctx.Tr("repo.branch.deletion_failed", fullBranchName))
 		case errors.Is(err, git_model.ErrBranchIsProtected):
 			ctx.Flash.Error(ctx.Tr("repo.branch.deletion_failed", fullBranchName))
+		case errors.Is(err, repo_service.ErrBranchHasNewCommits):
+			ctx.Flash.Error(ctx.Tr("repo.branch.moved_deletion_failed", fullBranchName))
 		default:
 			log.Error("DeleteBranch: %v", err)
 			ctx.Flash.Error(ctx.Tr("repo.branch.deletion_failed", fullBranchName))

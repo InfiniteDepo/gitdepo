@@ -325,7 +325,7 @@ func TestCompareWithPRsDisabled(t *testing.T) {
 			req := NewRequest(t, "GET", "/user1/repo1/branches")
 			resp := session.MakeRequest(t, req, http.StatusOK)
 			htmlDoc := NewHTMLParser(t, resp.Body)
-			compareLink := htmlDoc.Find("a[href='/user1/repo1/compare/master...recent-push']")
+			compareLink := htmlDoc.Find("a[href='/user1/repo1/compare/recent-push']")
 			assert.Equal(t, "Compare branches", strings.TrimSpace(compareLink.Text()))
 		})
 

@@ -210,3 +210,27 @@ func TestIsBranchExist(t *testing.T) {
 	assert.False(t, IsBranchExist(t.Context(), repo1Path, "signed-tag"))
 	assert.False(t, IsBranchExist(t.Context(), repo1Path, "test"))
 }
+
+func TestDeleteBranchExpectedCommit(t *testing.T) {
+	path := t.TempDir()
+	require.NoError(t, Clone(DefaultContext, filepath.Join(testReposDir, "repo1_bare"), path, CloneRepoOptions{Mirror: true, Bare: true, Quiet: true}))
+	repo, err := openRepositoryWithDefaultContext(path)
+	require.NoError(t, err)
+	defer repo.Close()
+
+	tip, err := repo.GetBranchCommitID("branch2")
+	require.NoError(t, err)
+	other, err := repo.GetBranchCommitID("master")
+	require.NoError(t, err)
+	require.NotEqual(t, tip, other)
+
+	// the branch is not at the commit that was read: nothing is deleted
+	require.Error(t, repo.DeleteBranch("branch2", DeleteBranchOptions{Force: true, ExpectedCommit: other}))
+	assert.True(t, repo.IsBranchExist("branch2"))
+	now, err := repo.GetBranchCommitID("branch2")
+	require.NoError(t, err)
+	assert.Equal(t, tip, now)
+
+	require.NoError(t, repo.DeleteBranch("branch2", DeleteBranchOptions{Force: true, ExpectedCommit: tip}))
+	assert.False(t, repo.IsBranchExist("branch2"))
+}

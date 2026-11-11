@@ -204,3 +204,17 @@ test('change time control posts the new time of a pending schedule', async () =>
   await mergeform.get('#change-scheduled-after').setValue('2026-07-01T12:00');
   expect(form.get('input[name="scheduled_after"]').element.value).toBe('2026-07-01T12:00:00.000Z');
 });
+
+test('delete branch checkbox is unchecked and disabled with the reason when the branch will be kept', async () => {
+  const mergeform = await renderMergeForm('develop', {
+    defaultDeleteBranchAfterMerge: true,
+    deleteBranchForced: true,
+    textDeleteBranchKept: 'develop will be kept: it is the development branch.',
+  });
+  expect(mergeform.get('#delete-branch-after-merge').element.checked).toBe(false);
+  expect(mergeform.get('#delete-branch-after-merge').element.disabled).toBe(true);
+  expect(mergeform.get('.delete-branch-kept').text()).toBe('develop will be kept: it is the development branch.');
+  expect(mergeform.find('.delete-branch-forced').exists()).toBe(false);
+  expect(mergeform.get('#delete-branch-after-merge').attributes('aria-describedby')).toBe('delete-branch-kept-reason');
+  expect(mergeform.get('#delete-branch-kept-reason').text()).toContain('will be kept');
+});

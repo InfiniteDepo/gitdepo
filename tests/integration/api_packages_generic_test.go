@@ -289,3 +289,26 @@ func TestPackageGeneric(t *testing.T) {
 		})
 	})
 }
+
+// A raw package upload is stored byte-identical whatever its Content-Type says: the form is never parsed for it
+// (curl --data-binary sends application/x-www-form-urlencoded), so "%zz" and a body over Go's 10 MB form limit pass.
+func TestPackageGenericFormContentTypeRawBody(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+
+	user := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	big := bytes.Repeat([]byte("a=%zz&"), 11<<20/6)
+	for name, content := range map[string][]byte{"bad-escape": []byte("a=%zz&b=%"), "over-limit": big} {
+		t.Run(name, func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+
+			url := fmt.Sprintf("/api/packages/%s/generic/form-%s/1.0.0/file.bin", user.Name, name)
+			req := NewRequestWithBody(t, "PUT", url, bytes.NewReader(content)).
+				AddBasicAuth(user.Name).
+				SetHeader("Content-Type", "application/x-www-form-urlencoded")
+			MakeRequest(t, req, http.StatusCreated)
+
+			resp := MakeRequest(t, NewRequest(t, "GET", url).AddBasicAuth(user.Name), http.StatusOK)
+			assert.True(t, bytes.Equal(content, resp.Body.Bytes()))
+		})
+	}
+}

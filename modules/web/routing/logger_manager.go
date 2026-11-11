@@ -11,6 +11,7 @@ import (
 
 	"forgejo.org/modules/graceful"
 	"forgejo.org/modules/process"
+	"forgejo.org/modules/web/middleware"
 )
 
 // Event indicates when the printer is triggered
@@ -97,7 +98,9 @@ func (manager *requestRecordsManager) handler(next http.Handler) http.Handler {
 		defer func() {
 			// just in case there is a panic. now the panics are all recovered in middleware.go
 			localPanicErr := recover()
-			if localPanicErr != nil {
+			// a refused form is no panic: its 400 is written and logged with its status
+			_, formRefused := localPanicErr.(middleware.FormRefused)
+			if localPanicErr != nil && !formRefused {
 				record.lock.Lock()
 				record.panicError = localPanicErr
 				record.lock.Unlock()

@@ -252,3 +252,23 @@ func addTaskToScheduler(task *Task) error {
 func scheduleHasSeconds(schedule string) bool {
 	return len(strings.Fields(schedule)) >= 6
 }
+
+// DeletedBranchRestoreWindow tells how a deleted branch can be restored, from the deleted-branch cleanup as it is
+// configured: restorable is false when the cleanup purges at once, and hours is the time a deleted branch stays
+// restorable, 0 when the cleanup is switched off and it stays restorable until the repository is deleted.
+func DeletedBranchRestoreWindow() (hours int, restorable bool) {
+	lock.Lock()
+	task := tasksMap["deleted_branches_cleanup"]
+	lock.Unlock()
+	cfg, ok := (*OlderThanConfig)(nil), false
+	if task != nil {
+		cfg, ok = task.config.(*OlderThanConfig)
+	}
+	if !ok {
+		return 24, true // not registered (the cron service is not started): the default of the task
+	}
+	if !cfg.IsEnabled() {
+		return 0, true
+	}
+	return int((cfg.OlderThan + time.Hour - 1) / time.Hour), cfg.OlderThan > 0
+}

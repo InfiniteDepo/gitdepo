@@ -4,11 +4,14 @@
 package repo
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"forgejo.org/models/db"
 	"forgejo.org/models/perm"
 	"forgejo.org/models/unit"
+	"forgejo.org/models/unittest"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/test"
 
@@ -161,4 +164,19 @@ func TestCleanWikiFolder(t *testing.T) {
 	} {
 		assert.Equal(t, want, CleanWikiFolder(in), "%q", in)
 	}
+}
+
+func TestGetRepoUnitForUpdate(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	require.NoError(t, db.WithTx(t.Context(), func(ctx context.Context) error {
+		u, has, err := GetRepoUnitForUpdate(ctx, 1, unit.TypePullRequests)
+		require.NoError(t, err)
+		assert.True(t, has)
+		assert.Equal(t, int64(1), u.RepoID)
+		assert.Equal(t, unit.TypePullRequests, u.Type)
+		_, has, err = GetRepoUnitForUpdate(ctx, 1, unit.Type(999))
+		require.NoError(t, err)
+		assert.False(t, has)
+		return nil
+	}))
 }

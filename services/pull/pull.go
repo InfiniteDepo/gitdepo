@@ -5,6 +5,7 @@ package pull
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -45,6 +46,12 @@ func NewPullRequest(ctx context.Context, repo *repo_model.Repository, issue *iss
 	// Check if the doer is not blocked by the repository's owner.
 	if user_model.IsBlocked(ctx, repo.OwnerID, issue.PosterID) {
 		return user_model.ErrBlockedByUser
+	}
+
+	// A branch can't be compared with itself, however its name was given ("owner:branch" included). The head of an AGit
+	// pull request is not a branch.
+	if pr.Flow != issues_model.PullRequestFlowAGit && pr.HeadRepoID == pr.BaseRepoID && pr.HeadBranch == pr.BaseBranch {
+		return git_model.ErrBranchesEqual{HeadBranchName: pr.HeadBranch, BaseBranchName: pr.BaseBranch}
 	}
 
 	if err := issue_service.CheckPRTitleRule(ctx, repo, pr.BaseBranch, issue.Title, false); err != nil {
@@ -754,21 +761,33 @@ func retargetBranchPulls(ctx context.Context, doer *user_model.User, repoID int6
 	}
 
 	var errs errlist
+	stuck := false
 	for _, pr := range prs {
 		if err = pr.Issue.LoadRepo(ctx); err != nil {
 			errs = append(errs, err)
-		} else if err = changeTargetBranch(ctx, pr, doer, targetBranch, false, mergedParent); err != nil &&
-			!issues_model.IsErrIssueIsClosed(err) && !models.IsErrPullRequestHasMerged(err) &&
-			!issues_model.IsErrPullRequestAlreadyExists(err) {
-			errs = append(errs, err)
+		} else if err = changeTargetBranch(ctx, pr, doer, targetBranch, false, mergedParent); err != nil {
+			switch {
+			case git_model.IsErrBranchesEqual(err):
+				stuck = true // nothing of its own to compare with the new base: it stays where it is
+			case !issues_model.IsErrIssueIsClosed(err) && !models.IsErrPullRequestHasMerged(err) &&
+				!issues_model.IsErrPullRequestAlreadyExists(err):
+				errs = append(errs, err)
+			}
 		}
 	}
 
 	if len(errs) > 0 {
 		return errs
 	}
+	if stuck {
+		return ErrChildPullsNotRetargeted
+	}
 	return nil
 }
+
+// ErrChildPullsNotRetargeted says that an open pull request based on the branch can't be moved to the new base (its
+// head is the same as the base), so the branch must stay.
+var ErrChildPullsNotRetargeted = errors.New("an open pull request based on the branch can't be retargeted")
 
 // CloseBranchPulls close all the pull requests who's head branch is the branch
 func CloseBranchPulls(ctx context.Context, doer *user_model.User, repoID int64, branch string) error {

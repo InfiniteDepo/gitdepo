@@ -9,7 +9,6 @@ import (
 	"forgejo.org/modules/web"
 	"forgejo.org/services/context"
 
-	"code.forgejo.org/go-chi/binding"
 	chi_middleware "github.com/go-chi/chi/v5/middleware"
 )
 
@@ -17,7 +16,9 @@ import (
 func bind[T any](_ T) any {
 	return func(ctx *context.PrivateContext) {
 		theObj := new(T) // create a new form obj for every request but not use obj directly
-		binding.Bind(ctx.Req, theObj)
+		if !web.BindForm(ctx.Resp, ctx.Req, theObj) {
+			return
+		}
 		web.SetForm(ctx, theObj)
 	}
 }

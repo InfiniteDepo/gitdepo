@@ -7,6 +7,7 @@ import (
 	"context"
 	"slices"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	"forgejo.org/models/organization"
 	repo_model "forgejo.org/models/repo"
@@ -76,6 +77,29 @@ func UpdateRepositoryUnits(ctx context.Context, repo *repo_model.Repository, uni
 			"before": map[string]any{"units": b}, "after": map[string]any{"units": a},
 		}); err != nil {
 			return err
+		}
+	}
+
+	// the units forms own neither the branching model nor the audit of the delete-after-merge mode: the model is
+	// carried over from the stored row, and a changed mode is recorded here, so every writer (web, API) is covered
+	for _, u := range units {
+		if u.Type != unit.TypePullRequests {
+			continue
+		}
+		newCfg, ok := u.Config.(*repo_model.PullRequestsConfig)
+		if !ok {
+			continue
+		}
+		if old, has, err := repo_model.GetRepoUnitForUpdate(ctx, repo.ID, unit.TypePullRequests); err != nil {
+			return err
+		} else if has {
+			oldCfg := old.PullRequestsConfig()
+			newCfg.BranchingModel = oldCfg.BranchingModel
+			if changes := audit_model.Changes(map[string]any{"mode": oldCfg.GetDeleteBranchAfterMerge().String()}, map[string]any{"mode": newCfg.GetDeleteBranchAfterMerge().String()}); changes != nil {
+				if err := repo_model.RecordRepo(ctx, "repo.branch_workflow.changed", repo, changes); err != nil {
+					return err
+				}
+			}
 		}
 	}
 

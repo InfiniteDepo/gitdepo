@@ -99,7 +99,7 @@ func TestCodeSearchBranches(t *testing.T) {
 	gitRepo, err := git.OpenRepository(t.Context(), repo.RepoPath())
 	require.NoError(t, err)
 	defer gitRepo.Close()
-	require.NoError(t, repo_service.DeleteBranch(t.Context(), user, repo, gitRepo, "idxdev"))
+	require.NoError(t, repo_service.DeleteBranch(t.Context(), user, repo, gitRepo, "idxdev", ""))
 	code_indexer.UpdateRepoIndexer(repo)
 	assert.Empty(t, codeSearchFiles(t, repo, "", true, code_indexer.SearchModeExact, "OnlyOnDevelop"))
 	rows, err = repo_model.GetIndexerBranches(db.DefaultContext, repo.ID)

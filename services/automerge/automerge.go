@@ -484,7 +484,9 @@ func handlePullRequestAutoMerge(pullID int64, sha string) {
 	}
 	if scheduledPRM.DeleteBranchAfterMerge || alwaysDelete {
 		err := repo_service.DeleteBranchAfterMerge(ctx, doer, pr, headGitRepo)
-		if err != nil {
+		if repo_service.IsBranchKept(err) {
+			log.Info("%d the head branch was kept: %v", pr.ID, err)
+		} else if err != nil {
 			log.Error("%d repo_service.DeleteBranchIfUnused: %v", pr.ID, err)
 		}
 	}

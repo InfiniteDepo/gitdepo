@@ -35,13 +35,16 @@ func ProtocolMiddlewares() (handlers []any) {
 		return http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
 			defer func() {
 				if err := recover(); err != nil {
+					if _, ok := err.(middleware.FormRefused); ok {
+						return // the 400 is written
+					}
 					if err == http.ErrAbortHandler {
 						panic(err) // net/http cuts the connection; an error page would end the started body normally
 					}
 					RenderPanicErrorPage(resp, req, err) // it should never panic
 				}
 			}()
-			req = req.WithContext(middleware.WithContextData(req.Context()))
+			req = req.WithContext(middleware.WithFormState(middleware.WithContextData(req.Context())))
 			next.ServeHTTP(resp, req)
 		})
 	})

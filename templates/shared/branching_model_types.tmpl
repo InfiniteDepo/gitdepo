@@ -1,0 +1,85 @@
+{{/* The branch types table and the default pull request target of the branching model form. Needs ModelTypes, ReleasePrefixes, DefaultPRTarget; ModelLocked disables the fields. */}}
+<div class="field" id="branch-types-field">
+	<label>{{ctx.Locale.Tr "repo.settings.branching_model.types"}}</label>
+	<table class="ui very basic compact table" id="branch-types">
+		<thead>
+			<tr>
+				<th>{{ctx.Locale.Tr "repo.settings.branching_model.type_on"}}</th>
+				<th>{{ctx.Locale.Tr "repo.settings.branching_model.type_name"}}</th>
+				<th>{{ctx.Locale.Tr "repo.settings.branching_model.type_prefix"}}</th>
+				<th>{{ctx.Locale.Tr "repo.settings.branching_model.type_base"}}</th>
+				<th><span class="tw-sr-only">{{ctx.Locale.Tr "repo.settings.branching_model.type_remove"}}</span></th>
+			</tr>
+		</thead>
+		<tbody>
+			<tr class="branch-type-release">
+				<td data-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_on"}}"><input type="checkbox" checked disabled aria-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_on"}}"></td>
+				<td data-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_name"}}">{{ctx.Locale.Tr "repo.settings.branching_model.type_release"}}</td>
+				<td data-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_prefix"}}">
+					<label class="tw-sr-only" for="release_prefixes">{{ctx.Locale.Tr "repo.settings.branching_model.type_prefix"}}</label>
+					<input id="release_prefixes" name="release_prefixes" value="{{.ReleasePrefixes}}" placeholder="release/" maxlength="1100" {{if .ModelLocked}}disabled{{end}}>
+					<p class="help">{{ctx.Locale.Tr "repo.settings.branching_model.release_prefixes_desc"}}</p>
+				</td>
+				<td data-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_base"}}">{{ctx.Locale.Tr "repo.settings.branching_model.base_development"}}</td>
+				<td></td>
+			</tr>
+			{{range $i, $t := .ModelTypes}}
+			<tr class="branch-type-row">
+				<td data-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_on"}}"><input type="checkbox" name="type_on" value="{{$i}}" {{if not $t.Off}}checked{{end}} aria-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_on"}}" {{if $.ModelLocked}}disabled{{end}}></td>
+				<td data-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_name"}}">
+					<input name="type_name" aria-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_name"}}" value="{{$t.Name}}" maxlength="50" {{if $.ModelLocked}}disabled{{end}}>
+				</td>
+				<td data-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_prefix"}}">
+					<input name="type_prefix" aria-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_prefix"}}" value="{{$t.Prefix}}" maxlength="100" {{if $.ModelLocked}}disabled{{end}}>
+				</td>
+				<td data-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_base"}}">
+					<select name="type_base" aria-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_base"}}" {{if $.ModelLocked}}disabled{{end}}>
+						<option value="development" {{if eq $t.Base "development"}}selected{{end}}>{{ctx.Locale.Tr "repo.settings.branching_model.base_development"}}</option>
+						<option value="production" {{if eq $t.Base "production"}}selected{{end}}>{{ctx.Locale.Tr "repo.settings.branching_model.base_production"}}</option>
+						<option value="branch" {{if eq $t.Base "branch"}}selected{{end}}>{{ctx.Locale.Tr "repo.settings.branching_model.base_branch"}}</option>
+					</select>
+					<input name="type_branch" value="{{$t.BaseBranch}}" maxlength="255" placeholder="{{ctx.Locale.Tr "repo.settings.branching_model.type_branch_placeholder"}}" aria-label="{{ctx.Locale.Tr "repo.settings.branching_model.base_branch"}}" {{if $.ModelLocked}}disabled{{end}}>
+				</td>
+				<td>{{if not $.ModelLocked}}<button type="button" class="ui basic mini button remove-branch-type">{{ctx.Locale.Tr "repo.settings.branching_model.type_remove"}}</button>{{end}}</td>
+			</tr>
+			{{end}}
+		</tbody>
+		{{if not .ModelLocked}}
+		<template>
+			<tr class="branch-type-row">
+				<td data-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_on"}}"><input type="checkbox" name="type_on" value="0" aria-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_on"}}"></td>
+				<td data-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_name"}}"><input name="type_name" aria-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_name"}}" maxlength="50"></td>
+				<td data-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_prefix"}}"><input name="type_prefix" aria-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_prefix"}}" maxlength="100"></td>
+				<td data-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_base"}}">
+					<select name="type_base" aria-label="{{ctx.Locale.Tr "repo.settings.branching_model.type_base"}}">
+						<option value="development">{{ctx.Locale.Tr "repo.settings.branching_model.base_development"}}</option>
+						<option value="production">{{ctx.Locale.Tr "repo.settings.branching_model.base_production"}}</option>
+						<option value="branch">{{ctx.Locale.Tr "repo.settings.branching_model.base_branch"}}</option>
+					</select>
+					<input name="type_branch" maxlength="255" placeholder="{{ctx.Locale.Tr "repo.settings.branching_model.type_branch_placeholder"}}" aria-label="{{ctx.Locale.Tr "repo.settings.branching_model.base_branch"}}">
+				</td>
+				<td><button type="button" class="ui basic mini button remove-branch-type">{{ctx.Locale.Tr "repo.settings.branching_model.type_remove"}}</button></td>
+			</tr>
+		</template>
+		{{end}}
+	</table>
+	<p class="help">{{ctx.Locale.Tr "repo.settings.branching_model.types_desc"}}</p>
+	{{range .UntypedCounts}}
+		<p class="help branching-model-untyped">{{ctx.Locale.TrPluralString .Count "repo.settings.branching_model.untyped" .Count .Prefix}}</p>
+	{{end}}
+	{{range .MissingBases}}
+		<div class="ui yellow message branching-model-missing-base">{{ctx.Locale.Tr "repo.settings.branching_model.base_missing" .}}</div>
+	{{end}}
+	{{if not .ModelLocked}}
+	<div class="tw-mt-2">
+		<button type="button" class="ui basic small button" id="add-branch-type">{{svg "octicon-plus"}} {{ctx.Locale.Tr "repo.settings.branching_model.add_type"}}</button>
+		<button type="button" class="ui basic small button" id="git-flow-branch-types">{{ctx.Locale.Tr "repo.settings.branching_model.git_flow"}}</button>
+		<p class="help">{{ctx.Locale.Tr "repo.settings.branching_model.git_flow_desc"}}</p>
+	</div>
+	{{end}}
+</div>
+<div class="field">
+	<label for="default_pr_target">{{ctx.Locale.Tr "repo.settings.branching_model.default_pr_target"}}</label>
+	<input id="default_pr_target" name="default_pr_target" value="{{.DefaultPRTarget}}" maxlength="255" {{if .ModelLocked}}disabled{{end}}>
+	<p class="help">{{ctx.Locale.Tr "repo.settings.branching_model.default_pr_target_desc"}}</p>
+</div>

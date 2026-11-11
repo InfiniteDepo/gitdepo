@@ -181,15 +181,21 @@ func (b *Base) SetParams(k, v string) {
 
 // FormString returns the first value matching the provided key in the form as a string
 func (b *Base) FormString(key string) string {
+	return b.formValue(key)
+}
+
+// formValue is Req.FormValue; a form that can't be parsed answers 400 and stops the handler.
+func (b *Base) formValue(key string) string {
+	if err := middleware.ParseForm(b.Req); err != nil {
+		middleware.RefuseForm(b.Resp, err)
+	}
 	return b.Req.FormValue(key)
 }
 
 // FormStrings returns a string slice for the provided key from the form
 func (b *Base) FormStrings(key string) []string {
-	if b.Req.Form == nil {
-		if err := b.Req.ParseMultipartForm(32 << 20); err != nil {
-			return nil
-		}
+	if err := middleware.ParseForm(b.Req); err != nil {
+		middleware.RefuseForm(b.Resp, err)
 	}
 	if v, ok := b.Req.Form[key]; ok {
 		return v
@@ -199,24 +205,24 @@ func (b *Base) FormStrings(key string) []string {
 
 // FormTrim returns the first value for the provided key in the form as a space trimmed string
 func (b *Base) FormTrim(key string) string {
-	return strings.TrimSpace(b.Req.FormValue(key))
+	return strings.TrimSpace(b.formValue(key))
 }
 
 // FormInt returns the first value for the provided key in the form as an int
 func (b *Base) FormInt(key string) int {
-	v, _ := strconv.Atoi(b.Req.FormValue(key))
+	v, _ := strconv.Atoi(b.formValue(key))
 	return v
 }
 
 // FormInt64 returns the first value for the provided key in the form as an int64
 func (b *Base) FormInt64(key string) int64 {
-	v, _ := strconv.ParseInt(b.Req.FormValue(key), 10, 64)
+	v, _ := strconv.ParseInt(b.formValue(key), 10, 64)
 	return v
 }
 
 // FormBool returns true if the value for the provided key in the form is "1", "true" or "on"
 func (b *Base) FormBool(key string) bool {
-	s := b.Req.FormValue(key)
+	s := b.formValue(key)
 	v, _ := strconv.ParseBool(s)
 	v = v || strings.EqualFold(s, "on")
 	return v
@@ -225,18 +231,18 @@ func (b *Base) FormBool(key string) bool {
 // FormOptionalBool returns an optional.Some(true) or optional.Some(false) if the value
 // for the provided key exists in the form else it returns optional.None[bool]()
 func (b *Base) FormOptionalBool(key string) optional.Option[bool] {
-	value := b.Req.FormValue(key)
+	value := b.formValue(key)
 	if len(value) == 0 {
 		return optional.None[bool]()
 	}
-	s := b.Req.FormValue(key)
+	s := b.formValue(key)
 	v, _ := strconv.ParseBool(s)
 	v = v || strings.EqualFold(s, "on")
 	return optional.Some(v)
 }
 
 func (b *Base) SetFormString(key, value string) {
-	_ = b.Req.FormValue(key) // force parse form
+	_ = b.formValue(key) // force parse form
 	b.Req.Form.Set(key, value)
 }
 

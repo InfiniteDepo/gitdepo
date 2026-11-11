@@ -20,10 +20,25 @@ func Bind[T any](_ T) http.HandlerFunc {
 	return func(resp http.ResponseWriter, req *http.Request) {
 		theObj := new(T) // create a new form obj for every request but not use obj directly
 		data := middleware.GetContextData(req.Context())
-		binding.Bind(req, theObj)
+		if !BindForm(resp, req, theObj) {
+			return
+		}
 		SetForm(data, theObj)
 		middleware.AssignForm(theObj, data)
 	}
+}
+
+// BindForm binds the request to obj and answers 400 when it can't be parsed (malformed, or more fields than Go
+// parses), so no handler acts on a form read in part; validation errors are left to the handler.
+func BindForm(resp http.ResponseWriter, req *http.Request, obj any) bool {
+	err := middleware.ParseForm(req)
+	if err == nil {
+		if errs := binding.Bind(req, obj); !errs.Has(binding.ERR_DESERIALIZATION) {
+			return true
+		}
+	}
+	http.Error(resp, "The request could not be parsed.", middleware.FormErrorStatus(err))
+	return false
 }
 
 // SetForm set the form object

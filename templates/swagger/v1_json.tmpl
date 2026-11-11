@@ -13955,6 +13955,9 @@
           "404": {
             "$ref": "#/responses/notFound"
           },
+          "409": {
+            "$ref": "#/responses/error"
+          },
           "423": {
             "$ref": "#/responses/repoArchivedError"
           }
@@ -21782,6 +21785,7 @@
         }
       },
       "post": {
+        "description": "When the head branch is kept although deleting it was asked or enforced, the response header X-Branch-Kept holds the reason (default, development, production, release, protected, base, open_pr, merge_queue, new_commits, permission or failed); a kept branch never fails a merge that enforced the deletion, and answers 403 when the request asked for it.",
         "produces": [
           "application/json"
         ],
@@ -33739,10 +33743,47 @@
       },
       "x-go-package": "forgejo.org/modules/structs"
     },
+    "BranchType": {
+      "description": "BranchType is a kind of branch told by the start of its name",
+      "type": "object",
+      "properties": {
+        "base": {
+          "description": "Base is the branch the type's pull requests target: development, production or branch (the one named in base_branch)",
+          "type": "string",
+          "x-go-name": "Base"
+        },
+        "base_branch": {
+          "description": "BaseBranch is the branch for base branch; it may not exist yet, then the development branch is used",
+          "type": "string",
+          "x-go-name": "BaseBranch"
+        },
+        "name": {
+          "description": "Name is shown in the interface, 1 to 50 characters",
+          "type": "string",
+          "x-go-name": "Name"
+        },
+        "off": {
+          "description": "Off turns the type off: its branches have no type",
+          "type": "boolean",
+          "x-go-name": "Off"
+        },
+        "prefix": {
+          "description": "Prefix starts the names of the branches of this type; at most 100 characters, no comma, different for every type",
+          "type": "string",
+          "x-go-name": "Prefix"
+        }
+      },
+      "x-go-package": "forgejo.org/modules/structs"
+    },
     "BranchingModel": {
       "description": "BranchingModel names the development branch and the release branch prefixes",
       "type": "object",
       "properties": {
+        "default_pr_target": {
+          "description": "DefaultPRTarget is the branch new pull requests target when their branch has no type and the request names no base; empty is the default branch",
+          "type": "string",
+          "x-go-name": "DefaultPRTarget"
+        },
         "development_branch": {
           "description": "DevelopmentBranch is where every chain of release branches ends; empty is the repository's default branch",
           "type": "string",
@@ -33775,6 +33816,14 @@
             "type": "string"
           },
           "x-go-name": "ReleasePrefixes"
+        },
+        "types": {
+          "description": "Types are the branch types besides Release, whose prefixes are the release prefixes; at most 20",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/BranchType"
+          },
+          "x-go-name": "Types"
         }
       },
       "x-go-package": "forgejo.org/modules/structs"
@@ -35710,6 +35759,7 @@
           "x-go-name": "Assignees"
         },
         "base": {
+          "description": "Base is the branch to merge into; an explicit base always wins. Empty: the base of the head branch's type in the branching model, else its default pull request target, else the default branch",
           "type": "string",
           "x-go-name": "Base"
         },
@@ -37865,6 +37915,11 @@
       "description": "EditRepoBranchingModelOption options to change the branching model of a repository",
       "type": "object",
       "properties": {
+        "default_pr_target": {
+          "description": "DefaultPRTarget is the branch new pull requests target when their branch has no type and the request names no base; empty is the default branch",
+          "type": "string",
+          "x-go-name": "DefaultPRTarget"
+        },
         "development_branch": {
           "type": "string",
           "x-go-name": "DevelopmentBranch"
@@ -37898,6 +37953,14 @@
             "type": "string"
           },
           "x-go-name": "ReleasePrefixes"
+        },
+        "types": {
+          "description": "Types are the branch types besides Release, whose prefixes are the release prefixes; at most 20",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/BranchType"
+          },
+          "x-go-name": "Types"
         }
       },
       "x-go-package": "forgejo.org/modules/structs"
@@ -40879,6 +40942,11 @@
       "description": "OrgBranchingModel represents the branching model of an organization, and the body to change it",
       "type": "object",
       "properties": {
+        "default_pr_target": {
+          "description": "DefaultPRTarget is the branch new pull requests target when their branch has no type and the request names no base; empty is the default branch",
+          "type": "string",
+          "x-go-name": "DefaultPRTarget"
+        },
         "development_branch": {
           "description": "DevelopmentBranch is where every chain of release branches ends; empty is each repository's default branch",
           "type": "string",
@@ -40916,6 +40984,14 @@
             "type": "string"
           },
           "x-go-name": "ReleasePrefixes"
+        },
+        "types": {
+          "description": "Types are the branch types besides Release, whose prefixes are the release prefixes; at most 20",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/BranchType"
+          },
+          "x-go-name": "Types"
         }
       },
       "x-go-package": "forgejo.org/modules/structs"

@@ -80,6 +80,7 @@
 @import "./repo/secret-alerts.css";
 @import "./repo/header.css";
 @import "./repo/environments.css";
+@import "./repo/branch-types.css";
 
 @import "./editor/fileeditor.css";
 @import "./editor/combomarkdowneditor.css";
