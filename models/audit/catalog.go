@@ -246,6 +246,7 @@ var Actions = map[string]string{
 	"repo.branch.renamed":                  CategoryRepo,
 	"repo.branch.type_exempt":              CategoryRepo,
 	"repo.branches.bulk_deleted":           CategoryRepo,
+	"repo.branches.cleanup_deleted":        CategoryRepo,
 	"repo.collaborator.added":              CategoryRepo,
 	"repo.collaborator.mode_changed":       CategoryRepo,
 	"repo.collaborator.removed":            CategoryRepo,

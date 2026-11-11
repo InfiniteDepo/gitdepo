@@ -1384,6 +1384,8 @@ func registerRoutes(m *web.Route) {
 				m.Post("/branch_workflow/branching_model", web.Bind(forms.BranchingModelForm{}), org_setting.BranchingModelPost)
 				m.Combo("/branch_workflow/delete_merged").Get(common.RateLimitHeavy, org_setting.BranchWorkflowDeleteMerged).
 					Post(org_setting.BranchWorkflowDeleteMergedPost)
+				m.Combo("/branch_workflow/cleanup").Get(common.RateLimitHeavy, org_setting.BranchCleanup).
+					Post(web.Bind(forms.BranchCleanupForm{}), org_setting.BranchCleanupPost)
 
 				m.Group("/branches", func() {
 					m.Get("", org_setting.ProtectedBranchRules)
@@ -1583,6 +1585,8 @@ func registerRoutes(m *web.Route) {
 			m.Post("/branch_workflow/branching_model", web.Bind(forms.BranchingModelForm{}), context.RepoMustNotBeArchived(), repo_setting.BranchingModelPost)
 			m.Combo("/branch_workflow/delete_merged").Get(common.RateLimitHeavy, repo_setting.BranchWorkflowDeleteMerged).
 				Post(context.RepoMustNotBeArchived(), repo_setting.BranchWorkflowDeleteMergedPost)
+			m.Combo("/branch_workflow/cleanup").Get(common.RateLimitHeavy, repo_setting.BranchCleanupPreview).
+				Post(web.Bind(forms.BranchCleanupForm{}), common.RateLimitHeavyPlain, context.RepoMustNotBeArchived(), repo_setting.BranchCleanupPost)
 
 			m.Combo("/push_rules").Get(repo_setting.PushRules).
 				Post(web.Bind(forms.PushRuleForm{}), context.RepoMustNotBeArchived(), repo_setting.PushRulesPost)

@@ -23,6 +23,37 @@
 				{{end}}
 			</form>
 		</div>
+		<h4 class="ui top attached header" id="cleanup">
+			{{ctx.Locale.Tr "repo.settings.cleanup"}}
+		</h4>
+		<div class="ui attached segment">
+			{{template "shared/branch_cleanup_notices" .}}
+			<form class="ui form" action="{{.CleanupLink}}" method="post">
+				<p>{{ctx.Locale.Tr "repo.settings.cleanup.desc"}}</p>
+				<p class="help">{{ctx.Locale.Tr "repo.settings.cleanup.never"}}{{if .RestoreText}} {{.RestoreText}}{{end}}</p>
+				{{if .CleanupLocked}}
+				<p class="help">{{.CleanupSetBy}}{{if .CleanupSettingsLink}} · <a href="{{.CleanupSettingsLink}}">{{ctx.Locale.Tr "repo.settings.branching_model.change_in_org"}}</a>{{end}}</p>
+				{{else if .OwnerIsOrg}}
+				<div class="field">
+					<div class="ui checkbox">
+						<input id="cleanup_inherit" name="cleanup_inherit" type="checkbox" {{if .CleanupInherit}}checked{{end}}>
+						<label for="cleanup_inherit">{{ctx.Locale.Tr "repo.settings.cleanup.inherit"}}</label>
+						<p class="help">{{ctx.Locale.Tr "repo.settings.cleanup.inherit_desc"}}</p>
+					</div>
+				</div>
+				{{end}}
+				<div class="field">
+					<label for="cleanup_days">{{ctx.Locale.Tr "repo.settings.cleanup.days"}}</label>
+					<input id="cleanup_days" name="cleanup_days" type="number" min="0" max="3650" value="{{.CleanupDays}}" {{if .CleanupLocked}}disabled{{end}}>
+					<p class="help">{{ctx.Locale.Tr "repo.settings.cleanup.days_help"}}</p>
+				</div>
+				{{template "shared/branch_cleanup_status" .}}
+				<div class="field">
+					{{if not .CleanupLocked}}<button class="ui primary button">{{ctx.Locale.Tr "save"}}</button>{{end}}
+					<a class="ui button" href="{{.CleanupLink}}">{{ctx.Locale.Tr "repo.settings.cleanup.preview"}}</a>
+				</div>
+			</form>
+		</div>
 		<h4 class="ui top attached header" id="branching-model">
 			{{ctx.Locale.Tr "repo.settings.branching_model"}}
 		</h4>

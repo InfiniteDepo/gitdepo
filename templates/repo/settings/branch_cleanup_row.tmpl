@@ -1,0 +1,7 @@
+{{with .Row}}{{$d := $.ctxData}}
+<tr>
+	<td class="tw-break-anywhere" data-label="{{ctx.Locale.Tr "repo.settings.cleanup.col_branch"}}">{{.Name}}</td>
+	<td class="tw-break-anywhere" data-label="{{ctx.Locale.Tr "repo.settings.cleanup.col_into"}}">{{.Into}}</td>
+	<td data-label="{{ctx.Locale.Tr "repo.settings.cleanup.col_merged"}}"><span title="{{.At.Format "2006-01-02 15:04:05 MST"}}">{{DateUtils.AbsoluteShort .At}}</span> · {{ctx.Locale.Tr "repo.settings.cleanup.merged_ago" .Age}} ({{if .FromPR}}{{ctx.Locale.Tr "repo.settings.cleanup.from_pr"}}{{else}}{{ctx.Locale.Tr "repo.settings.cleanup.from_row"}}{{end}}){{if .PR}} <a href="{{$d.RepoLink}}/pulls/{{.PR}}">#{{.PR}}</a>{{end}}</td>
+</tr>
+{{end}}

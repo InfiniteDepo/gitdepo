@@ -163,6 +163,7 @@ var Fields = map[string][]string{
 		"counts", "purge", "domain", "verified_by_admin", "required", "units", "mode", "locked", "development_branch",
 		"release_prefixes", "production_branch", "merge_forward", "merge_forward_never_bypass", "merge_forward_anyone_may_skip", "types", "default_pr_target", "require_branch_type", "branch_exceptions", "exempt_user_ids", "exempt_team_ids", "model_locked", "model_sha256",
 		"dependency_graph", "dependency_graph_locked", "secret_scanning", "secret_scanning_locked",
+		"cleanup_days", "cleanup_locked",
 	},
 	"team": {
 		"name", "access_mode", "units", "includes_all_repositories", "can_create_org_repo", "user_id", "inviter_id", "reason",
@@ -174,6 +175,7 @@ var Fields = map[string][]string{
 		"interval", "enable_prune", "branch_filter", "tag_filter", "lfs", "lfs_endpoint", "address", "url_changed",
 		"credentials_changed", "development_branch", "release_prefixes", "production_branch", "merge_forward", "merge_forward_never_bypass", "merge_forward_anyone_may_skip", "types", "default_pr_target", "require_branch_type", "branch_exceptions", "exempt_user_ids", "exempt_team_ids", "inherit", "mode", "model_sha256",
 		"dependency_graph", "secret_scanning", "refused",
+		"cleanup_days", "cleanup_inherit",
 	},
 	"collaborator":       {"user_id", "mode"},
 	"branch":             {"name", "from", "to", "commit", "default", "pull", "reason", "conflict_pull", "pull_failed", "via"},

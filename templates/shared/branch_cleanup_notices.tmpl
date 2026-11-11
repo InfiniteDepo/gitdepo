@@ -1,0 +1,3 @@
+{{/* outside any form: Fomantic hides a warning message inside form.ui.form */}}
+{{if .CleanupPaused}}<div class="ui warning message">{{ctx.Locale.Tr "repo.settings.cleanup.paused"}}</div>{{end}}
+{{if .CleanupTaskOff}}<div class="ui warning message">{{ctx.Locale.Tr "repo.settings.cleanup.task_off"}}</div>{{end}}

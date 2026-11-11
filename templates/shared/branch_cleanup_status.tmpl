@@ -1,0 +1,14 @@
+{{if .CleanupPending}}
+	{{if .CleanupInForce}}
+		<p class="cleanup-status">{{ctx.Locale.Tr "repo.settings.cleanup.pending_lower" .CleanupPendingDays (.CleanupStart.Format "2006-01-02 15:04 MST") .CleanupInForce}}</p>
+	{{else}}
+		<p class="cleanup-status">{{ctx.Locale.Tr "repo.settings.cleanup.pending_on" .CleanupPendingDays (.CleanupStart.Format "2006-01-02 15:04 MST")}}</p>
+	{{end}}
+{{else if .CleanupInForce}}
+	<p class="cleanup-status">{{ctx.Locale.Tr "repo.settings.cleanup.status_on" .CleanupInForce}}</p>
+{{else}}
+	<p class="cleanup-status">{{ctx.Locale.Tr "repo.settings.cleanup.status_off"}}</p>
+{{end}}
+{{if .CleanupOrgFirst}}
+	<p class="help">{{ctx.Locale.Tr "org.settings.cleanup.waiting" (.CleanupOrgFirst.Format "2006-01-02 15:04 MST")}}</p>
+{{end}}

@@ -1,0 +1,22 @@
+/* the tables of the cleanup preview: on a narrow screen Fomantic stacks the rows, so every value gets its label and
+   the header row is hidden visually (it stays for screen readers) */
+@media (max-width: 767.98px) {
+  .ui.table.cleanup-table > thead {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .cleanup-table > tbody > tr {
+    border-bottom: 1px solid var(--color-secondary);
+  }
+
+  .cleanup-table > tbody > tr > td::before {
+    content: attr(data-label);
+    display: block;
+    font-weight: var(--font-weight-semibold);
+  }
+}

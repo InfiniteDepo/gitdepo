@@ -145,6 +145,16 @@ func registerCleanupAuditLog() {
 	})
 }
 
+func registerCleanupMergedBranches() {
+	RegisterTaskFatal(repo_service.CleanupTaskName, &BaseConfig{
+		Enabled:    true,
+		RunAtStart: false,
+		Schedule:   "@daily",
+	}, func(ctx context.Context, _ *user_model.User, _ Config) error {
+		return repo_service.CleanupMergedBranches(ctx)
+	})
+}
+
 func registerDependencyGraphScan() {
 	RegisterTaskFatal("dependency_graph_scan", &BaseConfig{
 		Enabled:    true,
@@ -306,6 +316,7 @@ func initBasicTasks() {
 	}
 	registerCleanupHookTaskTable()
 	registerCleanupAuditLog()
+	registerCleanupMergedBranches()
 	registerDependencyGraphScan()
 	registerSecretScanningScan()
 	registerVulnerabilityMirrorUpdate()

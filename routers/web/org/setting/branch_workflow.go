@@ -46,6 +46,9 @@ func renderBranchWorkflow(ctx *context.Context, preview bool) {
 	}
 	ctx.Data["DeleteAfterMerge"] = mode.String()
 	ctx.Data["Enforce"] = locked
+	if !prepareCleanup(ctx) {
+		return
+	}
 	model, modelLocked, err := branchworkflow.GetOrgModel(ctx, ctx.Org.Organization.AsUser())
 	if err != nil {
 		ctx.ServerError("GetOrgModel", err)
