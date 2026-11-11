@@ -187,7 +187,7 @@ func EditBranchingModel(ctx *context.APIContext) {
 
 	form := web.GetForm(ctx).(*api.OrgBranchingModel)
 	model := &repo_model.BranchingModel{DevelopmentBranch: form.DevelopmentBranch, ReleasePrefixes: form.ReleasePrefixes, ProductionBranch: form.ProductionBranch, Types: branchworkflow.TypesFromAPI(form.Types), DefaultPRTarget: form.DefaultPRTarget, MergeForward: form.MergeForward, MergeForwardNeverBypass: form.MergeForwardNeverBypass, MergeForwardAnyoneMaySkip: form.MergeForwardAnyoneMaySkip}
-	err := branchworkflow.ApplyNaming(ctx, ctx.Org().Organization.AsUser(), model, form.BranchNaming)
+	err := branchworkflow.ApplyNaming(ctx, ctx.Doer(), ctx.Org().Organization.AsUser(), model, form.BranchNaming)
 	if err == nil {
 		err = branchworkflow.SetOrgModel(ctx, ctx.Org().Organization.AsUser(), model, form.Enforce)
 	}

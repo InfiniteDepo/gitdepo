@@ -4,7 +4,9 @@
 package git
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -121,4 +123,12 @@ func TestValidateMergeQueue(t *testing.T) {
 	require.ErrorAs(t, (&ProtectedBranch{MergeQueueMaxGroupSize: 5, MergeQueueBuildConcurrency: 2}).ValidateMergeQueue(), &cfgErr)
 	assert.Equal(t, "max_group_size", cfgErr.Field)
 	assert.Equal(t, 2, (&ProtectedBranch{MergeQueueBuildConcurrency: 2}).MergeQueueConfig().MaxGroupSize)
+}
+
+// a rule name is a glob a repository admin writes and every push matches: it takes linear time (red team #645)
+func TestBranchRuleMatchIsLinear(t *testing.T) {
+	rule := &ProtectedBranch{RuleName: strings.Repeat("{a,aa}*", 20) + "b"}
+	start := time.Now()
+	rule.Match(strings.Repeat("ab", 50) + "c")
+	assert.Less(t, time.Since(start), 100*time.Millisecond)
 }

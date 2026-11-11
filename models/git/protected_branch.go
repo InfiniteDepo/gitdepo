@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -18,6 +19,7 @@ import (
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
+	linearglob "forgejo.org/modules/glob"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/timeutil"
 	"forgejo.org/modules/util"
@@ -37,7 +39,7 @@ type ProtectedBranch struct {
 	GroupID                       int64                  `xorm:"UNIQUE(s) NOT NULL DEFAULT 0"`       // set for project rules only
 	Repo                          *repo_model.Repository `xorm:"-"`
 	RuleName                      string                 `xorm:"'branch_name' UNIQUE(s)"` // a branch name or a glob match to branch name
-	globRule                      glob.Glob              `xorm:"-"`
+	globRule                      *regexp.Regexp         `xorm:"-"`
 	isPlainName                   bool                   `xorm:"-"`
 	CanPush                       bool                   `xorm:"NOT NULL DEFAULT false"`
 	EnableWhitelist               bool
@@ -130,10 +132,10 @@ func (protectBranch *ProtectedBranch) loadGlob() {
 	}
 	// now we load the glob
 	var err error
-	protectBranch.globRule, err = glob.Compile(protectBranch.RuleName, '/')
+	protectBranch.globRule, err = linearglob.Compile(protectBranch.RuleName, '/')
 	if err != nil {
 		log.Warn("Invalid glob rule for ProtectedBranch[%d]: %s %v", protectBranch.ID, protectBranch.RuleName, err)
-		protectBranch.globRule = glob.MustCompile(glob.QuoteMeta(protectBranch.RuleName), '/')
+		protectBranch.globRule = regexp.MustCompile(`\A` + regexp.QuoteMeta(protectBranch.RuleName) + `\z`)
 	}
 }
 
@@ -144,7 +146,7 @@ func (protectBranch *ProtectedBranch) Match(branchName string) bool {
 		return strings.EqualFold(protectBranch.RuleName, branchName)
 	}
 
-	return protectBranch.globRule.Match(branchName)
+	return protectBranch.globRule.MatchString(branchName)
 }
 
 func (protectBranch *ProtectedBranch) LoadRepo(ctx context.Context) (err error) {

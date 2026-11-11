@@ -113,6 +113,17 @@ func EditBranchWorkflow(ctx *context.APIContext) {
 	}
 }
 
+// namingFor returns the naming fields of m; the exempt users and teams only to a repository admin, who can edit them
+// (an empty list to everyone else).
+func namingFor(ctx *context.APIContext, m *repo_model.BranchingModel) (api.BranchNaming, error) {
+	if !ctx.Repo().IsAdmin() {
+		c := *m
+		c.ExemptUserIDs, c.ExemptTeamIDs = nil, nil
+		m = &c
+	}
+	return branchworkflow.NamingToAPI(ctx, m)
+}
+
 func renderBranchingModel(ctx *context.APIContext) {
 	repo := ctx.Repo().Repository
 	eff, err := branchworkflow.GetEffectiveModel(ctx, repo)
@@ -125,7 +136,7 @@ func renderBranchingModel(ctx *context.APIContext) {
 		ctx.ServerError("GetChain", err)
 		return
 	}
-	naming, err := branchworkflow.NamingToAPI(ctx, &eff.Model)
+	naming, err := namingFor(ctx, &eff.Model)
 	if err != nil {
 		ctx.ServerError("NamingToAPI", err)
 		return
@@ -149,7 +160,7 @@ func renderBranchingModel(ctx *context.APIContext) {
 		IgnoredBranches: append([]string{}, chain.Ignored...),
 	}
 	if eff.Configured != nil {
-		ownNaming, err := branchworkflow.NamingToAPI(ctx, eff.Configured)
+		ownNaming, err := namingFor(ctx, eff.Configured)
 		if err != nil {
 			ctx.ServerError("NamingToAPI", err)
 			return
@@ -231,7 +242,7 @@ func EditBranchingModel(ctx *context.APIContext) {
 	}
 	var err error
 	if model != nil {
-		err = branchworkflow.ApplyNaming(ctx, ctx.Repo().Owner, model, form.BranchNaming)
+		err = branchworkflow.ApplyNaming(ctx, ctx.Doer(), ctx.Repo().Owner, model, form.BranchNaming)
 	}
 	if err == nil {
 		err = branchworkflow.SetRepoModel(ctx, ctx.Repo().Repository, model)

@@ -3,7 +3,7 @@
 	<article>
 		<header>{{ctx.Locale.Tr "repo.branch.new_branch"}}</header>
 		<form class="ui form" id="create-branch-form" action="" method="post" data-base-action="{{.RepoLink}}/branches/_new/branch/"
-			data-text-switched="{{ctx.Locale.Tr "repo.branch.dialog.switched"}}" data-text-changed="{{ctx.Locale.Tr "repo.branch.dialog.base_changed"}}" data-text-missing="{{ctx.Locale.Tr "repo.branch.dialog.base_missing"}}">
+			data-text-from="{{ctx.Locale.Tr "repo.branch.dialog.created_from"}}" data-text-switched="{{ctx.Locale.Tr "repo.branch.dialog.switched"}}" data-text-changed="{{ctx.Locale.Tr "repo.branch.dialog.base_changed"}}" data-text-missing="{{ctx.Locale.Tr "repo.branch.dialog.base_missing"}}">
 			<div class="content">
 				{{if .BranchDialog.Types}}
 				<fieldset class="field branch-type-picker">

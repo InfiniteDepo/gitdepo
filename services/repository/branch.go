@@ -405,12 +405,10 @@ func RenameBranch(ctx context.Context, repo *repo_model.Repository, doer *user_m
 	}
 
 	// a rename makes a new name, which the model's required branch type applies to (the default branch is exempt, as above)
+	exempt := false
 	if from != repo.DefaultBranch {
-		exempt, err := branchworkflow.CheckNewBranch(ctx, repo, doer.ID, false, to)
-		if err == nil && exempt {
-			err = branchworkflow.RecordNamingExempt(ctx, repo, to, "rename")
-		}
-		if err != nil {
+		var err error
+		if exempt, err = branchworkflow.CheckNewBranch(ctx, repo, doer.ID, false, to); err != nil {
 			return "", err
 		}
 	}
@@ -418,6 +416,12 @@ func RenameBranch(ctx context.Context, repo *repo_model.Repository, doer *user_m
 	renamedDefault := false
 	if err := git_model.RenameBranch(ctx, repo, from, to, func(ctx context.Context, isDefault bool) error {
 		renamedDefault = isDefault
+		// recorded in the rename's transaction: a rename that fails leaves no entry
+		if exempt {
+			if err := branchworkflow.RecordNamingExempt(ctx, repo, to, "rename"); err != nil {
+				return err
+			}
+		}
 		err2 := gitRepo.RenameBranch(from, to)
 		if err2 != nil {
 			return err2

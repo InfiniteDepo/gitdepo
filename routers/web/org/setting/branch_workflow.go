@@ -64,10 +64,11 @@ func renderBranchWorkflow(ctx *context.Context, preview bool) {
 	if model == nil {
 		model = &repo_model.BranchingModel{}
 	}
-	if !repo_setting.SetNamingData(ctx, model) {
+	if !repo_setting.SetNamingData(ctx, model, ctx.Org.Organization.AsUser(), nil) {
 		return
 	}
 	ctx.Data["EnforceModel"] = modelLocked
+	ctx.Data["ExemptNeedsEnforce"] = true
 	if !repo_setting.PrepareMergedBranches(ctx, repo_service.MergedBranchScope{Org: ctx.Org.Organization.AsUser()}, ctx.Org.OrgLink+"/settings/branch_workflow", preview) {
 		return
 	}
@@ -99,7 +100,7 @@ func BranchWorkflowPost(ctx *context.Context) {
 func BranchingModelPost(ctx *context.Context) {
 	form := web.GetForm(ctx).(*forms.BranchingModelForm)
 	model := form.Model()
-	err := branchworkflow.ApplyNaming(ctx, ctx.Org.Organization.AsUser(), model, form.Naming())
+	err := branchworkflow.ApplyNaming(ctx, ctx.Doer, ctx.Org.Organization.AsUser(), model, form.Naming())
 	if err == nil {
 		err = branchworkflow.SetOrgModel(ctx, ctx.Org.Organization.AsUser(), model, form.EnforceModel)
 	}

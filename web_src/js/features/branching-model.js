@@ -30,6 +30,10 @@ function addRow(table, {name, prefix, base}) {
 }
 
 export function initBranchingModel() {
+  // an organization's exemptions apply only while the model is enforced
+  const enforce = document.querySelector('#enforce_model');
+  const exempt = document.querySelector('#branch-exempt-box');
+  if (enforce && exempt) enforce.addEventListener('change', () => toggleElem(exempt, enforce.checked));
   const table = document.querySelector('#branch-types');
   if (!table) return;
   for (const row of table.querySelectorAll('tr.branch-type-row')) showBranchInput(row);

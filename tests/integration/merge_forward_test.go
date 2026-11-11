@@ -199,6 +199,26 @@ func TestMergeForward(t *testing.T) {
 			assert.Equal(t, "develop", cont[0].MergeForwardInfo().Steps[0].Branch)
 		})
 
+		t.Run("a required branch type allows the pull request branch of a stopped step", func(t *testing.T) {
+			defer setModel(t, true)
+			require.NoError(t, createOrReplaceFileInBranch(user2, repo, "rq.txt", "release/2.0", "two"))
+			pr := pull(t, "release/1.9", "fix-rq", "rq.txt", "fix")
+			setModel(t, true, func(o *api.EditRepoBranchingModelOption) { o.BranchNaming = api.BranchNaming{RequireBranchType: true} })
+			merge(t, pr)
+			branch := fmt.Sprintf("automerge/pr-%d/release/2.0", pr.Index)
+			opened := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{BaseRepoID: repo.ID, HeadBranch: branch, BaseBranch: "release/2.0"})
+			// resolve it and merge it, so the branches converge for the next subtests
+			require.NoError(t, createOrReplaceFileInBranch(user2, repo, "rq.txt", branch, "two"))
+			setModel(t, true)
+			issue := unittest.AssertExistsAndLoadBean(t, &issues_model.Issue{ID: opened.IssueID})
+			merge(t, api.PullRequest{Index: issue.Index})
+			setModel(t, true, func(o *api.EditRepoBranchingModelOption) { o.BranchNaming = api.BranchNaming{RequireBranchType: true} })
+			// names that only look like the step's branch are refused, the merger gets no exemption
+			for _, look := range []string{"automerge/pr-1/feature/x", "automerge/pr-x/release/2.0", "automerge/pr-1/release/2.0-extra"} {
+				testAPICreateBranch(t, owner, "org3", name, "master", look, http.StatusUnprocessableEntity)
+			}
+		})
+
 		t.Run("a step is an extension of the approved pull request", func(t *testing.T) {
 			// develop takes no pushes and needs an approval and a status check: the merger may merge into it
 			bwProtect(t, ctx, name, "develop", parameterProtectBranch{"required_approvals": "1", "enable_status_check": "true", "status_check_contexts": "ci"})

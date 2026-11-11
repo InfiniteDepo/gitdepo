@@ -11,10 +11,16 @@ import (
 	"testing"
 	"time"
 
+	actions_model "forgejo.org/models/actions"
 	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
+	perm_model "forgejo.org/models/perm"
+	repo_model "forgejo.org/models/repo"
+	"forgejo.org/models/unit"
+	"forgejo.org/models/unittest"
+	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/git"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/private"
@@ -129,6 +135,22 @@ func TestBranchNamingSettings(t *testing.T) {
 			req := NewRequestWithJSON(t, "PUT", "/api/v1/repos/org3/"+repo+"/branching-model", bnOptions(api.BranchNaming{})).AddTokenAuth(token)
 			MakeRequest(t, req, http.StatusForbidden)
 			assert.True(t, get().Effective.BranchNaming.RequireBranchType)
+		})
+
+		t.Run("exempt lists are shown to repository admins only", func(t *testing.T) {
+			read := func(user string) api.BranchNaming {
+				token := getUserToken(t, user, auth_model.AccessTokenScopeReadRepository)
+				var got api.RepoBranchingModel
+				DecodeJSON(t, MakeRequest(t, NewRequest(t, "GET", "/api/v1/repos/org3/"+repo+"/branching-model").AddTokenAuth(token), http.StatusOK), &got)
+				require.NotNil(t, got.Own)
+				assert.Equal(t, got.Effective.BranchNaming, got.Own.BranchNaming)
+				return got.Effective.BranchNaming
+			}
+			assert.Equal(t, []string{"user4"}, get().Effective.BranchNaming.ExemptUsers)
+			writer := read("user5")
+			assert.True(t, writer.RequireBranchType)
+			assert.Empty(t, writer.ExemptUsers)
+			assert.Empty(t, writer.ExemptTeams)
 		})
 
 		t.Run("the web form", func(t *testing.T) {
@@ -305,6 +327,18 @@ func TestBranchNamingEnforcement(t *testing.T) {
 			assert.Equal(t, "rename", auditData(t, entries[0])["via"])
 		})
 
+		t.Run("an exempt admin renames in the settings", func(t *testing.T) {
+			ctx.Session.MakeRequest(t, NewRequestWithJSON(t, "PUT", "/api/v1/repos/org3/"+repo+"/collaborators/user4", &api.AddCollaboratorOption{Permission: new("admin")}).AddTokenAuth(ctx.Token), http.StatusNoContent)
+			since := auditMaxID(t)
+			s := loginUser(t, "user4")
+			s.MakeRequest(t, NewRequestWithValues(t, "POST", "/org3/"+repo+"/settings/rename_branch", map[string]string{"from": "spike/team", "to": "spike/web-exempt"}), http.StatusSeeOther)
+			assert.True(t, bnExists(t, repoID, "spike/web-exempt"))
+			assert.False(t, bnExists(t, repoID, "spike/team"))
+			entries := auditActions(t, since, "repo.branch.type_exempt")
+			require.Len(t, entries, 1)
+			assert.Equal(t, "rename", auditData(t, entries[0])["via"])
+		})
+
 		t.Run("hook: no implicit exemption", func(t *testing.T) {
 			zero := git.Sha1ObjectFormat.EmptyObjectID().String()
 			repoModel := unittestRepo(t, repoID)
@@ -319,6 +353,26 @@ func TestBranchNamingEnforcement(t *testing.T) {
 			require.ErrorContains(t, hook("spike/hook-stranger", private.HookOptions{UserID: 5, UserName: "user5"}), "status=403")
 			assert.Equal(t, "branch_type", auditData(t, auditActivity(t, since, "activity.git.push.refused"))["reason"])
 			require.NoError(t, hook("feature/hook", private.HookOptions{UserID: 5, UserName: "user5"}))
+
+			// the Actions user (with a job of this repository) and a token identity with write access are no one's exemption
+			task := unittest.AssertExistsAndLoadBean(t, &actions_model.ActionTask{ID: 47})
+			_, err := db.GetEngine(t.Context()).Exec("UPDATE action_task SET repo_id = ? WHERE id = ?", repoID, task.ID)
+			require.NoError(t, err)
+			token := &auth_model.AccessToken{
+				Name: "bn-token", OwnerType: auth_model.AccessTokenOwnerRepo, OwnerID: repoID, Mode: perm_model.AccessModeWrite,
+				Scope: "write:repository", ResourceAllRepos: true, CreatorID: 4, // the creator is exempt; the token is not
+			}
+			require.NoError(t, auth_model.NewAccessToken(audit_model.WithSystem(db.DefaultContext, "test"), token, nil))
+			for name, opts := range map[string]private.HookOptions{
+				"actions": {UserID: user_model.ActionsUserID, ActionTaskID: task.ID},
+				"token":   {UserID: user_model.AccessTokenBotID(token.ID)},
+			} {
+				audit_model.ResetActivity()
+				since = auditMaxID(t)
+				require.ErrorContains(t, hook("spike/hook-"+name, opts), "status=403", name)
+				assert.Equal(t, "branch_type", auditData(t, auditActivity(t, since, "activity.git.push.refused"))["reason"], name)
+				require.NoError(t, hook("feature/hook-"+name, opts), name)
+			}
 			// an existing branch is never judged by its name
 			existing := repoModel.head(t)
 			extra := private.HookPreReceive(t.Context(), repoID, private.HookOptions{
@@ -351,4 +405,51 @@ func (r repoHead) head(t *testing.T) string {
 	b, err := git_model.GetBranch(t.Context(), r.id, "master")
 	require.NoError(t, err)
 	return b.CommitID
+}
+
+// A transfer takes the exempt teams out of the repository's own model: they belong to the old organization.
+func TestBranchNamingTransferDropsExemptTeams(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, _ *url.URL) {
+		defer tests.PrintCurrentTest(t)()
+		repo := bwRepo(t, "bn-transfer")
+		ctx := NewAPITestContext(t, "user2", repo, auth_model.AccessTokenScopeWriteOrganization, auth_model.AccessTokenScopeWriteRepository)
+		btModel(t, ctx, repo, bnOptions(api.BranchNaming{RequireBranchType: true, ExemptUsers: []string{"user4"}, ExemptTeams: []string{"test_team"}}), http.StatusOK)
+		stored := func() *repo_model.BranchingModel {
+			r := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{OwnerName: "org3", Name: repo})
+			return r.MustGetUnit(t.Context(), unit.TypePullRequests).PullRequestsConfig().BranchingModel
+		}
+		require.Len(t, stored().ExemptTeamIDs, 1)
+		id := repoIDByName(t, "org3", repo)
+
+		ctx.Session.MakeRequest(t, NewRequestWithJSON(t, "POST", "/api/v1/orgs", &api.CreateOrgOption{UserName: "bn-new-owner"}).AddTokenAuth(ctx.Token), http.StatusCreated)
+		ctx.Session.MakeRequest(t, NewRequestWithJSON(t, "POST", "/api/v1/repos/org3/"+repo+"/transfer", &api.TransferRepoOption{NewOwner: "bn-new-owner"}).AddTokenAuth(ctx.Token), http.StatusAccepted)
+		moved := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: id})
+		require.Equal(t, "bn-new-owner", moved.OwnerName)
+		m := moved.MustGetUnit(t.Context(), unit.TypePullRequests).PullRequestsConfig().BranchingModel
+		require.NotNil(t, m)
+		assert.Empty(t, m.ExemptTeamIDs)
+		assert.True(t, m.RequireBranchType)
+	})
+}
+
+// Red team #645: an exception glob that is exponential for a backtracking matcher must not make a branch check slow.
+func TestRT645ExceptionGlobDoS(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, _ *url.URL) {
+		defer tests.PrintCurrentTest(t)()
+		ctx := NewAPITestContext(t, "user2", "rt645-dos", auth_model.AccessTokenScopeWriteRepository, auth_model.AccessTokenScopeWriteUser)
+		ctx.Session.MakeRequest(t, NewRequestWithJSON(t, "POST", "/api/v1/user/repos", &api.CreateRepoOption{
+			Name: "rt645-dos", AutoInit: true, Readme: "Default", DefaultBranch: "main",
+		}).AddTokenAuth(ctx.Token), http.StatusCreated)
+
+		pattern := strings.Repeat("{a,aa}*", 20) + "b"
+		ctx.Session.MakeRequest(t, NewRequestWithJSON(t, "PUT", "/api/v1/repos/user2/rt645-dos/branching-model", &api.EditRepoBranchingModelOption{
+			ReleasePrefixes: []string{"release/"}, BranchNaming: api.BranchNaming{RequireBranchType: true, Exceptions: []string{pattern}},
+		}).AddTokenAuth(ctx.Token), http.StatusOK)
+
+		start := time.Now()
+		ctx.Session.MakeRequest(t, NewRequestWithJSON(t, "POST", "/api/v1/repos/user2/rt645-dos/branches", &api.CreateBranchRepoOption{
+			BranchName: strings.Repeat("ab", 50), OldBranchName: "main",
+		}).AddTokenAuth(ctx.Token), http.StatusCreated)
+		assert.Less(t, time.Since(start), time.Second, "a stored exception makes each branch-name check exponential")
+	})
 }

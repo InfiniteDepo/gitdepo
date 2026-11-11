@@ -88,8 +88,7 @@
 				<a class="ui small label {{if and (not .BranchTypeFilter) (not .BranchUntypedFilter)}}primary{{else}}basic{{end}}" href="?q={{.Keyword}}">{{ctx.Locale.Tr "repo.branch.filter_all"}}</a>
 				{{range .BranchTypeNames}}<a class="ui small label {{if eq $.BranchTypeFilter .}}primary{{else}}basic{{end}}" href="?q={{$.Keyword}}&type={{.}}">{{.}}</a>{{end}}
 				<a class="ui small label {{if .BranchUntypedFilter}}primary{{else}}basic{{end}}" href="?q={{.Keyword}}&untyped=1">{{ctx.Locale.Tr "repo.branch.no_type"}}</a>
-				<span class="tw-ml-auto">{{ctx.Locale.Tr "repo.branch.group_by"}}</span>
-				<button type="button" class="ui small basic button" id="branch-group-toggle" data-text-type="{{ctx.Locale.Tr "repo.branch.group_by_type"}}" data-text-none="{{ctx.Locale.Tr "repo.branch.group_by_none"}}" aria-pressed="true"></button>
+				<button type="button" class="ui small basic button tw-ml-auto" id="branch-group-toggle" data-text-type="{{ctx.Locale.Tr "repo.branch.group_by_type"}}" data-text-none="{{ctx.Locale.Tr "repo.branch.group_by_none"}}"></button>
 			</div>
 			{{end}}
 		</div>

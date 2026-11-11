@@ -12,7 +12,10 @@ import (
 	"strings"
 
 	"forgejo.org/models/organization"
+	"forgejo.org/models/perm"
+	access_model "forgejo.org/models/perm/access"
 	repo_model "forgejo.org/models/repo"
+	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/base"
 	"forgejo.org/modules/web"
 	"forgejo.org/routers/web/repo"
@@ -158,7 +161,7 @@ func prepareBranchWorkflow(ctx *context.Context) bool {
 	ctx.Data["ProductionBranch"] = shownModel.ProductionBranch
 	ctx.Data["ModelTypes"] = shownModel.Types
 	ctx.Data["DefaultPRTarget"] = shownModel.DefaultPRTarget
-	if !SetNamingData(ctx, &shownModel) {
+	if !SetNamingData(ctx, &shownModel, ctx.Repo.Owner, ctx.Repo.Repository) {
 		return false
 	}
 	if model.Locked && ctx.Doer != nil {
@@ -207,8 +210,10 @@ func prepareBranchWorkflow(ctx *context.Context) bool {
 	return true
 }
 
-// SetNamingData sets the "new branch names" fields of the settings pages from the model shown.
-func SetNamingData(ctx *context.Context, m *repo_model.BranchingModel) bool {
+// SetNamingData sets the "new branch names" fields of the settings pages from the model shown. The pickers of the
+// exempt users and teams offer the people who can write to repo (the members and teams of owner when repo is nil)
+// and whoever is selected already.
+func SetNamingData(ctx *context.Context, m *repo_model.BranchingModel, owner *user_model.User, repo *repo_model.Repository) bool {
 	naming, err := branchworkflow.NamingToAPI(ctx, m)
 	if err != nil {
 		ctx.ServerError("NamingToAPI", err)
@@ -216,9 +221,48 @@ func SetNamingData(ctx *context.Context, m *repo_model.BranchingModel) bool {
 	}
 	ctx.Data["RequireBranchType"] = naming.RequireBranchType
 	ctx.Data["BranchExceptions"] = strings.Join(naming.Exceptions, "\n")
-	ctx.Data["ExemptUsers"] = strings.Join(naming.ExemptUsers, ", ")
-	ctx.Data["ExemptTeams"] = strings.Join(naming.ExemptTeams, ", ")
+	ctx.Data["ExemptUsers"] = strings.Join(naming.ExemptUsers, ",")
+	ctx.Data["ExemptTeams"] = strings.Join(naming.ExemptTeams, ",")
+	users, teams := naming.ExemptUsers, naming.ExemptTeams
+	if repo != nil {
+		var writers []*user_model.User
+		if writers, err = access_model.GetRepoWriters(ctx, repo); err == nil {
+			for _, u := range writers {
+				users = append(users, u.Name)
+			}
+		}
+	} else if owner.IsOrganization() {
+		var members user_model.UserList
+		if members, _, err = organization.OrgFromUser(owner).GetMembers(ctx, ctx.Doer); err == nil {
+			for _, u := range members {
+				users = append(users, u.Name)
+			}
+		}
+	}
+	if err == nil && owner.IsOrganization() {
+		var list []*organization.Team
+		if repo != nil {
+			list, err = organization.OrgFromUser(owner).TeamsWithAccessToRepo(ctx, repo.ID, perm.AccessModeWrite)
+		} else {
+			list, err = organization.OrgFromUser(owner).LoadTeams(ctx)
+		}
+		for _, t := range list {
+			teams = append(teams, t.Name)
+		}
+	}
+	if err != nil {
+		ctx.ServerError("ExemptOptions", err)
+		return false
+	}
+	ctx.Data["ExemptTeamsAvailable"] = owner.IsOrganization()
+	ctx.Data["ExemptUserOptions"] = sortedUnique(users)
+	ctx.Data["ExemptTeamOptions"] = sortedUnique(teams)
 	return true
+}
+
+func sortedUnique(names []string) []string {
+	slices.Sort(names)
+	return slices.Compact(names)
 }
 
 // maxIgnoredShown caps the ignored branches the chain preview lists.
@@ -234,7 +278,7 @@ func BranchingModelPost(ctx *context.Context) {
 	before, beforeErr := branchworkflow.GetEffectiveModel(ctx, ctx.Repo.Repository)
 	var err error
 	if model != nil {
-		err = branchworkflow.ApplyNaming(ctx, ctx.Repo.Owner, model, form.Naming())
+		err = branchworkflow.ApplyNaming(ctx, ctx.Doer, ctx.Repo.Owner, model, form.Naming())
 	}
 	if err == nil {
 		err = branchworkflow.SetRepoModel(ctx, ctx.Repo.Repository, model)

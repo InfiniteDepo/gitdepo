@@ -110,9 +110,10 @@ func TestApplyNaming(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	org := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3})
 	user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})
+	member := user2 // a member of org 3
 	apply := func(owner *user_model.User, n api.BranchNaming) (*repo_model.BranchingModel, error) {
 		m := &repo_model.BranchingModel{}
-		return m, ApplyNaming(t.Context(), owner, m, n)
+		return m, ApplyNaming(t.Context(), member, owner, m, n)
 	}
 
 	m, err := apply(org, api.BranchNaming{RequireBranchType: true, Exceptions: []string{"x/*"}, ExemptUsers: []string{"user2", " ", "USER4"}, ExemptTeams: []string{"Test_Team"}})
@@ -136,6 +137,29 @@ func TestApplyNaming(t *testing.T) {
 		require.True(t, ok, "%v", err)
 		assert.Equal(t, c.reason, e.Reason)
 	}
+
+	// what a doer can't see is answered like what doesn't exist: a private user, and a team of an organization the
+	// doer isn't a member of
+	outsider := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 10})
+	user4 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 4})
+	user4.Visibility = api.VisibleTypePrivate
+	require.NoError(t, user_model.UpdateUserCols(t.Context(), user4, "visibility"))
+	for _, c := range []struct {
+		doer   *user_model.User
+		naming api.BranchNaming
+		reason string
+	}{
+		{outsider, api.BranchNaming{ExemptUsers: []string{"user4"}}, ReasonExemptUser},
+		{outsider, api.BranchNaming{ExemptUsers: []string{"nobody"}}, ReasonExemptUser},
+		{outsider, api.BranchNaming{ExemptTeams: []string{"Test_Team"}}, ReasonExemptTeam},
+		{outsider, api.BranchNaming{ExemptTeams: []string{"nope"}}, ReasonExemptTeam},
+	} {
+		err := ApplyNaming(t.Context(), c.doer, org, &repo_model.BranchingModel{}, c.naming)
+		e, ok := IsInvalidBranchingModel(err)
+		require.True(t, ok, "%v %v", c.naming, err)
+		assert.Equal(t, c.reason, e.Reason)
+	}
+	require.NoError(t, ApplyNaming(t.Context(), member, org, &repo_model.BranchingModel{}, api.BranchNaming{ExemptUsers: []string{"user4"}, ExemptTeams: []string{"Test_Team"}}))
 
 	// and back to names
 	got, err := NamingToAPI(t.Context(), m)
@@ -251,7 +275,7 @@ func TestDialogChoices(t *testing.T) {
 	ctx := t.Context()
 	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 3})
 	user4 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 4})
-	c, err := DialogChoices(ctx, repo, user4)
+	c, err := DialogChoices(ctx, repo, mustEffective(t, repo), user4)
 	require.NoError(t, err)
 	assert.Empty(t, c.Types)
 	assert.False(t, c.Required)
@@ -267,11 +291,11 @@ func TestDialogChoices(t *testing.T) {
 		RequireBranchType: true, ExemptUserIDs: []int64{4},
 	}))
 	repo = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 3})
-	c, err = DialogChoices(ctx, repo, user4)
+	c, err = DialogChoices(ctx, repo, mustEffective(t, repo), user4)
 	require.NoError(t, err)
 	assert.True(t, c.Exempt)
 	assert.False(t, c.Required, "an exempt user may choose Other")
-	c, err = DialogChoices(ctx, repo, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5}))
+	c, err = DialogChoices(ctx, repo, mustEffective(t, repo), unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5}))
 	require.NoError(t, err)
 	assert.True(t, c.Required)
 	assert.Equal(t, "master", c.Development)
@@ -293,7 +317,7 @@ func TestSuggestIssueBranch(t *testing.T) {
 	choices := func(m *repo_model.BranchingModel) CreateChoices {
 		require.NoError(t, SetRepoModel(ctx, repo, m))
 		repo = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 3})
-		c, err := DialogChoices(ctx, repo, doer)
+		c, err := DialogChoices(ctx, repo, mustEffective(t, repo), doer)
 		require.NoError(t, err)
 		return c
 	}
@@ -363,4 +387,11 @@ func TestTypeFilter(t *testing.T) {
 	assert.Empty(t, names("Nope", false))
 	assert.Nil(t, TypeFilter(m, "", false))
 	assert.Equal(t, []string{"100%/x", "feature", "feature/", "feature_x", "other"}, names("", true))
+}
+
+func mustEffective(t *testing.T, repo *repo_model.Repository) EffectiveModel {
+	t.Helper()
+	e, err := GetEffectiveModel(t.Context(), repo)
+	require.NoError(t, err)
+	return e
 }

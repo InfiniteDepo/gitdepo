@@ -314,8 +314,19 @@ func preReceiveBranch(ctx *preReceiveContext, oldCommitID, newCommitID string, r
 		return
 	}
 
-	if oldCommitID == objectFormat.EmptyObjectID().String() && !ctx.checkBranchType(refFullName) {
-		return
+	if oldCommitID == objectFormat.EmptyObjectID().String() {
+		exempt, ok := ctx.checkBranchType(refFullName)
+		if !ok {
+			return
+		}
+		if exempt {
+			// only once every other check of this ref has passed
+			defer func() {
+				if !ctx.Written() {
+					ctx.recordBranchTypeExempt(refFullName)
+				}
+			}()
+		}
 	}
 
 	if newCommitID != objectFormat.EmptyObjectID().String() && !ctx.recordPusher(branchName) {

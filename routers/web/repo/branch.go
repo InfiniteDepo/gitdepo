@@ -88,7 +88,7 @@ func Branches(ctx *context.Context) {
 	ctx.Data["Keyword"] = kw
 	ctx.Data["Branches"] = branches
 	prepareBranchGroups(ctx, model.Model, branches, typeFilter, untyped)
-	if ctx.Repo.CanCreateBranch() && !PrepareBranchDialog(ctx) {
+	if ctx.Repo.CanCreateBranch() && !PrepareBranchDialog(ctx, model) {
 		return
 	}
 	ctx.Data["CommitStatus"] = commitStatus
@@ -156,8 +156,8 @@ func prepareBranchGroups(ctx *context.Context, m repo_model.BranchingModel, bran
 
 // PrepareBranchDialog sets what the create branch dialog needs for the viewer: the types of the model with the
 // branch each starts from, whether a type is required of this user, and the names of the branches to start from.
-func PrepareBranchDialog(ctx *context.Context) bool {
-	choices, err := branchworkflow.DialogChoices(ctx, ctx.Repo.Repository, ctx.Doer)
+func PrepareBranchDialog(ctx *context.Context, model branchworkflow.EffectiveModel) bool {
+	choices, err := branchworkflow.DialogChoices(ctx, ctx.Repo.Repository, model, ctx.Doer)
 	if err != nil {
 		ctx.ServerError("DialogChoices", err)
 		return false
@@ -171,8 +171,19 @@ func PrepareBranchDialog(ctx *context.Context) bool {
 	}
 	ctx.Data["BranchDialog"] = choices
 	ctx.Data["BranchDialogBranches"] = names
-	if choices.Required && choices.SetBy != "" {
-		ctx.Data["BranchDialogSetBy"] = ctx.Locale.TrString("repo.branch.type_required_set_by", choices.SetBy)
+	if choices.Required {
+		setBy := ctx.Locale.TrString("repo.branch.dialog.set_by_repo")
+		if choices.SetBy != "" {
+			setBy = ctx.Locale.TrString("repo.branch.type_required_set_by", choices.SetBy)
+		}
+		if exc := choices.Model.BranchExceptions; len(exc) > 0 {
+			listed := strings.Join(exc[:min(len(exc), 5)], ", ")
+			if more := len(exc) - 5; more > 0 {
+				listed = ctx.Locale.TrString("repo.branch.type_required_more", listed, more)
+			}
+			setBy += " " + ctx.Locale.TrString("repo.branch.dialog.exceptions", listed)
+		}
+		ctx.Data["BranchDialogSetBy"] = setBy
 	}
 	return true
 }

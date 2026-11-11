@@ -25,7 +25,7 @@ function initCreateBranchDialog(modal: HTMLElement) {
     fullInput.value = prefix + normalizeBranchName(nameInput.value);
     preview.textContent = fullInput.value;
     form.action = form.getAttribute('data-base-action') + encodeURIComponent(base.value);
-    const lines = [notice];
+    const lines = [form.getAttribute('data-text-from').replace('%s', base.value), notice];
     const missing = choices.find((c) => c.checked)?.dataset.missing;
     if (missing) lines.push(form.getAttribute('data-text-missing').replace('%s', missing));
     if (typeBase && base.value !== typeBase) lines.push(form.getAttribute('data-text-changed').replace('%s', typeBase));
@@ -91,8 +91,7 @@ export function initRepoBranchGroups() {
     } else {
       tbody.append(...rows.sort(byOrder));
     }
-    toggle.textContent = toggle.getAttribute(grouped ? 'data-text-type' : 'data-text-none');
-    toggle.setAttribute('aria-pressed', String(grouped));
+    toggle.textContent = toggle.getAttribute(grouped ? 'data-text-none' : 'data-text-type'); // the button names what a click does
   };
   let grouped = true;
   try {

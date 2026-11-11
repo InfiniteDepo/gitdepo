@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
@@ -98,7 +97,7 @@ func SuggestIssueBranch(ctx context.Context, repo *repo_model.Repository, doer *
 		if !git.IsValidRefPattern(prefix+name) || git.IsReservedRefName(prefix+name) {
 			continue
 		}
-		if _, err := CheckNewBranch(ctx, repo, doer.ID, false, prefix+name); err == nil {
+		if _, err := CheckNewBranchWith(ctx, repo, c.Effective, doer.ID, false, prefix+name); err == nil {
 			s.Name = name
 			return s, true, nil
 		} else if _, refused := errors.AsType[ErrBranchTypeRequired](err); !refused {
@@ -124,7 +123,7 @@ func LinkedBranches(ctx context.Context, repo *repo_model.Repository, m repo_mod
 	n := strconv.FormatInt(index, 10)
 	cond := builder.NewCond()
 	for _, p := range prefixes {
-		cond = cond.Or(builder.Eq{"name": p + n}, builder.Expr("SUBSTR(name, 1, ?) = ?", utf8.RuneCountInString(p+n)+1, p+n+"-"))
+		cond = cond.Or(builder.Expr(binary("name")+" = "+binary("?"), p+n), namePrefix(p+n+"-"))
 	}
 	return git_model.FindBranchNames(ctx, git_model.FindBranchOptions{
 		RepoID: repo.ID, IsDeletedBranch: optional.Some(false), Cond: cond,

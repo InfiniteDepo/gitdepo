@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode"
@@ -16,11 +17,13 @@ import (
 	"forgejo.org/models/db"
 	"forgejo.org/models/organization"
 	repo_model "forgejo.org/models/repo"
+	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/glob"
+	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/translation"
 
-	"github.com/gobwas/glob"
 	"xorm.io/builder"
 )
 
@@ -43,8 +46,38 @@ const (
 	ReasonExemptNeedsTeam = "exempt_needs_team" // exempt teams of a repository that has no organization as owner
 )
 
-// compileException compiles one exception pattern the way branch protection rules do (a "/" is a separator).
-func compileException(p string) (glob.Glob, error) {
+// MergeForwardBranchName is the branch of a stopped merge forward step (see mergeforward.BranchName). The server
+// creates it for whoever merged, so a required branch type allows the names merge forward makes under the model.
+func MergeForwardBranchName(index int64, target string) string {
+	return fmt.Sprintf("automerge/pr-%d/%s", index, target)
+}
+
+var mergeForwardBranch = regexp.MustCompile(`^automerge/pr-[0-9]+/(.+)$`)
+
+// isMergeForwardBranch tells if name is what merge forward names the branch of a stopped step under m: the target is
+// a branch of its chain, i.e. the development or production branch or a release prefix followed by a version. It can't
+// know that the pull request or the branch exists.
+func isMergeForwardBranch(repo *repo_model.Repository, e EffectiveModel, name string) bool {
+	match := mergeForwardBranch.FindStringSubmatch(name)
+	if match == nil || !e.Model.MergeForward {
+		return false
+	}
+	target := match[1]
+	if target == e.DevelopmentBranch(repo) || (e.Model.ProductionBranch != "" && target == e.Model.ProductionBranch) {
+		return true
+	}
+	return slices.ContainsFunc(e.Model.ReleasePrefixes, func(p string) bool {
+		if !strings.HasPrefix(target, p) {
+			return false
+		}
+		_, ok := parseVersion(target[len(p):])
+		return ok
+	})
+}
+
+// compileException compiles one exception pattern the way branch protection rules do (a "/" is a separator), with
+// the linear-time matcher, so no pattern can make a branch name check expensive.
+func compileException(p string) (*regexp.Regexp, error) {
 	if p == "" || len(p) > maxExceptionLen || !utf8.ValidString(p) || strings.ContainsFunc(p, unicode.IsControl) {
 		return nil, ErrInvalidBranchingModel{Value: p, Reason: ReasonException}
 	}
@@ -89,9 +122,11 @@ func normalizeNaming(m, out *repo_model.BranchingModel) error {
 	return nil
 }
 
-// ApplyNaming sets the naming fields of m from their request form. Exempt users are looked up by name; exempt teams
-// by name in owner, which must then be an organization. NormalizeBranchingModel checks the rest.
-func ApplyNaming(ctx context.Context, owner *user_model.User, m *repo_model.BranchingModel, n api.BranchNaming) error {
+// ApplyNaming sets the naming fields of m from their request form. Exempt users are looked up by name and must be
+// visible to doer (a user doer can't see is answered like a missing one); exempt teams by name in owner, which must
+// then be an organization, and only if doer is a member of it or a site admin (else the answer is the one for a
+// missing team). NormalizeBranchingModel checks the rest.
+func ApplyNaming(ctx context.Context, doer, owner *user_model.User, m *repo_model.BranchingModel, n api.BranchNaming) error {
 	if len(n.ExemptUsers) > maxExemptUsers || len(n.ExemptTeams) > maxExemptTeams || len(n.Exceptions) > 4*maxExceptions {
 		return ErrInvalidBranchingModel{Reason: ReasonTooManyNaming}
 	}
@@ -104,7 +139,7 @@ func ApplyNaming(ctx context.Context, owner *user_model.User, m *repo_model.Bran
 		if err != nil && !user_model.IsErrUserNotExist(err) {
 			return err
 		}
-		if err != nil || !u.IsIndividual() {
+		if err != nil || !u.IsIndividual() || !user_model.IsUserVisibleToViewer(ctx, u, doer) {
 			return ErrInvalidBranchingModel{Value: name, Reason: ReasonExemptUser}
 		}
 		m.ExemptUserIDs = append(m.ExemptUserIDs, u.ID)
@@ -119,6 +154,17 @@ func ApplyNaming(ctx context.Context, owner *user_model.User, m *repo_model.Bran
 		t, err := organization.GetTeam(ctx, owner.ID, name)
 		if err != nil && !organization.IsErrTeamNotExist(err) {
 			return err
+		}
+		if err == nil && !(doer != nil && doer.IsAdmin) {
+			var member bool
+			if doer != nil {
+				if member, err = organization.IsOrganizationMember(ctx, owner.ID, doer.ID); err != nil {
+					return err
+				}
+			}
+			if !member {
+				err = organization.ErrTeamNotExist{}
+			}
 		}
 		if err != nil {
 			return ErrInvalidBranchingModel{Value: name, Reason: ReasonExemptTeam}
@@ -205,6 +251,9 @@ func (e ErrBranchTypeRequired) Text(l translation.Locale) string {
 // prefix followed by more, one of the model's branches, or an exception.
 func namingAllows(repo *repo_model.Repository, e EffectiveModel, name string) bool {
 	m := e.Model
+	if isMergeForwardBranch(repo, e, name) {
+		return true
+	}
 	if name == repo.DefaultBranch || name == e.DevelopmentBranch(repo) || name == m.ProductionBranch || name == m.DefaultPRTarget {
 		return true
 	}
@@ -219,7 +268,7 @@ func namingAllows(repo *repo_model.Repository, e EffectiveModel, name string) bo
 	}
 	return slices.ContainsFunc(m.BranchExceptions, func(p string) bool {
 		g, err := compileException(p)
-		return err == nil && g.Match(name)
+		return err == nil && g.MatchString(name)
 	})
 }
 
@@ -246,8 +295,16 @@ func IsExemptFromNaming(ctx context.Context, repo *repo_model.Repository, m repo
 // An unreadable model is an error: it never counts as "no model".
 func CheckNewBranch(ctx context.Context, repo *repo_model.Repository, userID int64, viaDeployKey bool, name string) (exempt bool, err error) {
 	e, err := GetEffectiveModel(ctx, repo)
-	if err != nil || !e.Model.RequireBranchType || namingAllows(repo, e, name) {
+	if err != nil {
 		return false, err
+	}
+	return CheckNewBranchWith(ctx, repo, e, userID, viaDeployKey, name)
+}
+
+// CheckNewBranchWith is CheckNewBranch with the effective model already read, for callers that check several names.
+func CheckNewBranchWith(ctx context.Context, repo *repo_model.Repository, e EffectiveModel, userID int64, viaDeployKey bool, name string) (exempt bool, err error) {
+	if !e.Model.RequireBranchType || namingAllows(repo, e, name) {
+		return false, nil
 	}
 	if !viaDeployKey {
 		if exempt, err = IsExemptFromNaming(ctx, repo, e.Model, userID); err != nil || exempt {
@@ -290,16 +347,15 @@ type CreateChoices struct {
 	Exempt      bool                      `json:"exempt"` // the user is exempt from a required type
 	SetBy       string                    `json:"-"`
 	Model       repo_model.BranchingModel `json:"-"`
+	Effective   EffectiveModel            `json:"-"`
 }
 
-// DialogChoices builds the choices for doer in repo. A base that doesn't exist falls back to the development branch.
-func DialogChoices(ctx context.Context, repo *repo_model.Repository, doer *user_model.User) (CreateChoices, error) {
-	e, err := GetEffectiveModel(ctx, repo)
-	if err != nil {
-		return CreateChoices{}, err
-	}
+// DialogChoices builds the choices for doer in repo from its effective model e. A base that doesn't exist falls back
+// to the development branch.
+func DialogChoices(ctx context.Context, repo *repo_model.Repository, e EffectiveModel, doer *user_model.User) (CreateChoices, error) {
+	var err error
 	m := e.Model
-	c := CreateChoices{Types: []TypeChoice{}, Development: e.DevelopmentBranch(repo), SetBy: e.SetBy, Model: m}
+	c := CreateChoices{Types: []TypeChoice{}, Development: e.DevelopmentBranch(repo), SetBy: e.SetBy, Model: m, Effective: e}
 	missing, err := MissingBases(ctx, repo, m)
 	if err != nil {
 		return c, err
@@ -335,6 +391,20 @@ func DialogChoices(ctx context.Context, repo *repo_model.Repository, doer *user_
 	return c, nil
 }
 
+// binary wraps an SQL operand so that the comparison is case-sensitive on MySQL, like MatchType (the other databases
+// compare strings case-sensitively already).
+func binary(operand string) string {
+	if setting.Database.Type.IsMySQL() {
+		return "BINARY " + operand
+	}
+	return operand
+}
+
+// namePrefix is the condition that the branch name starts with p, case-sensitively.
+func namePrefix(p string) builder.Cond {
+	return builder.Expr(binary("SUBSTR(name, 1, ?)")+" = "+binary("?"), utf8.RuneCountInString(p), p)
+}
+
 // TypeFilter returns the condition on the name of the branch table for the branches of one type, or for those with
 // no type (untyped), by the rules of MatchType: the longest enabled prefix wins and a name is typed only when
 // something follows the prefix. typeName is "Release" or the name of a type, compared case-insensitively; a type
@@ -352,7 +422,7 @@ func TypeFilter(m repo_model.BranchingModel, typeName string, untyped bool) buil
 	}
 	// hasPrefix is the branches MatchType gives to the prefix p, ignoring longer prefixes
 	hasPrefix := func(p string) builder.Cond {
-		return builder.And(builder.Expr("SUBSTR(name, 1, ?) = ?", utf8.RuneCountInString(p), p), builder.Neq{"name": p})
+		return builder.And(namePrefix(p), builder.Expr(binary("name")+" <> "+binary("?"), p))
 	}
 	switch {
 	case untyped:
@@ -383,4 +453,19 @@ func TypeFilter(m repo_model.BranchingModel, typeName string, untyped bool) buil
 		return builder.Expr("1 = 0")
 	}
 	return cond
+}
+
+// DropExemptTeams removes the exempt teams from the repository's own branching model, for a transfer to another owner:
+// the teams belong to the old organization, and a same-named team of the new one must not inherit the exemption.
+func DropExemptTeams(ctx context.Context, repo *repo_model.Repository) error {
+	stored, has, err := repo_model.GetRepoUnitForUpdate(ctx, repo.ID, unit.TypePullRequests)
+	if err != nil || !has {
+		return err
+	}
+	m := stored.PullRequestsConfig().BranchingModel
+	if m == nil || len(m.ExemptTeamIDs) == 0 {
+		return nil
+	}
+	m.ExemptTeamIDs = nil
+	return repo_model.UpdateRepoUnit(ctx, stored)
 }
