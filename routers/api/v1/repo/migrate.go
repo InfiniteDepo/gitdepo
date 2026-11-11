@@ -27,6 +27,7 @@ import (
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
+	"forgejo.org/modules/web/middleware"
 	"forgejo.org/routers/api/v1/utils"
 	"forgejo.org/services/context"
 	"forgejo.org/services/convert"
@@ -229,6 +230,9 @@ func Migrate(ctx *context.APIContext) {
 
 	defer func() {
 		if e := recover(); e != nil {
+			if _, ok := e.(middleware.FormRefused); ok {
+				panic(e) // the 400 is written; the request recovery ends the request
+			}
 			log.Error("PANIC recovered: %v\nStacktrace: %s", e, log.Stack(2))
 			err = fmt.Errorf("PANIC recover with error %v", e)
 			ctx.Error(http.StatusInternalServerError, "Recovered PANIC with error", err)

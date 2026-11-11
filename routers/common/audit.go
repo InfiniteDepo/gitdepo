@@ -182,22 +182,29 @@ func CredentialUsedAPI(ctx *context.APIContext) {
 // that far, else the actor.
 func APIActivity(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		// deferred: a handler that panics (a refused form, FormRefused) must still be recorded
+		defer func() {
+			rec := recover()
+			ctx := context.GetAPIContext(req)
+			ev := audit_model.Event{}
+			target := ""
+			if r := ctx.Repo(); r != nil && r.Repository != nil && r.HasAccess() {
+				ev.OwnerID, ev.GroupID, ev.RepoID, ev.TargetID, ev.TargetName = r.Repository.OwnerID, r.Repository.GroupID, r.Repository.ID, r.Repository.ID, r.Repository.FullName()
+				target = "repo"
+			} else if o := ctx.Org(); o != nil && o.Organization != nil {
+				ev.OwnerID, ev.TargetID, ev.TargetName = o.Organization.ID, o.Organization.ID, o.Organization.Name
+				target = "org"
+			}
+			private := false
+			if r := ctx.Repo(); r != nil && r.Repository != nil && r.HasAccess() {
+				private = r.Repository.IsPrivate || (r.Owner != nil && r.Owner.Visibility == api.VisibleTypePrivate)
+			}
+			recordRequest(req, panicStatus(ctx.Resp.WrittenStatus(), rec), ev, target, private && ctx.Data["AuditRecorded"] == nil)
+			if rec != nil {
+				panic(rec)
+			}
+		}()
 		next.ServeHTTP(w, req)
-		ctx := context.GetAPIContext(req)
-		ev := audit_model.Event{}
-		target := ""
-		if r := ctx.Repo(); r != nil && r.Repository != nil && r.HasAccess() {
-			ev.OwnerID, ev.GroupID, ev.RepoID, ev.TargetID, ev.TargetName = r.Repository.OwnerID, r.Repository.GroupID, r.Repository.ID, r.Repository.ID, r.Repository.FullName()
-			target = "repo"
-		} else if o := ctx.Org(); o != nil && o.Organization != nil {
-			ev.OwnerID, ev.TargetID, ev.TargetName = o.Organization.ID, o.Organization.ID, o.Organization.Name
-			target = "org"
-		}
-		private := false
-		if r := ctx.Repo(); r != nil && r.Repository != nil && r.HasAccess() {
-			private = r.Repository.IsPrivate || (r.Owner != nil && r.Owner.Visibility == api.VisibleTypePrivate)
-		}
-		recordRequest(req, ctx.Resp.WrittenStatus(), ev, target, private && ctx.Data["AuditRecorded"] == nil)
 	})
 }
 
@@ -205,19 +212,33 @@ func APIActivity(next http.Handler) http.Handler {
 // a container blob upload are left out: the upload is recorded by its final PUT.
 func PackageActivity(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		defer func() {
+			rec := recover()
+			if !(req.Method == http.MethodPatch && strings.HasPrefix(req.URL.Path, "/v2/")) {
+				ctx := context.GetWebContext(req)
+				ev := audit_model.Event{}
+				target := ""
+				if ctx.Package != nil && ctx.Package.Owner != nil {
+					ev.OwnerID, ev.TargetID, ev.TargetName = ctx.Package.Owner.ID, ctx.Package.Owner.ID, ctx.Package.Owner.Name
+					target = "owner"
+				}
+				recordRequest(req, panicStatus(ctx.Resp.WrittenStatus(), rec), ev, target, false)
+			}
+			if rec != nil {
+				panic(rec)
+			}
+		}()
 		next.ServeHTTP(w, req)
-		if req.Method == http.MethodPatch && strings.HasPrefix(req.URL.Path, "/v2/") {
-			return
-		}
-		ctx := context.GetWebContext(req)
-		ev := audit_model.Event{}
-		target := ""
-		if ctx.Package != nil && ctx.Package.Owner != nil {
-			ev.OwnerID, ev.TargetID, ev.TargetName = ctx.Package.Owner.ID, ctx.Package.Owner.ID, ctx.Package.Owner.Name
-			target = "owner"
-		}
-		recordRequest(req, ctx.Resp.WrittenStatus(), ev, target, false)
 	})
+}
+
+// panicStatus is the status to record when the handler panicked: the one already written (FormRefused wrote its
+// 400), else 500.
+func panicStatus(written int, rec any) int {
+	if rec != nil && written == 0 {
+		return http.StatusInternalServerError
+	}
+	return written
 }
 
 // recordRequest records the request as a write, a request with sudo or, when readPrivate is set and [audit] LOG_READS is

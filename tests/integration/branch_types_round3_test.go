@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unittest"
@@ -118,4 +119,19 @@ func TestUnparsableFormRefusedWithoutBind(t *testing.T) {
 	v, err := user_model.GetUserSetting(t.Context(), 2, user_model.SettingsKeyHiddenCommentTypes, "unset")
 	require.NoError(t, err)
 	assert.Equal(t, "unset", v)
+}
+
+// Round 3c: a refused form panics out of the handler after authentication, but the audit middleware still records the
+// request (one failed write with its 400). The container upload reads "mount" from the form.
+func TestUnparsableFormRefusedIsAudited(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+	auditFresh(t)
+	since := auditMaxID(t)
+	req := NewRequestWithBody(t, "POST", "/v2/user2/img/blobs/uploads", strings.NewReader("mount=%zz")).AddBasicAuth("user2")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	MakeRequest(t, req, http.StatusBadRequest)
+	e := auditActivity(t, since, "activity.api.write")
+	assert.Equal(t, audit_model.ResultFailure, e.Result)
+	assert.EqualValues(t, 2, e.ActorID)
+	assert.EqualValues(t, http.StatusBadRequest, auditData(t, e)["status"])
 }
