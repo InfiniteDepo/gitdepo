@@ -8,7 +8,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
+
+	"forgejo.org/modules/web/middleware"
 
 	chi "github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
@@ -176,4 +179,39 @@ func TestRoute3(t *testing.T) {
 	r.ServeHTTP(recorder, req)
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	assert.Equal(t, 4, hit)
+}
+
+func TestBindRefusesUnparsableForm(t *testing.T) {
+	type form struct {
+		Name string `form:"name"`
+	}
+	r := NewRoute()
+	var bound *form
+	r.Post("/", Bind(form{}), func(resp http.ResponseWriter, req *http.Request) {
+		bound = GetForm(middleware.GetContextData(req.Context())).(*form)
+	})
+	post := func(body string) *httptest.ResponseRecorder {
+		bound = nil
+		req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req = req.WithContext(middleware.WithContextData(req.Context()))
+		recorder := httptest.NewRecorder()
+		r.ServeHTTP(recorder, req)
+		return recorder
+	}
+
+	resp := post("name=x")
+	assert.Equal(t, http.StatusOK, resp.Code)
+	require.NotNil(t, bound)
+	assert.Equal(t, "x", bound.Name)
+
+	// more fields than Go parses: refused, the handler never runs with an empty form
+	resp = post("name=x" + strings.Repeat("&f=1", 10000))
+	assert.Equal(t, http.StatusBadRequest, resp.Code)
+	assert.Nil(t, bound)
+
+	// a malformed body
+	resp = post("name=%zz")
+	assert.Equal(t, http.StatusBadRequest, resp.Code)
+	assert.Nil(t, bound)
 }

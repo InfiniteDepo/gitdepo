@@ -107,6 +107,11 @@ func TestBranchTypesKeptNotes(t *testing.T) {
 		// a pull request that carries release/1.0 forward to develop: no note, no box
 		idx = bwPR(t, owner, "org3", repo, "develop", "release/1.0")
 		assert.NotContains(t, page(idx), "release/1.0 will be kept")
+		// and forward to a later release branch; backwards is no merge forward, so the note stays
+		idx = bwPR(t, owner, "org3", repo, "release/2.0", "release/1.0")
+		assert.NotContains(t, page(idx), "release/1.0 will be kept")
+		idx = bwPR(t, owner, "org3", repo, "release/1.0", "release/2.0")
+		assert.Contains(t, page(idx), "release/2.0 will be kept")
 
 		// merged: no button, a note
 		idx = bwPR(t, owner, "org3", repo, "master", "release/3.0")
@@ -204,6 +209,6 @@ func TestBranchTypesKeptReasonNeedsCodeRead(t *testing.T) {
 		reader := loginUser(t, "user8")
 		body := reader.MakeRequest(t, NewRequest(t, "GET", link), http.StatusOK).Body.String()
 		assert.NotContains(t, body, "it is a release branch")
-		assert.Contains(t, body, "The branch in the fork was kept.")
+		assert.Contains(t, body, "The branch was kept.")
 	})
 }

@@ -138,7 +138,7 @@
 	"repo.settings.branching_model.too_many_types": "At most 20 branch types are allowed.",
 	"repo.settings.branching_model.change_in_org": "Change in the organization settings",
 	"repo.pulls.branch_kept_comment": "did not delete the head branch %[1]s %[2]s",
-	"repo.pulls.branch_kept_comment_fork": "The branch in the fork was kept.",
+	"repo.pulls.branch_kept_comment_hidden": "The branch was kept.",
 	"repo.pulls.branch_kept_comment_reason": "Kept because %s.",
 	"repo.pulls.delete_after_merge.will_be_kept": "%[1]s will be kept: %[2]s.",
 	"repo.pulls.delete_after_merge.is_kept": "%[1]s is kept: %[2]s.",
@@ -172,6 +172,7 @@
 	"repo.settings.branch_workflow.pulls_disabled": "Pull requests are not enabled for this repository.",
 	"repo.settings.branching_model": "Branching model",
 	"repo.settings.branching_model.desc": "Names the development branch and the release branches. Release branches are ordered by the version in their name.",
+	"repo.settings.branching_model.pulls_off_desc": "The branching model and the delete setting above are saved with the Pull requests unit. Turning Pull requests off in the Units settings removes them, and turning it back on starts from the inherited settings.",
 	"repo.settings.branching_model.inherit": "Inherit from organization",
 	"repo.settings.branching_model.inherit_desc_org": "Ticked, this repository uses the branching model of organization %s. Untick to set its own.",
 	"repo.settings.branching_model.too_many_prefixes": "Enter at most 10 release branch prefixes. Nothing was changed.",
@@ -3085,10 +3086,10 @@
 		"one": "Delete the merged branch",
 		"other": "Delete the %d merged branches"
 	},
-	"repo.pulls.stack.delete_none": "No merged branch is deleted: the default, development, production and release branches, bases of branch types and protected branches are kept.",
+	"repo.pulls.stack.delete_none": "No merged branch is deleted: branches in forks and of AGit pull requests are not deleted here, and the default, development, production and release branches, bases of branch types and protected branches are kept.",
 	"repo.pulls.stack.delete_kept": {
-		"one": "%d branch is kept: the default, development, production and release branches, bases of branch types and protected branches are never deleted.",
-		"other": "%d branches are kept: the default, development, production and release branches, bases of branch types and protected branches are never deleted."
+		"one": "%d branch is kept: branches in forks and of AGit pull requests are not deleted here, and the default, development, production and release branches, bases of branch types and protected branches are never deleted.",
+		"other": "%d branches are kept: branches in forks and of AGit pull requests are not deleted here, and the default, development, production and release branches, bases of branch types and protected branches are never deleted."
 	},
 	"repo.pulls.stack.confirm_button": {
 		"one": "Merge %d pull request",

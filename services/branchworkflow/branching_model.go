@@ -6,6 +6,7 @@ package branchworkflow
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"slices"
@@ -427,6 +428,7 @@ func GetChain(ctx context.Context, repo *repo_model.Repository, e EffectiveModel
 	return BuildChain(e.Model, e.DevelopmentBranch(repo), names), nil
 }
 
+// auditModel is the audited form of a model without its types, which modelChanges adds as the types that changed.
 func auditModel(m *repo_model.BranchingModel, locked bool) map[string]any {
 	if m == nil {
 		m = &repo_model.BranchingModel{}
@@ -438,7 +440,6 @@ func auditModel(m *repo_model.BranchingModel, locked bool) map[string]any {
 		"merge_forward":                 m.MergeForward,
 		"merge_forward_never_bypass":    m.MergeForwardNeverBypass,
 		"merge_forward_anyone_may_skip": m.MergeForwardAnyoneMaySkip,
-		"types":                         typeAudit(m.Types),
 		"default_pr_target":             m.DefaultPRTarget,
 		"model_locked":                  locked,
 	}
@@ -485,7 +486,7 @@ func SetOrgModel(ctx context.Context, org *user_model.User, m *repo_model.Branch
 		if err != nil {
 			return err
 		}
-		if changes := audit_model.Changes(auditModel(before, beforeLocked), auditModel(m, locked)); changes != nil {
+		if changes := modelChanges(auditModel(before, beforeLocked), auditModel(m, locked), before, m); changes != nil {
 			return user_model.RecordOrg(ctx, "org.branch_workflow.changed", org, changes)
 		}
 		return nil
@@ -514,20 +515,21 @@ func SetRepoModel(ctx context.Context, repo *repo_model.Repository, m *repo_mode
 	var newConfig convert.Conversion
 	if err := db.WithTx(ctx, func(ctx context.Context) error {
 		// the stored row, not the copy cached on the repository, is what changes and what the entry compares
-		stored := &repo_model.RepoUnit{}
-		if has, err := db.GetEngine(ctx).Where("repo_id = ? AND type = ?", repo.ID, unit.TypePullRequests).Get(stored); err != nil {
+		stored, has, err := repo_model.GetRepoUnitForUpdate(ctx, repo.ID, unit.TypePullRequests)
+		if err != nil {
 			return err
 		} else if !has {
 			return ErrNoPullRequests
 		}
 		cfg := stored.PullRequestsConfig()
-		before := repoAuditModel(cfg.BranchingModel)
+		cfg0 := cfg.BranchingModel
+		before := repoAuditModel(cfg0)
 		cfg.BranchingModel = m
 		if err := repo_model.UpdateRepoUnit(ctx, stored); err != nil {
 			return err
 		}
 		newConfig = stored.Config
-		if changes := audit_model.Changes(before, repoAuditModel(m)); changes != nil {
+		if changes := modelChanges(before, repoAuditModel(m), cfg0, m); changes != nil {
 			return repo_model.RecordRepo(ctx, "repo.branch_workflow.changed", repo, changes)
 		}
 		return nil
@@ -536,6 +538,30 @@ func SetRepoModel(ctx context.Context, repo *repo_model.Repository, m *repo_mode
 	}
 	u.Config = newConfig // the copy cached on the repository follows only a stored change
 	return nil
+}
+
+// modelChanges is audit_model.Changes with only the added, changed or removed types, plus the sha256 of each whole
+// model, so the entry keeps the difference under the size cap and the hashes prove the full models.
+func modelChanges(before, after map[string]any, bm, am *repo_model.BranchingModel) map[string]any {
+	var bt, at []repo_model.BranchType
+	if bm != nil {
+		bt = bm.Types
+	}
+	if am != nil {
+		at = am.Types
+	}
+	before["types"] = typeAudit(slices.DeleteFunc(slices.Clone(bt), func(t repo_model.BranchType) bool { return slices.Contains(at, t) }))
+	after["types"] = typeAudit(slices.DeleteFunc(slices.Clone(at), func(t repo_model.BranchType) bool { return slices.Contains(bt, t) }))
+	changes := audit_model.Changes(before, after)
+	if changes != nil {
+		changes["before"].(map[string]any)["model_sha256"], changes["after"].(map[string]any)["model_sha256"] = modelHash(bm), modelHash(am)
+	}
+	return changes
+}
+
+func modelHash(m *repo_model.BranchingModel) string {
+	bs, _ := json.Marshal(m) // strings and bools always marshal; nil is "null"
+	return fmt.Sprintf("%x", sha256.Sum256(bs))
 }
 
 // typeAudit lists the branch types as objects, so that no value can pass for another field.

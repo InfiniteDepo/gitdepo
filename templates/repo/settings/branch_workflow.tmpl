@@ -29,6 +29,7 @@
 		<div class="ui attached segment">
 			<form class="ui form" action="{{.RepoLink}}/settings/branch_workflow/branching_model" method="post">
 				<p>{{ctx.Locale.Tr "repo.settings.branching_model.desc"}}</p>
+				<p class="help">{{ctx.Locale.Tr "repo.settings.branching_model.pulls_off_desc"}}</p>
 				{{if .ModelLocked}}
 				<p class="help">{{.ModelSetBy}}{{if .ModelSettingsLink}} <a href="{{.ModelSettingsLink}}">{{ctx.Locale.Tr "repo.settings.branching_model.change_in_org"}}</a>{{end}}</p>
 				{{else if .OwnerIsOrg}}

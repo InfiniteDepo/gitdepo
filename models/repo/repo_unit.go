@@ -533,6 +533,17 @@ func availableUnitsSession(ctx context.Context) *xorm.Session {
 	return db.GetEngine(ctx).Select("`repo_unit`.*").Join("INNER", "repository", "`repository`.id = `repo_unit`.repo_id").Where(cond)
 }
 
+// GetRepoUnitForUpdate locks the stored unit row of a repository with a no-op UPDATE (a row lock on PostgreSQL and
+// MySQL, the write lock on SQLite), then reads it, so that two writers in transactions can't overwrite each other.
+func GetRepoUnitForUpdate(ctx context.Context, repoID int64, tp unit.Type) (*RepoUnit, bool, error) {
+	if _, err := db.Exec(ctx, "UPDATE `repo_unit` SET type = type WHERE repo_id = ? AND type = ?", repoID, tp); err != nil {
+		return nil, false, err
+	}
+	u := &RepoUnit{}
+	has, err := db.GetEngine(ctx).Where("repo_id = ? AND type = ?", repoID, tp).Get(u)
+	return u, has, err
+}
+
 // UpdateRepoUnit updates the provided repo unit
 func UpdateRepoUnit(ctx context.Context, unit *RepoUnit) error {
 	_, err := db.GetEngine(ctx).ID(unit.ID).Update(unit)

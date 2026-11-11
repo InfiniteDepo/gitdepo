@@ -181,6 +181,7 @@ func TestAuditOrgSettings(t *testing.T) {
 	require.NoError(t, branchworkflow.SetOrgModel(ctx, org3.AsUser(), model, true))
 	require.NoError(t, branchworkflow.SetOrgModel(ctx, org3.AsUser(), model, true))
 	data = auditData(t, orgOne(t, since, "org.branch_workflow.changed"))
+	popModelHashes(t, data)
 	assert.Equal(t, map[string]any{"development_branch": "", "release_prefixes": []any{}, "model_locked": false}, data["before"])
 	assert.Equal(t, map[string]any{"development_branch": "develop", "release_prefixes": []any{"release/"}, "model_locked": true}, data["after"])
 
@@ -191,8 +192,22 @@ func TestAuditOrgSettings(t *testing.T) {
 	repo3 = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 3})
 	require.NoError(t, branchworkflow.SetRepoModel(ctx, repo3, &repo_model.BranchingModel{ReleasePrefixes: []string{"rel-"}}))
 	data = auditData(t, auditOne(t, since, "repo.branch_workflow.changed"))
+	popModelHashes(t, data)
 	assert.Equal(t, map[string]any{"release_prefixes": []any{}, "inherit": true}, data["before"])
 	assert.Equal(t, map[string]any{"release_prefixes": []any{"rel-"}, "inherit": false}, data["after"])
+}
+
+// popModelHashes checks that both sides of a branching model entry carry a different sha256 of the whole model, and
+// removes them so the rest can be compared.
+func popModelHashes(t *testing.T, data map[string]any) {
+	t.Helper()
+	before, _ := data["before"].(map[string]any)
+	after, _ := data["after"].(map[string]any)
+	assert.Regexp(t, "^[0-9a-f]{64}$", before["model_sha256"])
+	assert.Regexp(t, "^[0-9a-f]{64}$", after["model_sha256"])
+	assert.NotEqual(t, before["model_sha256"], after["model_sha256"])
+	delete(before, "model_sha256")
+	delete(after, "model_sha256")
 }
 
 // TestAuditOrgSettingsRollback checks that a failed entry fails the change and leaves no new value cached.

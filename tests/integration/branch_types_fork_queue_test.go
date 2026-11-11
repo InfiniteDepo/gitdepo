@@ -113,7 +113,7 @@ func TestBranchTypesForkKeptGenericText(t *testing.T) {
 		assert.Contains(t, owner.MakeRequest(t, NewRequest(t, "GET", page), http.StatusOK).Body.String(), "it is a release branch")
 		other := loginUser(t, "user8")
 		body := other.MakeRequest(t, NewRequest(t, "GET", page), http.StatusOK).Body.String()
-		assert.Contains(t, body, "The branch in the fork was kept.")
+		assert.Contains(t, body, "The branch was kept.")
 		assert.NotContains(t, body, "it is a release branch")
 	})
 }

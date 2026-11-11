@@ -27,13 +27,14 @@ const (
 // ReleaseTypeName is the name of the type whose prefixes are the release prefixes.
 const ReleaseTypeName = "Release"
 
-// MatchType returns the type of a branch: the enabled type or release prefix with the longest prefix, which must be
-// followed by at least one character. Release branches are created from the development branch.
+// MatchType returns the type of a branch: the enabled type or release prefix with the longest prefix the name starts
+// with. A name equal to a prefix counts, so a branch named like a release prefix (`release`, `hotfix-`) is a release
+// branch and kept. Release branches are created from the development branch.
 func MatchType(m repo_model.BranchingModel, branch string) (repo_model.BranchType, bool) {
 	var best repo_model.BranchType
 	found := false
 	consider := func(t repo_model.BranchType) {
-		if strings.HasPrefix(branch, t.Prefix) && len(branch) > len(t.Prefix) && (!found || len(t.Prefix) > len(best.Prefix)) {
+		if strings.HasPrefix(branch, t.Prefix) && (!found || len(t.Prefix) > len(best.Prefix)) {
 			best, found = t, true
 		}
 	}
@@ -157,7 +158,7 @@ func CountUntyped(ctx context.Context, repo *repo_model.Repository, m repo_model
 		}
 		var best *repo_model.BranchType
 		for i, t := range m.Types {
-			if t.Off && strings.HasPrefix(n, t.Prefix) && len(n) > len(t.Prefix) && (best == nil || len(t.Prefix) > len(best.Prefix)) {
+			if t.Off && strings.HasPrefix(n, t.Prefix) && (best == nil || len(t.Prefix) > len(best.Prefix)) {
 				best = &m.Types[i]
 			}
 		}

@@ -685,12 +685,6 @@ func DeleteBranchAfterMerge(ctx context.Context, doer *user_model.User, pr *issu
 		return ErrBranchHasNewCommits
 	}
 
-	// a push that landed since the check must not move the children of a branch that stays
-	if tip, err := headRepo.GetBranchCommitID(pr.HeadBranch); err != nil {
-		return err
-	} else if tip != prHead {
-		return ErrBranchHasNewCommits
-	}
 	if err := pull_service.RetargetChildrenOnMerge(ctx, doer, pr); err != nil {
 		if errors.Is(err, pull_service.ErrChildPullsNotRetargeted) {
 			return ErrBranchInUse // an open pull request still needs this branch

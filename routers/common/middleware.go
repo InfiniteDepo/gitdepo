@@ -75,10 +75,24 @@ func ProtocolMiddlewares() (handlers []any) {
 		handlers = append(handlers, joinForwardedFor(setting.ReverseProxyTrustedProxies), proxy.ForwardedHeaders(opt))
 	}
 
+	handlers = append(handlers, refuseUnparsableForm)
+
 	// both check per request whether their logger has a writer, so that a log destination added at runtime works
 	handlers = append(handlers, routing.NewLoggerHandler(), context.AccessLogger())
 
 	return handlers
+}
+
+// refuseUnparsableForm answers 400 to a form body Go can't parse (malformed, or more fields than it parses): every
+// later reader (auth, FormValue, web.Bind) would otherwise see an empty or partial form and act on it.
+func refuseUnparsableForm(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(resp http.ResponseWriter, req *http.Request) {
+		if strings.Contains(req.Header.Get("Content-Type"), "form-urlencoded") && req.ParseForm() != nil {
+			http.Error(resp, "The request could not be parsed.", http.StatusBadRequest)
+			return
+		}
+		next.ServeHTTP(resp, req)
+	})
 }
 
 // joinForwardedFor makes proxy.ForwardedHeaders see the address a trusted proxy appended: that reads only the first

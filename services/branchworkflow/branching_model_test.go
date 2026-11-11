@@ -261,8 +261,9 @@ func TestNormalizeBranchTypes(t *testing.T) {
 
 func TestMatchType(t *testing.T) {
 	m := repo_model.BranchingModel{
-		ReleasePrefixes: []string{"release/"},
+		ReleasePrefixes: []string{"release/", "hotfix-", "release"},
 		Types: []repo_model.BranchType{
+			{Name: "Re", Prefix: "re", Base: repo_model.BranchTypeBaseDevelopment},
 			{Name: "Feature", Prefix: "feature/", Base: repo_model.BranchTypeBaseDevelopment},
 			{Name: "Big feature", Prefix: "feature/big/", Base: repo_model.BranchTypeBaseBranch, BaseBranch: "big"},
 			{Name: "Chore", Prefix: "chore/", Base: repo_model.BranchTypeBaseDevelopment, Off: true},
@@ -272,8 +273,11 @@ func TestMatchType(t *testing.T) {
 		"feature/x":     "Feature",
 		"feature/big/x": "Big feature", // the longest prefix wins
 		"release/1.0":   "Release",
-		"chore/x":       "", // turned off
-		"feature/":      "", // nothing after the prefix
+		"chore/x":       "",        // turned off
+		"hotfix-":       "Release", // a name equal to a release prefix is a release branch
+		"release":       "Release", // and beats a shorter type prefix
+		"hotfix-1":      "Release",
+		"rework":        "Re",
 		"feature":       "",
 		"other":         "",
 	} {
@@ -375,6 +379,7 @@ func TestKeptReason(t *testing.T) {
 	assert.Equal(t, KeptProduction, reason("production", true))
 	assert.Equal(t, KeptRelease, reason("release/1.0", true))
 	assert.Equal(t, KeptRelease, reason("rel-next", true), "a branch without a version is kept too")
+	assert.Equal(t, KeptRelease, reason("rel-", true), "a branch named exactly like a release prefix is kept too")
 	assert.Equal(t, KeptMergeQueue, reason("merge-queue/master/5", true))
 	assert.Empty(t, reason("feature/x", true))
 
@@ -391,4 +396,27 @@ func TestKeptReason(t *testing.T) {
 	got, err := KeptReason(ctx, other, "release/1.0", true)
 	require.NoError(t, err)
 	assert.Empty(t, got)
+}
+
+func TestModelChanges(t *testing.T) {
+	a := repo_model.BranchType{Name: "A", Prefix: "a/", Base: repo_model.BranchTypeBaseDevelopment}
+	b := repo_model.BranchType{Name: "B", Prefix: "b/", Base: repo_model.BranchTypeBaseBranch, BaseBranch: "x"}
+	before := &repo_model.BranchingModel{ReleasePrefixes: []string{"release/"}, Types: []repo_model.BranchType{a, b}}
+	b2 := b
+	b2.BaseBranch = "y"
+	after := &repo_model.BranchingModel{ReleasePrefixes: []string{"release/"}, Types: []repo_model.BranchType{a, b2}}
+	changes := modelChanges(auditModel(before, false), auditModel(after, false), before, after)
+	require.NotNil(t, changes)
+	bm, am := changes["before"].(map[string]any), changes["after"].(map[string]any)
+	assert.Equal(t, typeAudit([]repo_model.BranchType{b}), bm["types"], "only the changed type")
+	assert.Equal(t, typeAudit([]repo_model.BranchType{b2}), am["types"])
+	assert.Equal(t, modelHash(before), bm["model_sha256"])
+	assert.Equal(t, modelHash(after), am["model_sha256"])
+	assert.Len(t, am, 2)
+
+	assert.Nil(t, modelChanges(auditModel(before, false), auditModel(before, false), before, before))
+	// removing the model: the removed types, and the hash of none
+	changes = modelChanges(auditModel(before, false), auditModel(nil, false), before, nil)
+	assert.Len(t, changes["before"].(map[string]any)["types"], 2)
+	assert.Equal(t, modelHash(nil), changes["after"].(map[string]any)["model_sha256"])
 }

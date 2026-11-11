@@ -90,17 +90,15 @@ func UpdateRepositoryUnits(ctx context.Context, repo *repo_model.Repository, uni
 		if !ok {
 			continue
 		}
-		old := &repo_model.RepoUnit{}
-		if has, err := db.GetEngine(ctx).Where("repo_id = ? AND type = ?", repo.ID, unit.TypePullRequests).Get(old); err != nil {
+		if old, has, err := repo_model.GetRepoUnitForUpdate(ctx, repo.ID, unit.TypePullRequests); err != nil {
 			return err
-		} else if !has {
-			continue
-		}
-		oldCfg := old.PullRequestsConfig()
-		newCfg.BranchingModel = oldCfg.BranchingModel
-		if changes := audit_model.Changes(map[string]any{"mode": oldCfg.GetDeleteBranchAfterMerge().String()}, map[string]any{"mode": newCfg.GetDeleteBranchAfterMerge().String()}); changes != nil {
-			if err := repo_model.RecordRepo(ctx, "repo.branch_workflow.changed", repo, changes); err != nil {
-				return err
+		} else if has {
+			oldCfg := old.PullRequestsConfig()
+			newCfg.BranchingModel = oldCfg.BranchingModel
+			if changes := audit_model.Changes(map[string]any{"mode": oldCfg.GetDeleteBranchAfterMerge().String()}, map[string]any{"mode": newCfg.GetDeleteBranchAfterMerge().String()}); changes != nil {
+				if err := repo_model.RecordRepo(ctx, "repo.branch_workflow.changed", repo, changes); err != nil {
+					return err
+				}
 			}
 		}
 	}

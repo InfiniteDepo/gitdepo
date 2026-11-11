@@ -83,7 +83,7 @@ type stackView struct {
 	DeleteDefault bool
 	DeleteForced  bool
 	Deletable     int // the branches of the merged pull requests that are deleted after the merge
-	Kept          int // the ones that are not: the branching model, a protection rule or the repository keeps them
+	Kept          int // the ones that are not: in a fork, of an AGit pull request, or kept by the branching model, a protection rule or the repository
 }
 
 func stackReviewState(ctx *context.Context, review string) stackState {

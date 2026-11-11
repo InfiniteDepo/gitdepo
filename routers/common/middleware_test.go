@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"testing"
 
 	"forgejo.org/modules/web"
@@ -102,4 +103,25 @@ func TestAuditPeer(t *testing.T) {
 	assert.Equal(t, "unix", auditPeer("@", netip.MustParseAddr("127.0.0.1")))
 	assert.Equal(t, "invalid", auditPeer("x", netip.Addr{}))
 	assert.Equal(t, "192.0.2.1", auditPeer("[::ffff:192.0.2.1]:1", netip.MustParseAddr("::ffff:192.0.2.1")))
+}
+
+func TestRefuseUnparsableForm(t *testing.T) {
+	post := func(body string) (int, bool) {
+		reached := false
+		h := refuseUnparsableForm(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
+		req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code, reached
+	}
+	code, reached := post("a=1")
+	assert.Equal(t, http.StatusOK, code)
+	assert.True(t, reached)
+	code, reached = post("a=1" + strings.Repeat("&f=1", 10000))
+	assert.Equal(t, http.StatusBadRequest, code)
+	assert.False(t, reached)
+	code, reached = post("a=%zz")
+	assert.Equal(t, http.StatusBadRequest, code)
+	assert.False(t, reached)
 }

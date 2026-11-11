@@ -742,7 +742,7 @@
 					{{ctx.Locale.Tr "repo.pulls.branch_kept_comment" $.Issue.PullRequest.HeadBranch $createdStr}}
 				</span>
 				<div class="detail flex-text-block">
-					<span class="text grey muted-links">{{if not $.CanReadHeadRepo}}{{ctx.Locale.Tr "repo.pulls.branch_kept_comment_fork"}}{{else}}{{ctx.Locale.Tr "repo.pulls.branch_kept_comment_reason" (ExecuteTemplate ctx "repo/issue/view_content/branch_kept_reason" .AutoMergeInfo.Reason)}}{{end}}</span>
+					<span class="text grey muted-links">{{if not $.CanReadHeadRepo}}{{ctx.Locale.Tr "repo.pulls.branch_kept_comment_hidden"}}{{else}}{{ctx.Locale.Tr "repo.pulls.branch_kept_comment_reason" (ExecuteTemplate ctx "repo/issue/view_content/branch_kept_reason" .AutoMergeInfo.Reason)}}{{end}}</span>
 				</div>
 			</div>
 		{{else if eq .Type 50}}

@@ -2192,11 +2192,11 @@ func ViewIssue(ctx *context.Context) {
 				text := keptWillBeText(ctx, pull.HeadBranch, reason)
 				mergeForward := false
 				if reason == branchworkflow.KeptDevelopment || reason == branchworkflow.KeptProduction || reason == branchworkflow.KeptRelease {
-					// only a pull request that carries the branch forward along the chain doesn't offer the box at all
+					// only a pull request that carries the branch forward along the chain doesn't offer the box at all; the
+					// chain of its two branches orders them without listing every branch
 					if m := kept.Model(); m.Model.MergeForward {
-						if chain, err := branchworkflow.GetChain(ctx, pull.HeadRepo, m); err == nil {
-							mergeForward = slices.Contains(chain.Forward(pull.HeadBranch), pull.BaseBranch)
-						}
+						chain := branchworkflow.BuildChain(m.Model, m.DevelopmentBranch(pull.HeadRepo), []string{pull.HeadBranch, pull.BaseBranch})
+						mergeForward = slices.Contains(chain.Forward(pull.HeadBranch), pull.BaseBranch)
 					}
 				}
 				switch {
