@@ -31,11 +31,14 @@ func Bind[T any](_ T) http.HandlerFunc {
 // BindForm binds the request to obj and answers 400 when it can't be parsed (malformed, or more fields than Go
 // parses), so no handler acts on a form read in part; validation errors are left to the handler.
 func BindForm(resp http.ResponseWriter, req *http.Request, obj any) bool {
-	if errs := binding.Bind(req, obj); errs.Has(binding.ERR_DESERIALIZATION) {
-		http.Error(resp, "The request could not be parsed.", http.StatusBadRequest)
-		return false
+	err := middleware.ParseForm(req)
+	if err == nil {
+		if errs := binding.Bind(req, obj); !errs.Has(binding.ERR_DESERIALIZATION) {
+			return true
+		}
 	}
-	return true
+	http.Error(resp, "The request could not be parsed.", middleware.FormErrorStatus(err))
+	return false
 }
 
 // SetForm set the form object

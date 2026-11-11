@@ -15,17 +15,18 @@ import (
 )
 
 func tokenFromForm(req *http.Request) optional.Option[string] {
-	_ = req.ParseForm()
+	// the query only: a package upload's body is raw data, whatever its Content-Type says
+	query := req.URL.Query()
 	if !setting.DisableQueryAuthToken {
 		// Check token.
-		if token := req.Form.Get("token"); token != "" {
+		if token := query.Get("token"); token != "" {
 			return optional.Some(token)
 		}
 		// Check access token.
-		if token := req.Form.Get("access_token"); token != "" {
+		if token := query.Get("access_token"); token != "" {
 			return optional.Some(token)
 		}
-	} else if req.Form.Get("token") != "" || req.Form.Get("access_token") != "" {
+	} else if query.Get("token") != "" || query.Get("access_token") != "" {
 		log.Warn("API token sent in query string but DISABLE_QUERY_AUTH_TOKEN=true")
 	}
 	return optional.None[string]()

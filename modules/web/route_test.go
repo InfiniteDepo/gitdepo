@@ -215,3 +215,23 @@ func TestBindRefusesUnparsableForm(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, resp.Code)
 	assert.Nil(t, bound)
 }
+
+func TestBindFormRefusesUnparsableForm(t *testing.T) {
+	type form struct{ A string }
+	post := func(body string) (bool, int) {
+		req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req = req.WithContext(middleware.WithFormState(req.Context()))
+		rec := httptest.NewRecorder()
+		ok := BindForm(rec, req, &form{})
+		return ok, rec.Code
+	}
+	ok, _ := post("a=1")
+	assert.True(t, ok)
+	ok, code := post("a=%zz")
+	assert.False(t, ok)
+	assert.Equal(t, http.StatusBadRequest, code)
+	ok, code = post("a=1" + strings.Repeat("&f=1", 10000))
+	assert.False(t, ok)
+	assert.Equal(t, http.StatusBadRequest, code)
+}

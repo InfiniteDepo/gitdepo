@@ -108,3 +108,14 @@ func TestBranchTypesAuditRecordsChangedTypes(t *testing.T) {
 		assert.NotEqual(t, before["model_sha256"], after["model_sha256"])
 	})
 }
+
+// A handler that reads the form with ctx.FormBool (no web.Bind) also refuses a form Go can't parse, and stores nothing.
+func TestUnparsableFormRefusedWithoutBind(t *testing.T) {
+	defer tests.PrepareTestEnv(t)()
+	sess := loginUser(t, "user2")
+	big := url.Values{"reference": {"true"}, "x": make([]string, 10001)}
+	sess.MakeRequest(t, NewRequestWithURLValues(t, "POST", "/user/settings/appearance/hidden_comments", big), http.StatusBadRequest)
+	v, err := user_model.GetUserSetting(t.Context(), 2, user_model.SettingsKeyHiddenCommentTypes, "unset")
+	require.NoError(t, err)
+	assert.Equal(t, "unset", v)
+}
