@@ -77,7 +77,7 @@ func generateRepoCommit(ctx context.Context, repo, templateRepo, generateRepo *r
 
 				base := strings.TrimPrefix(filepath.ToSlash(path), tmpDirSlash)
 				for _, g := range gt.Globs() {
-					if g.Match(base) {
+					if g.MatchString(base) {
 						// `path` will be an absolute filepath from `WalkDir`, but `os.Root` requires all accesses are
 						// relative file paths from the root -- use `relPath` from here out.
 						relPath, err := filepath.Rel(tmpDir, path)

@@ -10,10 +10,10 @@ import (
 
 	"forgejo.org/modules/auth"
 	"forgejo.org/modules/git"
+	"forgejo.org/modules/glob"
 	"forgejo.org/modules/util"
 
 	"code.forgejo.org/go-chi/binding"
-	"github.com/gobwas/glob"
 )
 
 const (
@@ -145,7 +145,7 @@ func globPatternValidator(errs binding.Errors, name string, val any) (bool, bind
 	str := fmt.Sprintf("%v", val)
 
 	if len(str) != 0 {
-		if _, err := glob.Compile(str); err != nil {
+		if _, err := glob.CompileExact(str); err != nil {
 			errs.Add([]string{name}, ErrGlobPattern, err.Error())
 			return false, errs
 		}

@@ -112,3 +112,14 @@ func TestPushRuleCompilePRTitleOnly(t *testing.T) {
 	require.Error(t, rule.Compile())
 	assert.Nil(t, rule.CommitMessageRe)
 }
+
+func TestPushRuleGlobsAreLinear(t *testing.T) {
+	slow := strings.Repeat("{a,aa}*", 16) + "b"
+	rule := git_model.PushRule{BannedFilePatterns: slow, PRTitleBranches: slow}
+	require.NoError(t, rule.Compile())
+	name := strings.Repeat("ab", 125)
+	start := time.Now()
+	rule.IsBannedFile(name)
+	rule.CheckPRTitle(name, "title", false)
+	assert.Less(t, time.Since(start), 100*time.Millisecond)
+}

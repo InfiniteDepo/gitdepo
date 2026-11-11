@@ -1073,3 +1073,14 @@ type aiDBTweak func(*auth_model.AuthorizedIntegration)
 type jwtxKeyTweak func() jwtx.SigningKey
 
 type jwtClientSignatureTweak func() jwtx.SigningKey
+
+// a claim glob is written by the integration's owner and matched on every token: linear time
+func TestCheckClaimsGlobIsLinear(t *testing.T) {
+	slow := strings.Repeat("{a,aa}*", 16) + "b"
+	claims := map[string]any{"ref": strings.Repeat("ab", 125)}
+	ai := &AuthorizedIntegration{}
+	start := time.Now()
+	require.NoError(t, ai.checkClaims(claims, &auth_model.ClaimRules{Rules: []auth_model.ClaimRule{{Claim: "ref", Comparison: auth_model.ClaimGlob, Value: slow}}}))
+	require.NoError(t, ai.checkClaims(claims, &auth_model.ClaimRules{Rules: []auth_model.ClaimRule{{Claim: "ref", Comparison: auth_model.ClaimGlobIn, Values: []string{slow}}}}))
+	assert.Less(t, time.Since(start), 100*time.Millisecond)
+}

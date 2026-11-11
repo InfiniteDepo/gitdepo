@@ -4,7 +4,9 @@
 package validation
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"code.forgejo.org/go-chi/binding"
 	"github.com/gobwas/glob"
@@ -57,5 +59,13 @@ func Test_GlobPatternValidation(t *testing.T) {
 		t.Run(testCase.description, func(t *testing.T) {
 			performValidationTest(t, testCase)
 		})
+	}
+}
+
+func Test_GlobPatternValidationIsLinear(t *testing.T) {
+	start := time.Now()
+	_, errs := globPatternValidator(binding.Errors{}, "f", strings.Repeat("{a,aa}*", 16)+"b")
+	if len(errs) != 0 || time.Since(start) > 100*time.Millisecond {
+		t.Errorf("errors %v after %v", errs, time.Since(start))
 	}
 }

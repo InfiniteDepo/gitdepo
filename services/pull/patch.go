@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -23,8 +24,6 @@ import (
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/process"
 	"forgejo.org/modules/util"
-
-	"github.com/gobwas/glob"
 )
 
 // DownloadDiffOrPatch will write the patch for the pr to the writer
@@ -505,7 +504,7 @@ func checkConflicts(ctx context.Context, pr *issues_model.PullRequest, testPatch
 }
 
 // CheckFileProtection check file Protection
-func CheckFileProtection(repo *git.Repository, oldCommitID, newCommitID string, patterns []glob.Glob, limit int, env []string) ([]string, error) {
+func CheckFileProtection(repo *git.Repository, oldCommitID, newCommitID string, patterns []*regexp.Regexp, limit int, env []string) ([]string, error) {
 	if len(patterns) == 0 {
 		return nil, nil
 	}
@@ -517,7 +516,7 @@ func CheckFileProtection(repo *git.Repository, oldCommitID, newCommitID string, 
 	for _, affectedFile := range affectedFiles {
 		lpath := strings.ToLower(affectedFile)
 		for _, pat := range patterns {
-			if pat.Match(lpath) {
+			if pat.MatchString(lpath) {
 				changedProtectedFiles = append(changedProtectedFiles, lpath)
 				break
 			}
@@ -535,7 +534,7 @@ func CheckFileProtection(repo *git.Repository, oldCommitID, newCommitID string, 
 }
 
 // CheckUnprotectedFiles check if the commit only touches unprotected files
-func CheckUnprotectedFiles(repo *git.Repository, oldCommitID, newCommitID string, patterns []glob.Glob, env []string) (bool, error) {
+func CheckUnprotectedFiles(repo *git.Repository, oldCommitID, newCommitID string, patterns []*regexp.Regexp, env []string) (bool, error) {
 	if len(patterns) == 0 {
 		return false, nil
 	}
@@ -547,7 +546,7 @@ func CheckUnprotectedFiles(repo *git.Repository, oldCommitID, newCommitID string
 		lpath := strings.ToLower(affectedFile)
 		unprotected := false
 		for _, pat := range patterns {
-			if pat.Match(lpath) {
+			if pat.MatchString(lpath) {
 				unprotected = true
 				break
 			}

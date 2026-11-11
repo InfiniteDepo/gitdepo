@@ -5,7 +5,9 @@
 package pull
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	git_model "forgejo.org/models/git"
 	"forgejo.org/modules/structs"
@@ -60,4 +62,10 @@ func TestMergeRequiredContextsCommitStatus(t *testing.T) {
 	for i, commitStatuses := range testCases {
 		assert.Equal(t, testCasesExpected[i], MergeRequiredContextsCommitStatus(commitStatuses, testCasesRequiredContexts[i]), "Test case %d failed", i+1)
 	}
+}
+
+func TestRequiredContextPatternIsLinear(t *testing.T) {
+	start := time.Now()
+	MergeRequiredContextsCommitStatus([]*git_model.CommitStatus{{Context: strings.Repeat("ab", 125), State: structs.CommitStatusSuccess}}, []string{strings.Repeat("{a,aa}*", 16) + "b"})
+	assert.Less(t, time.Since(start), 100*time.Millisecond)
 }

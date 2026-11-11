@@ -21,6 +21,7 @@ import (
 	"forgejo.org/models/db"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/cache"
+	linearglob "forgejo.org/modules/glob"
 	"forgejo.org/modules/hostmatcher"
 	"forgejo.org/modules/json"
 	"forgejo.org/modules/log"
@@ -28,8 +29,6 @@ import (
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/util"
 	"forgejo.org/services/authz"
-
-	"github.com/gobwas/glob"
 )
 
 var (
@@ -373,7 +372,7 @@ func validateClaimRules(cr *auth_model.ClaimRules, path string) error {
 		case auth_model.ClaimGlob:
 			if r.Value == "" {
 				return fmt.Errorf("%w: claim value missing at %s[%d].value", ErrInvalidClaimRules, path, ruleIndex)
-			} else if _, err := glob.Compile(r.Value); err != nil {
+			} else if _, err := linearglob.CompileExact(r.Value); err != nil {
 				return fmt.Errorf("%w: claim glob invalid at %s[%d].value: %w", ErrInvalidClaimRules, path, ruleIndex, err)
 			}
 		case auth_model.ClaimIn:
@@ -387,7 +386,7 @@ func validateClaimRules(cr *auth_model.ClaimRules, path string) error {
 			for globIndex, g := range r.Values {
 				if g == "" {
 					return fmt.Errorf("%w: claim glob empty string invalid, would match anything, at %s[%d].values[%d]", ErrInvalidClaimRules, path, ruleIndex, globIndex)
-				} else if _, err := glob.Compile(g); err != nil {
+				} else if _, err := linearglob.CompileExact(g); err != nil {
 					return fmt.Errorf("%w: claim glob invalid at %s[%d].values[%d]: %w", ErrInvalidClaimRules, path, ruleIndex, globIndex, err)
 				}
 			}

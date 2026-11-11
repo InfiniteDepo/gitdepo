@@ -19,11 +19,11 @@ import (
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/git"
 	"forgejo.org/modules/gitrepo"
+	linearglob "forgejo.org/modules/glob"
 	"forgejo.org/modules/log"
 	repo_module "forgejo.org/modules/repository"
 	"forgejo.org/modules/util"
 
-	"github.com/gobwas/glob"
 	"github.com/huandu/xstrings"
 )
 
@@ -103,23 +103,23 @@ type GiteaTemplate struct {
 	Path    string
 	Content []byte
 
-	globs []glob.Glob
+	globs []*regexp.Regexp
 }
 
 // Globs parses the .gitea/template globs or returns them if they were already parsed
-func (gt *GiteaTemplate) Globs() []glob.Glob {
+func (gt *GiteaTemplate) Globs() []*regexp.Regexp {
 	if gt.globs != nil {
 		return gt.globs
 	}
 
-	gt.globs = make([]glob.Glob, 0)
+	gt.globs = make([]*regexp.Regexp, 0)
 	scanner := bufio.NewScanner(bytes.NewReader(gt.Content))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		g, err := glob.Compile(line, '/')
+		g, err := linearglob.CompileExact(line, '/')
 		if err != nil {
 			log.Info("Invalid glob expression '%s' (skipped): %v", line, err)
 			continue

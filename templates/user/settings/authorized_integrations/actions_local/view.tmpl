@@ -96,13 +96,13 @@
 	<div class="field {{if .Err_WorkflowFile}}error{{end}}">
 		<label for="workflow_file">{{ctx.Locale.Tr "settings.authorized_integration.forgejo_actions_local.workflow_file.label"}}</label>
 		<input id="workflow_file" name="workflow_file" value="{{.Form.WorkflowFile}}">
-		<span class="help">{{ctx.Locale.Tr "settings.authorized_integration.forgejo_actions_local.workflow_file.help" "https://pkg.go.dev/github.com/gobwas/glob#Compile" "github.com/gobwas/glob"}}</span>
+		<span class="help">{{ctx.Locale.Tr "settings.authorized_integration.forgejo_actions_local.workflow_file.syntax"}}</span>
 	</div>
 
 	<div class="field {{if .Err_GitRef}}error{{end}}">
 		<label for="git_ref">{{ctx.Locale.Tr "settings.authorized_integration.forgejo_actions_local.git_ref.label"}}</label>
 		<input id="git_ref" name="git_ref" value="{{.Form.GitRef}}">
-		<span class="help">{{ctx.Locale.Tr "settings.authorized_integration.forgejo_actions_local.git_ref.help" "https://pkg.go.dev/github.com/gobwas/glob#Compile" "github.com/gobwas/glob"}}</span>
+		<span class="help">{{ctx.Locale.Tr "settings.authorized_integration.forgejo_actions_local.git_ref.syntax"}}</span>
 	</div>
 
 	<div class="field">

@@ -18,14 +18,13 @@ import (
 	"forgejo.org/modules/container"
 	"forgejo.org/modules/git"
 	"forgejo.org/modules/gitrepo"
+	linearglob "forgejo.org/modules/glob"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/optional"
 	repo_module "forgejo.org/modules/repository"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/util"
 	notify_service "forgejo.org/services/notify"
-
-	"github.com/gobwas/glob"
 )
 
 // AdoptRepository adopts pre-existing repository files for the user/organization.
@@ -281,23 +280,24 @@ func checkUnadoptedRepositories(ctx context.Context, userName string, repoNamesT
 
 // ListUnadoptedRepositories lists all the unadopted repositories that match the provided query
 func ListUnadoptedRepositories(ctx context.Context, query string, opts *db.ListOptions) ([]string, int, error) {
-	globUser, _ := glob.Compile("*")
-	globRepo, _ := glob.Compile("*")
+	globUser, _ := linearglob.CompileExact("*")
+	globRepo, _ := linearglob.CompileExact("*")
 
 	// repositories are stored by the lower case user name and lower case repo
 	// name
 	query = strings.ToLower(query)
 	qsplit := strings.SplitN(query, "/", 2)
 	if len(qsplit) > 0 && len(query) > 0 {
-		var err error
-		globUser, err = glob.Compile(qsplit[0])
-		if err != nil {
+		if g, err := linearglob.CompileExact(qsplit[0]); err != nil {
 			log.Info("Invalid glob expression '%s' (skipped): %v", qsplit[0], err)
+		} else {
+			globUser = g
 		}
 		if len(qsplit) > 1 {
-			globRepo, err = glob.Compile(qsplit[1])
-			if err != nil {
+			if g, err := linearglob.CompileExact(qsplit[1]); err != nil {
 				log.Info("Invalid glob expression '%s' (skipped): %v", qsplit[1], err)
+			} else {
+				globRepo = g
 			}
 		}
 	}
@@ -332,7 +332,7 @@ func ListUnadoptedRepositories(ctx context.Context, query string, opts *db.ListO
 			}
 			repoNamesToCheck = repoNamesToCheck[:0]
 
-			if !globUser.Match(name) {
+			if !globUser.MatchString(name) {
 				return filepath.SkipDir
 			}
 
@@ -344,7 +344,7 @@ func ListUnadoptedRepositories(ctx context.Context, query string, opts *db.ListO
 			return filepath.SkipDir
 		}
 		name = name[:len(name)-4]
-		if repo_model.IsUsableRepoName(name) != nil || strings.ToLower(name) != name || !globRepo.Match(name) {
+		if repo_model.IsUsableRepoName(name) != nil || strings.ToLower(name) != name || !globRepo.MatchString(name) {
 			return filepath.SkipDir
 		}
 

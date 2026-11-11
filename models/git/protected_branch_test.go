@@ -132,3 +132,25 @@ func TestBranchRuleMatchIsLinear(t *testing.T) {
 	rule.Match(strings.Repeat("ab", 50) + "c")
 	assert.Less(t, time.Since(start), 100*time.Millisecond)
 }
+
+// protected and unprotected file patterns are globs a repository admin writes: linear time
+func TestFilePatternsAreLinear(t *testing.T) {
+	rule := &ProtectedBranch{ProtectedFilePatterns: strings.Repeat("{a,aa}*", 16) + "b", UnprotectedFilePatterns: strings.Repeat("{a,aa}*", 16) + "b"}
+	start := time.Now()
+	rule.IsProtectedFile(nil, strings.Repeat("ab", 125))
+	rule.IsUnprotectedFile(nil, strings.Repeat("ab", 125))
+	assert.Less(t, time.Since(start), 100*time.Millisecond)
+}
+
+func TestProtectedTagPatternIsLinear(t *testing.T) {
+	pt := &ProtectedTag{NamePattern: strings.Repeat("{a,aa}*", 16) + "b"}
+	require.NoError(t, pt.EnsureCompiledPattern())
+	start := time.Now()
+	pt.matchString(strings.Repeat("ab", 125))
+	assert.Less(t, time.Since(start), 100*time.Millisecond)
+}
+
+func TestFindAllMatchedBranchesRejectsInvalidPattern(t *testing.T) {
+	_, err := FindAllMatchedBranches(t.Context(), 1, "[a-")
+	require.Error(t, err)
+}

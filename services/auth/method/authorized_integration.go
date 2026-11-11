@@ -14,6 +14,7 @@ import (
 
 	auth_model "forgejo.org/models/auth"
 	user_model "forgejo.org/models/user"
+	linearglob "forgejo.org/modules/glob"
 	"forgejo.org/modules/jwtx"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/optional"
@@ -23,7 +24,6 @@ import (
 	auth_service "forgejo.org/services/auth"
 	"forgejo.org/services/authz"
 
-	"github.com/gobwas/glob"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -314,11 +314,11 @@ func (a *AuthorizedIntegration) checkClaims(incomingClaims any, stored *auth_mod
 			if !ok {
 				return fmt.Errorf("claim %q must be a string, but was %T", rule.Claim, lhs)
 			}
-			r, err := glob.Compile(rule.Value)
+			r, err := linearglob.CompileExact(rule.Value)
 			if err != nil {
 				return fmt.Errorf("unable to parse glob for claim rule on %q; glob = %q, err = %w", rule.Claim, rule.Value, err)
 			}
-			if !r.Match(lhsStr) {
+			if !r.MatchString(lhsStr) {
 				return fmt.Errorf("claim %q must match glob %q, but value %q did not match", rule.Claim, rule.Value, lhsStr)
 			}
 		case auth_model.ClaimGlobIn:
@@ -328,11 +328,11 @@ func (a *AuthorizedIntegration) checkClaims(incomingClaims any, stored *auth_mod
 			}
 			matched := false
 			for _, g := range rule.Values {
-				r, err := glob.Compile(g)
+				r, err := linearglob.CompileExact(g)
 				if err != nil {
 					return fmt.Errorf("unable to parse glob for claim rule on %q; glob = %q, err = %w", rule.Claim, g, err)
 				}
-				if r.Match(lhsStr) {
+				if r.MatchString(lhsStr) {
 					matched = true
 					break
 				}

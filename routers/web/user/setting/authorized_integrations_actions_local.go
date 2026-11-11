@@ -16,14 +16,13 @@ import (
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unit"
 	"forgejo.org/modules/base"
+	linearglob "forgejo.org/modules/glob"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/optional"
 	"forgejo.org/modules/svg"
 	"forgejo.org/modules/templates"
 	auth_service "forgejo.org/services/auth"
 	"forgejo.org/services/context"
-
-	"github.com/gobwas/glob"
 )
 
 var (
@@ -245,7 +244,7 @@ func (g *actionsLocalAuthorizedIntegrationForm) convertForm(ctx *context.Context
 		})
 
 	if g.WorkflowFile != "" {
-		_, err := glob.Compile(g.WorkflowFile)
+		_, err := linearglob.CompileExact(g.WorkflowFile)
 		if err != nil {
 			return "", nil, fmt.Errorf("%w: %w", errInvalidWorkflowFileGlob, err)
 		}
@@ -256,7 +255,7 @@ func (g *actionsLocalAuthorizedIntegrationForm) convertForm(ctx *context.Context
 		})
 	}
 	if g.GitRef != "" {
-		_, err := glob.Compile(g.GitRef)
+		_, err := linearglob.CompileExact(g.GitRef)
 		if err != nil {
 			return "", nil, fmt.Errorf("%w: %w", errInvalidGitRefGlob, err)
 		}

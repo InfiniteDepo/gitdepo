@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -14,13 +15,13 @@ import (
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
 	secret_model "forgejo.org/models/secret"
+	linearglob "forgejo.org/modules/glob"
 	"forgejo.org/modules/json"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/timeutil"
 	"forgejo.org/modules/util"
 
 	"code.forgejo.org/xorm/xorm"
-	"github.com/gobwas/glob"
 	"xorm.io/builder"
 )
 
@@ -145,20 +146,14 @@ func lowerName(name string) (lower string, ok bool) {
 }
 
 // compilePattern compiles a ref pattern as matchPattern uses it.
-func compilePattern(pattern string) (glob.Glob, error) {
-	return glob.Compile(pattern, '/')
+func compilePattern(pattern string) (*regexp.Regexp, error) {
+	return linearglob.CompileExact(pattern, '/')
 }
 
-// matchPattern reports if name matches pattern. gobwas/glob can panic in Match on a pattern that compiles, which
-// counts as no match.
-func matchPattern(pattern, name string) (matched bool) {
-	defer func() {
-		if recover() != nil {
-			matched = false
-		}
-	}()
+// matchPattern reports if name matches pattern; an invalid pattern matches nothing.
+func matchPattern(pattern, name string) bool {
 	g, err := compilePattern(pattern)
-	return err == nil && g.Match(name)
+	return err == nil && g.MatchString(name)
 }
 
 // ErrInvalidEnvironmentRule is a rule that Normalize refuses: Field names the rule ("name", "ref_policy",

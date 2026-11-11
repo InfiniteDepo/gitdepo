@@ -9,9 +9,9 @@ import (
 
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
+	linearglob "forgejo.org/modules/glob"
 	"forgejo.org/modules/optional"
 
-	"github.com/gobwas/glob"
 	"xorm.io/builder"
 )
 
@@ -147,10 +147,13 @@ func FindAllMatchedBranches(ctx context.Context, repoID int64, ruleName string) 
 		if err != nil {
 			return nil, err
 		}
-		rule := glob.MustCompile(ruleName)
+		rule, err := linearglob.CompileExact(ruleName)
+		if err != nil {
+			return nil, err
+		}
 
 		for _, branch := range branchNames {
-			if rule.Match(branch) {
+			if rule.MatchString(branch) {
 				results = append(results, branch)
 			}
 		}

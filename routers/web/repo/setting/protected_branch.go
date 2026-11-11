@@ -24,6 +24,7 @@ import (
 	access_model "forgejo.org/models/perm/access"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/base"
+	linearglob "forgejo.org/modules/glob"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
@@ -34,8 +35,6 @@ import (
 	"forgejo.org/services/forms"
 	pull_service "forgejo.org/services/pull"
 	"forgejo.org/services/repository"
-
-	"github.com/gobwas/glob"
 )
 
 const (
@@ -299,7 +298,7 @@ func ProtectBranchFromForm(ctx *context.Context, f *forms.ProtectBranchForm, pro
 			if trimmed == "" {
 				continue
 			}
-			if _, err := glob.Compile(trimmed); err != nil {
+			if _, err := linearglob.CompileExact(trimmed); err != nil {
 				return opts, ctx.Tr("repo.settings.protect_invalid_status_check_pattern", pattern)
 			}
 			validPatterns = append(validPatterns, trimmed)

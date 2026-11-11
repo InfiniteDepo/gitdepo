@@ -13,9 +13,8 @@ import (
 
 	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
+	linearglob "forgejo.org/modules/glob"
 	"forgejo.org/modules/timeutil"
-
-	"github.com/gobwas/glob"
 )
 
 // PushRuleMaxPatternLength caps each regex and the banned file pattern list.
@@ -67,13 +66,13 @@ type PushRule struct {
 	PRTitleBranches   string `xorm:"TEXT"`
 	PRTitleBlockMerge bool   `xorm:"NOT NULL DEFAULT false"`
 
-	CommitMessageRe       *regexp.Regexp `xorm:"-"`
-	CommitMessageBannedRe *regexp.Regexp `xorm:"-"`
-	BranchNameRe          *regexp.Regexp `xorm:"-"`
-	BannedFileGlobs       []glob.Glob    `xorm:"-"`
-	PRTitleRe             *regexp.Regexp `xorm:"-"`
-	PRTitleBannedRe       *regexp.Regexp `xorm:"-"`
-	PRTitleBranchGlobs    []glob.Glob    `xorm:"-"`
+	CommitMessageRe       *regexp.Regexp   `xorm:"-"`
+	CommitMessageBannedRe *regexp.Regexp   `xorm:"-"`
+	BranchNameRe          *regexp.Regexp   `xorm:"-"`
+	BannedFileGlobs       []*regexp.Regexp `xorm:"-"`
+	PRTitleRe             *regexp.Regexp   `xorm:"-"`
+	PRTitleBannedRe       *regexp.Regexp   `xorm:"-"`
+	PRTitleBranchGlobs    []*regexp.Regexp `xorm:"-"`
 
 	CreatedUnix timeutil.TimeStamp `xorm:"created"`
 	UpdatedUnix timeutil.TimeStamp `xorm:"updated"`
@@ -117,7 +116,7 @@ func (r *PushRule) Compile() (err error) {
 		if expr = strings.TrimSpace(expr); expr == "" {
 			continue
 		}
-		g, err := glob.Compile(expr, '/')
+		g, err := linearglob.CompileExact(expr, '/')
 		if err != nil {
 			return fmt.Errorf("invalid glob %q: %w", expr, err)
 		}
@@ -145,7 +144,7 @@ func (r *PushRule) CompilePRTitle() (err error) {
 		if expr = strings.TrimSpace(expr); expr == "" {
 			continue
 		}
-		g, err := glob.Compile(expr, '/')
+		g, err := linearglob.CompileExact(expr, '/')
 		if err != nil {
 			return fmt.Errorf("invalid glob %q: %w", expr, err)
 		}
@@ -157,7 +156,7 @@ func (r *PushRule) CompilePRTitle() (err error) {
 // CheckPRTitle returns an *ErrPRTitleRule if the title violates the rule for a pull request into baseBranch.
 // A draft title skips the must-match regex, never the must-not-match one. Call Compile first.
 func (r *PushRule) CheckPRTitle(baseBranch, title string, isDraft bool) error {
-	if len(r.PRTitleBranchGlobs) > 0 && !slices.ContainsFunc(r.PRTitleBranchGlobs, func(g glob.Glob) bool { return g.Match(baseBranch) }) {
+	if len(r.PRTitleBranchGlobs) > 0 && !slices.ContainsFunc(r.PRTitleBranchGlobs, func(g *regexp.Regexp) bool { return g.MatchString(baseBranch) }) {
 		return nil
 	}
 	title = strings.TrimSpace(title)
@@ -172,7 +171,7 @@ func (r *PushRule) CheckPRTitle(baseBranch, title string, isDraft bool) error {
 func (r *PushRule) IsBannedFile(filePath string) bool {
 	lpath := strings.ToLower(filePath)
 	for _, g := range r.BannedFileGlobs {
-		if g.Match(lpath) || g.Match(path.Base(lpath)) {
+		if g.MatchString(lpath) || g.MatchString(path.Base(lpath)) {
 			return true
 		}
 	}

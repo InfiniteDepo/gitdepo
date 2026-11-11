@@ -18,6 +18,7 @@ import (
 	user_model "forgejo.org/models/user"
 	webhook_model "forgejo.org/models/webhook"
 	"forgejo.org/modules/git"
+	linearglob "forgejo.org/modules/glob"
 	"forgejo.org/modules/graceful"
 	"forgejo.org/modules/json"
 	"forgejo.org/modules/log"
@@ -30,8 +31,6 @@ import (
 	webhook_module "forgejo.org/modules/webhook"
 	"forgejo.org/services/forms"
 	"forgejo.org/services/webhook/sourcehut"
-
-	"github.com/gobwas/glob"
 )
 
 type Handler interface {
@@ -197,14 +196,14 @@ func checkBranch(w *webhook_model.Webhook, branch string) bool {
 		return true
 	}
 
-	g, err := glob.Compile(w.BranchFilter)
+	g, err := linearglob.CompileExact(w.BranchFilter)
 	if err != nil {
 		// should not really happen as BranchFilter is validated
 		log.Error("CheckBranch failed: %s", err)
 		return false
 	}
 
-	return g.Match(branch)
+	return g.MatchString(branch)
 }
 
 // PrepareWebhook creates a hook task and enqueues it for processing.
