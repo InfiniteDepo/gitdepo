@@ -8,6 +8,7 @@ import (
 	"net/url"
 
 	"forgejo.org/models/db"
+	repo_model "forgejo.org/models/repo"
 	"forgejo.org/modules/timeutil"
 
 	"xorm.io/builder"
@@ -294,11 +295,11 @@ func deploymentsOfCond(ownerID, repoID int64) builder.Cond {
 }
 
 // CountDeployedRepos counts, for each of the organization's environments, the repositories of the organization that
-// have a deployment of it, in one query.
+// have a deployment of it, not counting the ones in the trash, in one query.
 func CountDeployedRepos(ctx context.Context, ownerID int64, environmentIDs []int64) (map[int64]int64, error) {
 	var rows []struct{ EnvironmentID, N int64 }
 	err := db.GetEngine(ctx).Table("action_deployment").Select("environment_id, COUNT(DISTINCT repo_id) AS n").
-		Where(deploymentsOfCond(ownerID, 0)).In("environment_id", environmentIDs).GroupBy("environment_id").Find(&rows)
+		Where(deploymentsOfCond(ownerID, 0)).And(repo_model.NotTrashedCond("repo_id")).In("environment_id", environmentIDs).GroupBy("environment_id").Find(&rows)
 	out := make(map[int64]int64, len(rows))
 	for _, r := range rows {
 		out[r.EnvironmentID] = r.N

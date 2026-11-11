@@ -636,8 +636,8 @@ func environmentError(ctx *context.Context, err error) template.HTML {
 		return ctx.Tr("actions.environments.error.org_limit", actions_model.MaxEnvironments)
 	case errors.Is(err, actions_model.ErrEnvironmentLimit):
 		return ctx.Tr("actions.environments.error.limit", actions_model.MaxEnvironments)
-	case errors.Is(err, actions_model.ErrEnvironmentOpenSecrets):
-		return ctx.Tr("actions.environments.error.open_secrets")
+	case errors.Is(err, actions_model.ErrEnvironmentAllNeedsReviewers):
+		return ctx.Tr("actions.environments.error.all_needs_reviewers")
 	case errors.Is(err, actions_service.ErrTooManyReviewers):
 		return ctx.Tr("actions.environments.error.too_many_reviewers", actions_model.MaxEnvironmentReviewers)
 	case errors.Is(err, actions_service.ErrReviewerNotMember):

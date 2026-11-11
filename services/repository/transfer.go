@@ -213,7 +213,7 @@ func transferOwnership(ctx context.Context, doer *user_model.User, newOwnerName 
 	if err := db.DeleteBeans(ctx, &asymkey_model.OrgDeployKeyRepo{RepoID: repo.ID}); err != nil {
 		return fmt.Errorf("delete org deploy key selections: %w", err)
 	}
-	if err := actions_model.DropEnvironmentRepoSelections(ctx, repo.ID); err != nil {
+	if err := db.DeleteBeans(ctx, &actions_model.ActionEnvironmentRepo{RepoID: repo.ID}); err != nil {
 		return fmt.Errorf("delete environment selections: %w", err)
 	}
 	if err := auth_model.DropOwnedAccessTokensOfTransferredRepo(ctx, repo.ID); err != nil {

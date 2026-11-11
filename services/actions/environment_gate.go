@@ -294,7 +294,13 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 			return behaviourFailJob, nil
 		}
 		if env, err = actions_model.GetEnvironmentOfRepo(ctx, d.RepoID, d.EnvironmentID); errors.Is(err, actions_model.ErrEnvironmentNotFound) {
+			// an organization environment the repository left (selection, transfer) still exists
 			reason = actions_model.DeploymentReasonEnvironmentDeleted
+			if exists, err := db.GetEngine(ctx).Table("action_environment").ID(d.EnvironmentID).Exist(); err != nil {
+				return behaviourError, err
+			} else if exists {
+				reason = actions_model.DeploymentReasonNotAvailable
+			}
 		} else if err != nil {
 			return behaviourError, err
 		}

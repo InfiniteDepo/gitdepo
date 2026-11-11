@@ -107,7 +107,7 @@
 
 				<div class="field">
 					<label for="environment-runner-labels">{{ctx.Locale.Tr "actions.environments.runner_labels"}}</label>
-					<p class="help">{{ctx.Locale.Tr "actions.environments.runner_labels.desc"}}</p>
+					<p class="help">{{if .Repository}}{{ctx.Locale.Tr "actions.environments.runner_labels.desc"}}{{else}}{{ctx.Locale.Tr "actions.environments.runner_labels.org_desc"}}{{end}}</p>
 					<textarea id="environment-runner-labels" name="runner_labels" rows="2">{{.Form.RunnerLabels}}</textarea>
 				</div>
 				<div class="field">

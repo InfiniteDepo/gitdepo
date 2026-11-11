@@ -416,6 +416,14 @@ func TestActionsOrgEnvironments(t *testing.T) {
 			body := owner.MakeRequest(t, NewRequest(t, "GET", fmt.Sprintf("/org3/%s/actions/deployments?environment=production", repoB.Name)), http.StatusOK).Body.String()
 			assert.Contains(t, body, "Production")
 			assert.Contains(t, body, runLink)
+			var apiDeployments []*api.ActionDeployment
+			DecodeJSON(t, MakeRequest(t, NewRequest(t, "GET", fmt.Sprintf("/api/v1/repos/org3/%s/actions/runs/%d/deployments", repoB.Name, run.ID)).AddTokenAuth(ownerToken), http.StatusOK), &apiDeployments)
+			require.NotEmpty(t, apiDeployments)
+			assert.Equal(t, "Production", apiDeployments[0].Environment, "the name of an organization environment is shown")
+			apiDeployments = nil
+			DecodeJSON(t, MakeRequest(t, NewRequest(t, "GET", fmt.Sprintf("/api/v1/repos/org3/%s/actions/deployments", repoB.Name)).AddTokenAuth(ownerToken), http.StatusOK), &apiDeployments)
+			require.NotEmpty(t, apiDeployments)
+			assert.Equal(t, "Production", apiDeployments[0].Environment)
 
 			// the organization's delete dialog says what the deletion does and shows that last deployment
 			doc := NewHTMLParser(t, owner.MakeRequest(t, NewRequest(t, "GET", fmt.Sprintf("%s/%d", orgBase, production.ID)), http.StatusOK).Body)
@@ -439,7 +447,7 @@ func TestActionsOrgEnvironments(t *testing.T) {
 			assert.Equal(t, production.ID, env.ID)
 		})
 
-		t.Run("repository selection: only selected repositories inherit, and all of them only with reviewers while it has secrets", func(t *testing.T) {
+		t.Run("repository selection: only selected repositories inherit, and all of them only with reviewers", func(t *testing.T) {
 			repoC := newOrgRepo("oenv-c", true)
 			since := auditNow()
 			post(owner, orgBase+"/new", url.Values{"name": {"limited"}, "ref_policy": {"0"}, "wait_timer": {"0"}, "scope": {"selected"}, "repo_ids": {strconv.FormatInt(repoC.ID, 10)}}, http.StatusSeeOther)
@@ -449,21 +457,19 @@ func TestActionsOrgEnvironments(t *testing.T) {
 			// a selection of another owner's repository is refused
 			body := post(owner, link, url.Values{"name": {"limited"}, "ref_policy": {"0"}, "wait_timer": {"0"}, "scope": {"selected"}, "repo_ids": {"1"}}, http.StatusOK)
 			assert.Contains(t, body, "Select at most 1000 repositories, each of the organization.")
-			// all repositories without reviewers while it has a secret: refused through the web and the API
+			// all repositories without reviewers: refused through the web and the API, with or without secrets
 			body = post(owner, link, url.Values{"name": {"limited"}, "ref_policy": {"0"}, "wait_timer": {"0"}, "scope": {"all"}}, http.StatusOK)
-			assert.Contains(t, body, "An environment of all repositories that has secrets needs required reviewers")
+			assert.Contains(t, body, "An environment of all repositories needs required reviewers")
+			post(owner, orgBase+"/new", url.Values{"name": {"allnone"}, "ref_policy": {"0"}, "wait_timer": {"0"}, "scope": {"all"}}, http.StatusOK)
+			unittest.AssertNotExistsBean(t, &actions_model.ActionEnvironment{OwnerID: 3, LowerName: "allnone"})
 			resp := MakeRequest(t, NewRequestWithJSON(t, "PUT", apiBase+"/limited", envRules(api.CreateOrUpdateEnvironmentOption{RepositorySelection: "all"})).AddTokenAuth(ownerToken), http.StatusUnprocessableEntity)
 			assert.Contains(t, resp.Body.String(), "needs required reviewers")
 			MakeRequest(t, NewRequestWithJSON(t, "PUT", apiBase+"/limited", envRules(api.CreateOrUpdateEnvironmentOption{Repositories: []string{"oenv-c", "repo1"}})).AddTokenAuth(ownerToken), http.StatusUnprocessableEntity)
 			MakeRequest(t, NewRequestWithJSON(t, "PUT", apiBase+"/limited", envRules(api.CreateOrUpdateEnvironmentOption{RepositorySelection: "some"})).AddTokenAuth(ownerToken), http.StatusUnprocessableEntity)
-			// and a secret added to an environment of all repositories without reviewers
-			MakeRequest(t, NewRequestWithJSON(t, "PUT", apiBase+"/open", envRules(api.CreateOrUpdateEnvironmentOption{RepositorySelection: "all"})).AddTokenAuth(ownerToken), http.StatusCreated)
-			MakeRequest(t, NewRequestWithJSON(t, "PUT", apiBase+"/open/secrets/KEY", api.CreateOrUpdateSecretOption{Data: "x"}).AddTokenAuth(ownerToken), http.StatusBadRequest)
-			post(owner, fmt.Sprintf("%s/%d/secrets", orgBase, orgEnv("open").ID), url.Values{"name": {"KEY"}, "data": {"x"}}, http.StatusBadRequest)
-			unittest.AssertNotExistsBean(t, &secret_model.Secret{EnvironmentID: orgEnv("open").ID})
+			MakeRequest(t, NewRequestWithJSON(t, "PUT", apiBase+"/open", envRules(api.CreateOrUpdateEnvironmentOption{RepositorySelection: "all"})).AddTokenAuth(ownerToken), http.StatusUnprocessableEntity)
 			assert.False(t, unittest.AssertExistsAndLoadBean(t, &actions_model.ActionEnvironment{ID: limited.ID}).ReviewsRequired)
 			assert.False(t, unittest.AssertExistsAndLoadBean(t, &actions_model.ActionEnvironment{ID: limited.ID}).AllRepos)
-			assert.Equal(t, []string{"org.actions_env.created", "org.actions_env_secret.created", "org.actions_env.created"}, auditActions(since, "org.actions_env"))
+			assert.Equal(t, []string{"org.actions_env.created", "org.actions_env_secret.created"}, auditActions(since, "org.actions_env"))
 
 			// the organization's list says which repositories it applies to; the form selects them
 			doc := NewHTMLParser(t, owner.MakeRequest(t, NewRequest(t, "GET", orgBase), http.StatusOK).Body)
@@ -472,7 +478,7 @@ func TestActionsOrgEnvironments(t *testing.T) {
 			doc = NewHTMLParser(t, owner.MakeRequest(t, NewRequest(t, "GET", link), http.StatusOK).Body)
 			assert.Equal(t, strconv.FormatInt(repoC.ID, 10), doc.Find(`#environment-repos input[name="repo_ids"]`).AttrOr("value", ""))
 			assert.Equal(t, 1, doc.Find(fmt.Sprintf(`#environment-repos .item[data-value="%d"]`, repoA.ID)).Length())
-			assert.Contains(t, text(doc, "#environment-repos-all-desc"), "can deploy to it and get ID tokens with its environment claim, unless it requires reviewers")
+			assert.Contains(t, text(doc, "#environment-repos-all-desc"), "can deploy to it and get ID tokens with its environment claim. It needs at least one required reviewer.")
 
 			// a repository it doesn't apply to doesn't list it, can't read it, and a run there is refused
 			body = owner.MakeRequest(t, NewRequest(t, "GET", repoBase), http.StatusOK).Body.String()
@@ -526,7 +532,7 @@ func TestActionsOrgEnvironments(t *testing.T) {
 		})
 
 		t.Run("names are escaped in every view", func(t *testing.T) {
-			require.NoError(t, actions_model.CreateEnvironment(audit_model.WithSystem(ctx, "test"), &actions_model.ActionEnvironment{OwnerID: 3, Name: "<i>x", AllRepos: true}, nil))
+			require.NoError(t, actions_model.CreateEnvironment(audit_model.WithSystem(ctx, "test"), &actions_model.ActionEnvironment{OwnerID: 3, Name: "<i>x", AllRepos: true}, []actions_model.ActionEnvironmentReviewer{{UserID: 4}}))
 			for _, link := range []string{orgBase, repoBase} {
 				body := owner.MakeRequest(t, NewRequest(t, "GET", link), http.StatusOK).Body.String()
 				assert.Contains(t, body, "&lt;i&gt;x", link)

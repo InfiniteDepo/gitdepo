@@ -390,8 +390,8 @@ type CreateOrUpdateEnvironmentOption struct {
 	RunnerLabels []string `json:"runner_labels"`
 	// required: true
 	AllowedWorkflows []string `json:"allowed_workflows"`
-	// required on the organization's routes: "all" repositories of the organization (which needs reviewers while
-	// the environment has secrets), or the "selected" ones; ignored for a repository
+	// required on the organization's routes: "all" repositories of the organization (which needs reviewers),
+	// or the "selected" ones; ignored for a repository
 	// enum: all,selected
 	RepositorySelection string `json:"repository_selection"`
 	// with "selected", the repositories of the organization by their path in it ("project/repo" in a project, else

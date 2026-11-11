@@ -80,8 +80,6 @@ func Failed(ctx *context.Context, what string, err error, msg, tooLarge any) {
 		ctx.JSONError(tooLarge)
 	case errors.Is(err, secret_model.ErrEnvironmentFull):
 		ctx.JSONError(ctx.Tr("actions.environments.full", secret_model.MaxPerEnvironment, secret_model.MaxPerEnvironment))
-	case errors.Is(err, secret_model.ErrEnvironmentOpenSecrets):
-		ctx.JSONError(ctx.Tr("actions.environments.error.open_secrets"))
 	default:
 		log.Error("%s failed: %v", what, err)
 		ctx.JSONError(msg)

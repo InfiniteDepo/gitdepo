@@ -26,7 +26,7 @@ func TestOrgEnvironmentResolution(t *testing.T) {
 	since := auditMax(t)
 
 	prod := &ActionEnvironment{OwnerID: 3, Name: "Production", WaitTimerMinutes: 5, AllRepos: true}
-	require.NoError(t, CreateEnvironment(ctx, prod, nil))
+	require.NoError(t, CreateEnvironment(ctx, prod, []ActionEnvironmentReviewer{{UserID: 4}}))
 	assert.Zero(t, prod.RepoID)
 	require.ErrorIs(t, CreateEnvironment(ctx, &ActionEnvironment{OwnerID: 3, RepoID: 3, Name: "x"}, nil), util.ErrInvalidArgument, "one level only")
 	require.ErrorIs(t, CreateEnvironment(ctx, &ActionEnvironment{OwnerID: 3, Name: "PRODUCTION"}, nil), ErrEnvironmentExists)
@@ -192,7 +192,7 @@ func TestOrgEnvironmentSelection(t *testing.T) {
 	some := &ActionEnvironment{OwnerID: 3, Name: "some", RepoIDs: []int64{5, 3, 5}}
 	require.NoError(t, CreateEnvironment(ctx, some, nil))
 	all := &ActionEnvironment{OwnerID: 3, Name: "all", AllRepos: true, RepoIDs: []int64{3}}
-	require.NoError(t, CreateEnvironment(ctx, all, nil))
+	require.NoError(t, CreateEnvironment(ctx, all, []ActionEnvironmentReviewer{{UserID: 4}}))
 	require.ErrorIs(t, CreateEnvironment(ctx, &ActionEnvironment{OwnerID: 3, Name: "x", RepoIDs: []int64{1}}, nil), util.ErrInvalidArgument, "a repository of another owner")
 	unittest.AssertNotExistsBean(t, &ActionEnvironment{LowerName: "x"})
 
@@ -225,7 +225,7 @@ func TestOrgEnvironmentSelection(t *testing.T) {
 	env, err := GetOrCreateRepoEnvironment(ctx, 32, "some")
 	require.NoError(t, err)
 	assert.Equal(t, some.ID, env.ID)
-	require.NoError(t, DropEnvironmentRepoSelections(ctx, 32))
+	require.NoError(t, db.DeleteBeans(ctx, &ActionEnvironmentRepo{RepoID: 32}))
 	unittest.AssertNotExistsBean(t, &ActionEnvironmentRepo{RepoID: 32})
 
 	var data []map[string]any
@@ -253,7 +253,11 @@ func TestEnvironmentCoversCondForms(t *testing.T) {
 		{OwnerID: 17, Name: "other", AllRepos: true},
 		{RepoID: 3, Name: "own"},
 	} {
-		require.NoError(t, CreateEnvironment(ctx, e, nil), i)
+		var reviewers []ActionEnvironmentReviewer
+		if e.AllRepos {
+			reviewers = []ActionEnvironmentReviewer{{UserID: 4}}
+		}
+		require.NoError(t, CreateEnvironment(ctx, e, reviewers), i)
 		ids = append(ids, e.ID)
 	}
 	// a stray selection of a repository of another owner selects nothing
@@ -283,29 +287,68 @@ func TestEnvironmentCoversCondForms(t *testing.T) {
 	assert.False(t, inJoined[EnvironmentRepo{ids[0], 1}])
 }
 
-// An environment of all repositories never holds secrets without required reviewers, whichever write comes last.
-func TestOrgEnvironmentOpenSecrets(t *testing.T) {
+// An environment of all repositories always has a required reviewer, whichever write comes last.
+func TestOrgEnvironmentAllNeedsReviewers(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	ctx := auditCtx()
 	reviewers := []ActionEnvironmentReviewer{{UserID: 4}}
-	open := &ActionEnvironment{OwnerID: 3, Name: "open", AllRepos: true}
-	require.NoError(t, CreateEnvironment(ctx, open, nil))
-	_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 3, 0, open.ID, "key", "v")
-	require.ErrorIs(t, err, ErrEnvironmentOpenSecrets, "a secret added to it")
-	_, err = InsertEnvironmentVariable(ctx, 3, 0, open.ID, "color", "blue")
-	require.NoError(t, err, "variables are no secrets")
+	require.ErrorIs(t, CreateEnvironment(ctx, &ActionEnvironment{OwnerID: 3, Name: "open", AllRepos: true}, nil), ErrEnvironmentAllNeedsReviewers, "created without reviewers")
+	unittest.AssertNotExistsBean(t, &ActionEnvironment{OwnerID: 3, LowerName: "open"})
 
-	held := &ActionEnvironment{OwnerID: 3, Name: "held", RepoIDs: []int64{3}}
-	require.NoError(t, CreateEnvironment(ctx, held, nil))
-	_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, 3, 0, held.ID, "key", "v")
-	require.NoError(t, err, "selected repositories need no reviewers")
-	held.AllRepos = true
-	require.ErrorIs(t, UpdateEnvironment(ctx, held, nil), ErrEnvironmentOpenSecrets, "switched to all repositories")
-	require.NoError(t, UpdateEnvironment(ctx, held, reviewers), "all repositories with reviewers")
-	require.ErrorIs(t, UpdateEnvironment(ctx, held, nil), ErrEnvironmentOpenSecrets, "its last reviewer removed")
+	held := &ActionEnvironment{OwnerID: 3, Name: "held", AllRepos: true}
+	require.NoError(t, CreateEnvironment(ctx, held, reviewers), "all repositories with reviewers")
+	_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 3, 0, held.ID, "key", "v")
+	require.NoError(t, err, "a secret needs no check of its own")
+	require.ErrorIs(t, UpdateEnvironment(ctx, held, nil), ErrEnvironmentAllNeedsReviewers, "its last reviewer removed")
 	stored := unittest.AssertExistsAndLoadBean(t, &ActionEnvironment{ID: held.ID})
 	assert.True(t, stored.AllRepos)
 	assert.True(t, stored.ReviewsRequired)
-	_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, 3, 0, held.ID, "other", "v")
+
+	limited := &ActionEnvironment{OwnerID: 3, Name: "limited", RepoIDs: []int64{3}}
+	require.NoError(t, CreateEnvironment(ctx, limited, nil), "selected repositories need no reviewers")
+	limited.AllRepos = true
+	require.ErrorIs(t, UpdateEnvironment(ctx, limited, nil), ErrEnvironmentAllNeedsReviewers, "switched to all repositories")
+	require.NoError(t, UpdateEnvironment(ctx, limited, reviewers))
+}
+
+// A repository that was trashed after it was selected stays in the selection and doesn't block other changes; only
+// a newly added one is checked.
+func TestOrgEnvironmentTrashedSelection(t *testing.T) {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	ctx := auditCtx()
+	env := &ActionEnvironment{OwnerID: 3, Name: "trashy", RepoIDs: []int64{3, 5}}
+	require.NoError(t, CreateEnvironment(ctx, env, nil))
+	_, err := db.GetEngine(ctx).Exec("UPDATE repository SET trashed_unix = 1 WHERE id = 5")
+	require.NoError(t, err)
+
+	env.RepoIDs = []int64{3, 5, 32}
+	require.NoError(t, UpdateEnvironment(ctx, env, nil))
+	ids, err := EnvironmentRepoIDs(ctx, []int64{env.ID})
+	require.NoError(t, err)
+	assert.Equal(t, []int64{3, 5, 32}, ids[env.ID])
+
+	_, err = db.GetEngine(ctx).Exec("UPDATE repository SET trashed_unix = 1 WHERE id = 32")
+	require.NoError(t, err)
+	env.RepoIDs = []int64{3, 5, 32, 1}
+	require.Error(t, UpdateEnvironment(ctx, env, nil), "a newly added repository of another owner")
+	_, err = db.GetEngine(ctx).Exec("UPDATE repository SET trashed_unix = 0 WHERE id = 32")
+	require.NoError(t, err)
+	_, err = db.GetEngine(ctx).Exec("UPDATE repository SET trashed_unix = 1 WHERE id = 3")
+	require.NoError(t, err)
+	env.RepoIDs = []int64{5, 32, 3}
+	require.NoError(t, UpdateEnvironment(ctx, env, nil))
+
+	// a trashed repository is covered by no organization environment, in both forms of the rule
+	all := &ActionEnvironment{OwnerID: 3, Name: "everything", AllRepos: true}
+	require.NoError(t, CreateEnvironment(ctx, all, []ActionEnvironmentReviewer{{UserID: 4}}))
+	covered, err := FindEnvironmentRepos(ctx, []int64{all.ID})
+	require.NoError(t, err)
+	for _, r := range covered {
+		assert.NotEqual(t, int64(3), r.RepoID)
+		assert.NotEqual(t, int64(5), r.RepoID)
+	}
+	_, err = ResolveEnvironment(ctx, 5, "everything")
+	require.ErrorIs(t, err, ErrEnvironmentNotFound)
+	_, err = ResolveEnvironment(ctx, 32, "everything")
 	require.NoError(t, err)
 }

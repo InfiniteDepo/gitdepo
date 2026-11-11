@@ -59,9 +59,9 @@ var (
 	// ErrEnvironmentNotAvailable is a name of an organization environment that doesn't apply to the repository (not
 	// selected): a job of the repository can't deploy there, and the repository never gets an environment of that name.
 	ErrEnvironmentNotAvailable = errors.New("the organization environment is not available to this repository")
-	// ErrEnvironmentOpenSecrets refuses an organization environment of every repository that holds secrets without
-	// required reviewers: any repository, also one created later, would get them.
-	ErrEnvironmentOpenSecrets = secret_model.ErrEnvironmentOpenSecrets
+	// ErrEnvironmentAllNeedsReviewers refuses an organization environment of every repository without required
+	// reviewers: any repository, also one created later, could deploy to it.
+	ErrEnvironmentAllNeedsReviewers = util.NewInvalidArgumentErrorf("an environment of every repository of the organization needs required reviewers")
 )
 
 // ErrEnvironmentUsedByRepos refuses an organization environment named like an environment that N repositories of
@@ -367,18 +367,22 @@ func EnvironmentsOfRepoCond(repoID int64) builder.Cond {
 
 // EnvironmentCoversCond matches the organization environments that apply to the repository repoID, or, with repoID 0,
 // to the joined repository row: one of the organization that owns it now (read when the query runs, so a transfer
-// needs no sync) that has AllRepos or selects it. The owner condition is part of it, so a selection can never reach
+// needs no sync, and not in the trash) that has AllRepos or selects it. The owner condition is part of it, so a selection can never reach
 // a repository of another owner.
 func EnvironmentCoversCond(repoID int64) builder.Cond {
 	owner, selected := builder.Expr("action_environment.owner_id = repository.owner_id"), builder.Expr("action_environment_repo.repo_id = repository.id")
 	if repoID != 0 {
-		owner = builder.Expr("action_environment.owner_id = (SELECT owner_id FROM repository WHERE repository.id = ?)", repoID)
+		owner = builder.Expr("action_environment.owner_id = (SELECT owner_id FROM repository WHERE repository.id = ? AND repository.trashed_unix = 0)", repoID)
 		selected = builder.Eq{"action_environment_repo.repo_id": repoID}
 	}
-	return builder.Eq{"action_environment.repo_id": 0}.And(owner, builder.Or(
+	cond := builder.Eq{"action_environment.repo_id": 0}.And(owner, builder.Or(
 		builder.Eq{"action_environment.all_repos": true},
 		builder.In("action_environment.id", builder.Select("action_environment_repo.environment_id").From("action_environment_repo").Where(selected)),
 	))
+	if repoID == 0 { // the joined form; the bound form checks the trash in its owner subquery
+		cond = cond.And(builder.Eq{"repository.trashed_unix": 0})
+	}
+	return cond
 }
 
 // EnvironmentRepo is an organization environment and a repository it applies to.
@@ -395,7 +399,7 @@ func FindEnvironmentRepos(ctx context.Context, envIDs []int64) ([]EnvironmentRep
 	}
 	return rows, db.GetEngine(ctx).Table("action_environment").Select("action_environment.id AS environment_id, repository.id AS repo_id").
 		Join("INNER", "repository", EnvironmentCoversCond(0)).In("action_environment.id", envIDs).
-		And("repository.trashed_unix = 0").OrderBy("action_environment.id, repository.id").Find(&rows)
+		OrderBy("action_environment.id, repository.id").Find(&rows)
 }
 
 // EnvironmentRepoIDs returns the selected repositories of each of the environments.
@@ -413,17 +417,28 @@ func EnvironmentRepoIDs(ctx context.Context, envIDs []int64) (map[int64][]int64,
 }
 
 // setEnvironmentRepos makes e.RepoIDs the selection of the organization environment e (none with AllRepos): every
-// one must be a repository of the organization, not in the trash. Call it in the transaction of the write, after the
-// lock of the environment.
+// one it doesn't select yet must be a repository of the organization, not in the trash (a stored one stays, also when
+// it has been trashed since, like a stored reviewer). Call it in the transaction of the write, after the lock of the
+// environment.
 func setEnvironmentRepos(ctx context.Context, e *ActionEnvironment) error {
 	if e.RepoID != 0 {
 		return nil
 	}
-	if len(e.RepoIDs) > 0 {
-		n, err := db.GetEngine(ctx).Table("repository").In("id", e.RepoIDs).And("owner_id = ? AND trashed_unix = 0", e.OwnerID).Count()
+	stored, err := EnvironmentRepoIDs(ctx, []int64{e.ID})
+	if err != nil {
+		return err
+	}
+	var added []int64
+	for _, id := range e.RepoIDs {
+		if !slices.Contains(stored[e.ID], id) {
+			added = append(added, id)
+		}
+	}
+	if len(added) > 0 {
+		n, err := db.GetEngine(ctx).Table("repository").In("id", added).And("owner_id = ? AND trashed_unix = 0", e.OwnerID).Count()
 		if err != nil {
 			return err
-		} else if n != int64(len(e.RepoIDs)) {
+		} else if n != int64(len(added)) {
 			return ruleError("repositories", "", "a selected repository is not a repository of the organization")
 		}
 	}
@@ -438,13 +453,6 @@ func setEnvironmentRepos(ctx context.Context, e *ActionEnvironment) error {
 		rows[i] = &ActionEnvironmentRepo{EnvironmentID: e.ID, RepoID: id}
 	}
 	return db.Insert(ctx, rows)
-}
-
-// DropEnvironmentRepoSelections removes the repository from the selections of organization environments: it leaves
-// the organization (transfer) or is deleted.
-func DropEnvironmentRepoSelections(ctx context.Context, repoID int64) error {
-	_, err := db.GetEngine(ctx).Where("repo_id = ?", repoID).Delete(new(ActionEnvironmentRepo))
-	return err
 }
 
 // lockOwner takes the row lock of the user or organization (a no-op UPDATE), which both levels of environments take
@@ -522,12 +530,17 @@ func RefuseTwinsOnTransfer(ctx context.Context, repoID, newOwnerID int64) error 
 	if err := lockOwner(ctx, newOwnerID); err != nil {
 		return err
 	}
-	twin, err := lockedExist(lockingRead(ctx, "action_environment").Where(scopeCond(0, repoID)).And(builder.In("lower_name",
-		builder.Select("lower_name").From("action_environment").Where(scopeCond(newOwnerID, 0)))))
+	twin, err := hasTwinOnTransfer(ctx, repoID, newOwnerID)
 	if err == nil && twin {
 		err = ErrEnvironmentTwin
 	}
 	return err
+}
+
+// hasTwinOnTransfer is one locking self-join: a subquery for the organization's names would be a snapshot read on MySQL.
+func hasTwinOnTransfer(ctx context.Context, repoID, newOwnerID int64) (bool, error) {
+	return lockedExist(lockingRead(ctx, "action_environment").Join("INNER", "action_environment AS org_env", "org_env.lower_name = action_environment.lower_name").
+		Where(builder.Eq{"action_environment.owner_id": 0, "action_environment.repo_id": repoID, "org_env.owner_id": newOwnerID, "org_env.repo_id": 0}))
 }
 
 // createEnvironment inserts e; with auto, an environment that already exists, or a name the organization has, is no
@@ -544,6 +557,9 @@ func createEnvironment(ctx context.Context, e *ActionEnvironment, auto bool, rev
 		return err
 	}
 	e.ReviewsRequired, e.CreatedByWorkflow = len(keys) > 0, auto
+	if err := refuseAllWithoutReviewers(e); err != nil {
+		return err
+	}
 	// The cap is checked before the insert, so concurrent creations can pass it together by a few. The refusals are
 	// returned outside the transaction below: an error from a nested transaction rolls the caller's back.
 	if n, err := db.GetEngine(ctx).Where(scopeCond(e.OwnerID, e.RepoID)).Count(new(ActionEnvironment)); err != nil {
@@ -722,7 +738,7 @@ func UpdateEnvironment(ctx context.Context, e *ActionEnvironment, reviewers []Ac
 			return err
 		}
 		stored.RepoIDs = repoIDs[stored.ID]
-		if err := refuseOpenSecrets(ctx, e); err != nil {
+		if err := refuseAllWithoutReviewers(e); err != nil {
 			return err
 		}
 		old, now := stored.auditData(), e.auditData()
@@ -752,18 +768,13 @@ func UpdateEnvironment(ctx context.Context, e *ActionEnvironment, reviewers []Ac
 	})
 }
 
-// refuseOpenSecrets refuses rules that make an organization environment with secrets apply to every repository
-// without required reviewers (ErrEnvironmentOpenSecrets). Call it after the lock of the environment, which every
-// insert of a secret takes too (and checks the same rule).
-func refuseOpenSecrets(ctx context.Context, e *ActionEnvironment) error {
-	if !e.AllRepos || e.ReviewsRequired {
-		return nil
+// refuseAllWithoutReviewers refuses rules that make an organization environment apply to every repository without
+// required reviewers (ErrEnvironmentAllNeedsReviewers). UpdateEnvironment calls it after the lock of the environment.
+func refuseAllWithoutReviewers(e *ActionEnvironment) error {
+	if e.AllRepos && !e.ReviewsRequired {
+		return ErrEnvironmentAllNeedsReviewers
 	}
-	has, err := db.GetEngine(ctx).Table("secret").Where(scopeCond(e.OwnerID, 0)).And("environment_id = ?", e.ID).Exist()
-	if err == nil && has {
-		err = ErrEnvironmentOpenSecrets
-	}
-	return err
+	return nil
 }
 
 // LockEnvironment takes the row lock of the environment (a no-op UPDATE: a write lock on SQLite, a row lock elsewhere)

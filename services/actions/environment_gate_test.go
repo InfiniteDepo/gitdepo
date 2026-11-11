@@ -517,6 +517,28 @@ func TestGateEnvironment(t *testing.T) {
 		assert.Equal(t, actions_model.DeploymentReasonEnvironmentDeleted, deploymentOf(t, job).Reason)
 	})
 
+	t.Run("a repository that left the selection of an organization environment is refused as not available", func(t *testing.T) {
+		require.NoError(t, unittest.PrepareTestDatabase())
+		_, err := db.GetEngine(t.Context()).Exec("UPDATE repository SET owner_id = 3 WHERE id = 63")
+		require.NoError(t, err)
+		repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 63})
+		other := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 3, OwnerID: 3})
+		env := &actions_model.ActionEnvironment{OwnerID: repo.OwnerID, Name: "slow", WaitTimerMinutes: 5, RepoIDs: []int64{repo.ID}}
+		require.NoError(t, actions_model.CreateEnvironment(audit_model.WithSystem(t.Context(), "test"), env, nil))
+		job := gateJob(t, envWorkflow("    environment: slow\n"), "refs/heads/main")
+		b, err := gateEnvironment(t.Context(), job)
+		require.NoError(t, err)
+		require.Equal(t, behaviourHoldJob, b)
+		env.RepoIDs = []int64{other.ID}
+		require.NoError(t, actions_model.UpdateEnvironment(audit_model.WithSystem(t.Context(), "test"), env, nil))
+		timeutil.MockSet(time.Now().Add(time.Hour))
+		defer timeutil.MockUnset()
+		b, err = gateEnvironment(t.Context(), job)
+		require.NoError(t, err)
+		assert.Equal(t, behaviourFailJob, b)
+		assert.Equal(t, actions_model.DeploymentReasonNotAvailable, deploymentOf(t, job).Reason)
+	})
+
 	t.Run("a cancelled deployment keeps the job blocked", func(t *testing.T) {
 		require.NoError(t, unittest.PrepareTestDatabase())
 		newEnvironment(t, &actions_model.ActionEnvironment{Name: "slow", WaitTimerMinutes: 5})
