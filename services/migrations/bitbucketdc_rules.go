@@ -23,6 +23,7 @@ import (
 	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
 	webhook_model "forgejo.org/models/webhook"
+	linearglob "forgejo.org/modules/glob"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/util"
 	"forgejo.org/modules/validation"
@@ -166,7 +167,7 @@ func (p *bitbucketPlanner) planRules(owner *BitbucketImportItem, endpoint string
 			}
 			continue
 		}
-		if _, err := glob.Compile(name, '/'); err != nil || strings.ContainsFunc(r.Matcher.ID, unicode.IsControl) {
+		if _, err := linearglob.CompileExact(name, '/'); err != nil || strings.ContainsFunc(r.Matcher.ID, unicode.IsControl) {
 			p.add(item, BitbucketConflict, "the pattern doesn't translate")
 			continue
 		}

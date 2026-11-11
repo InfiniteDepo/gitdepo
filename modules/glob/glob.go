@@ -1,9 +1,19 @@
 // Copyright 2026 The gitdepo contributors. All rights reserved.
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Package glob matches glob patterns in linear time. A pattern means what it means to github.com/gobwas/glob,
-// whose parser it uses, except that `**` as a whole path segment also matches no directory, but it is matched by a Go regular expression (RE2), whose time grows linearly with the
-// name, where gobwas tries every split of the name between the wildcards.
+// Package glob matches glob patterns in linear time: a pattern is compiled to a Go regular expression (RE2), whose
+// time grows linearly with the name. Patterns are matched against the whole name, case-sensitively.
+//
+// Pattern syntax, which is the one users see for branch protection rules and branch-name exceptions (CompileExact):
+//   - `*` matches any run of characters except the separator (`/`), `?` one such character.
+//   - `**` matches any run of characters, separators included. As a whole path segment it needs the segments around
+//     it: `**/x` matches `a/x` but not `x`, and `a/**/b` matches `a/x/b`. A trailing `/**` matches everything below.
+//   - `[abc]` and `[a-c]` match one character in the set, `[!abc]` one character not in it.
+//   - `{a,b}` matches either alternative, which may hold other patterns; `{}` matches nothing.
+//   - `\c` matches the character c, so `\*` is a literal star.
+//
+// Compile differs in one rule, kept for the approval-rule patterns: `**` as a whole path segment also matches no
+// directory, so `**/x` matches `x` and `a/**/b` matches `a/b`.
 package glob
 
 import (
