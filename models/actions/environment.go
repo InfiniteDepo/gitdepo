@@ -466,6 +466,13 @@ func lockingRead(ctx context.Context, table string) *xorm.Session {
 	return sess
 }
 
+// lockedExist reports whether a lockingRead of action_environment finds a row. xorm's Exist drops ForUpdate, so it
+// reads one ID with Get, which keeps it.
+func lockedExist(sess *xorm.Session) (bool, error) {
+	var id int64
+	return sess.Cols("action_environment.id").Limit(1).Get(&id)
+}
+
 // refuseTwin refuses a name that would twin with the other level: a repository environment named like one of the
 // organization that owns the repository, whether or not it applies to the repository (ErrEnvironmentTakenByOrg), an
 // organization environment named like one that repositories of the organization have (ErrEnvironmentUsedByRepos,
@@ -486,18 +493,19 @@ func refuseTwin(ctx context.Context, e *ActionEnvironment) error {
 		return err
 	}
 	if e.RepoID != 0 {
-		taken, err := lockingRead(ctx, "action_environment").Where(scopeCond(ownerID, 0)).And("lower_name = ?", e.LowerName).Exist()
+		taken, err := lockedExist(lockingRead(ctx, "action_environment").Where(scopeCond(ownerID, 0)).And("lower_name = ?", e.LowerName))
 		if err == nil && taken {
 			err = ErrEnvironmentTakenByOrg
 		}
 		return err
 	}
 	used := builder.Eq{"action_environment.owner_id": 0, "action_environment.lower_name": e.LowerName, "repository.owner_id": e.OwnerID}
-	n, err := db.GetEngine(ctx).Table("action_environment").Join("INNER", "repository", "repository.id = action_environment.repo_id").Where(used).Count()
-	if err != nil || n == 0 {
+	var ids []int64 // a locking read; Count would drop ForUpdate (and PostgreSQL refuses FOR UPDATE with an aggregate)
+	if err := lockingRead(ctx, "action_environment").Join("INNER", "repository", "repository.id = action_environment.repo_id").
+		Where(used).Cols("action_environment.id").Find(&ids); err != nil || len(ids) == 0 {
 		return err
 	}
-	refusal := ErrEnvironmentUsedByRepos{N: n}
+	refusal := ErrEnvironmentUsedByRepos{N: int64(len(ids))}
 	if err := db.GetEngine(ctx).Table("repository").Join("INNER", "action_environment", "repository.id = action_environment.repo_id").
 		Where(used).Cols("repository.id", "repository.name", "repository.group_id", "repository.group_name", "repository.trashed_unix").
 		OrderBy("repository.lower_name").Limit(5).Find(&refusal.Repos); err != nil {
@@ -514,8 +522,8 @@ func RefuseTwinsOnTransfer(ctx context.Context, repoID, newOwnerID int64) error 
 	if err := lockOwner(ctx, newOwnerID); err != nil {
 		return err
 	}
-	twin, err := lockingRead(ctx, "action_environment").Where(scopeCond(0, repoID)).And(builder.In("lower_name",
-		builder.Select("lower_name").From("action_environment").Where(scopeCond(newOwnerID, 0)))).Exist()
+	twin, err := lockedExist(lockingRead(ctx, "action_environment").Where(scopeCond(0, repoID)).And(builder.In("lower_name",
+		builder.Select("lower_name").From("action_environment").Where(scopeCond(newOwnerID, 0)))))
 	if err == nil && twin {
 		err = ErrEnvironmentTwin
 	}
