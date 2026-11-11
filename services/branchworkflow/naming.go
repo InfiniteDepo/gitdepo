@@ -208,7 +208,8 @@ func namingAllows(repo *repo_model.Repository, e EffectiveModel, name string) bo
 	if name == repo.DefaultBranch || name == e.DevelopmentBranch(repo) || name == m.ProductionBranch || name == m.DefaultPRTarget {
 		return true
 	}
-	if _, ok := MatchType(m, name); ok {
+	// MatchType counts a name equal to a prefix as typed (a kept release branch), but a new name needs more after it
+	if t, ok := MatchType(m, name); ok && len(name) > len(t.Prefix) {
 		return true
 	}
 	if slices.ContainsFunc(m.Types, func(t repo_model.BranchType) bool {
