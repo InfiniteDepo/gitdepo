@@ -38,6 +38,8 @@ test('Branches page: selection banner, confirm list and typed confirmation', asy
     await expect(selectAll).toBeHidden(); // all 12 matching are already selected
     await boxes.first().uncheck();
     await expect(count).toHaveText('11 selected');
+    await expect(page.locator('#branch-select-page')).toHaveJSProperty('indeterminate', true);
+    await expect(page.locator('#branch-filter-stale')).toHaveCSS('border-top-width', '1px'); // filter inputs are styled
     await expect(selectAll).toHaveText('Select all 12 matching');
     await selectAll.click();
     await expect(count).toHaveText('All 12 matching branches selected');
@@ -50,6 +52,7 @@ test('Branches page: selection banner, confirm list and typed confirmation', asy
     await expect(modal.locator('#delete-selected-title')).toHaveText('Delete 12 branches?');
     await expect(modal.locator('#delete-selected-list li')).toHaveCount(12);
     await expect(modal.locator('#delete-selected-cap')).toBeHidden();
+    await expect(modal.locator('form #delete-selected-cap')).toHaveCount(0); // Fomantic hides a warning message inside a form
     const ok = modal.locator('#delete-selected-ok');
     await expect(ok).toHaveText('Delete 12 branches');
     await expect(ok).toBeDisabled();
@@ -73,7 +76,7 @@ test('Branches page: selection banner, confirm list and typed confirmation', asy
     await expect(ok).toBeEnabled();
     await ok.click();
 
-    await expect(page.locator('.flash-success')).toContainText('2 branches deleted.');
+    await expect(page.locator('.flash-success')).toContainText('2 branches deleted (');
     await expect(page.locator('.flash-success').getByRole('link', {name: 'Show deleted branches'})).toBeVisible();
     await page.goto(`/user2/repo1/branches?q=${prefix}&state=merged`);
     await expect(page.locator('input.branch-select')).toHaveCount(10);

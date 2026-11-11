@@ -1277,6 +1277,52 @@ citation-information .tab:not(.active) {
   background: var(--color-box-body);
 }
 
+.repository.branches .branch-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1.5rem;
+}
+
+.repository.branches .branch-filter-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.repository.branches .branch-filter-group label {
+  white-space: nowrap;
+}
+
+.repository.branches .branch-filter-group input:not([type="checkbox"]),
+.repository.branches .branch-filter-group select {
+  background: var(--color-input-background);
+  color: var(--color-input-text);
+  border: 1px solid var(--color-input-border);
+  border-radius: var(--border-radius);
+  padding: 0.5rem 0.75rem;
+  min-width: 0;
+}
+
+.repository.branches tr.branch-kept {
+  color: var(--color-text-light-2);
+}
+
+.repository.branches .branch-select-cell {
+  width: 2.5rem;
+}
+
+@media (max-width: 767.98px) {
+  .repository.branches .branch-filter-group {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+  }
+  .repository.branches .branch-filter-group input:not([type="checkbox"]),
+  .repository.branches .branch-filter-group select {
+    flex: 1 1 8rem;
+  }
+}
+
 .repository.branches .branch-select-cell input,
 .repository.branches .branch-bulk-bar input[type="checkbox"] {
   width: 16px;
@@ -1284,6 +1330,9 @@ citation-information .tab:not(.active) {
 }
 
 .branch-delete-list {
+  border: 1px solid var(--color-secondary);
+  border-radius: var(--border-radius);
+  padding-block: 0.5rem;
   max-height: 40vh;
   overflow-block: auto;
   margin: 0.5rem 0;

@@ -126,7 +126,7 @@ func TestBranchesBulkDeleteWeb(t *testing.T) {
 			resp := s.MakeRequest(t, NewRequest(t, "GET", link+"/branches?state=merged"), http.StatusOK)
 			doc := NewHTMLParser(t, resp.Body)
 			doc.AssertElement(t, "#branch-bulk-bar", true)
-			assert.Equal(t, strconv.Itoa(7), doc.doc.Find("#branch-bulk-bar").AttrOr("data-total", ""))
+			assert.Equal(t, strconv.Itoa(5), doc.doc.Find("#branch-bulk-bar").AttrOr("data-total", ""))
 			disabled := map[string]string{}
 			doc.doc.Find("input.branch-select").Each(func(_ int, in *goquery.Selection) {
 				if _, ok := in.Attr("disabled"); ok {
@@ -166,7 +166,7 @@ func TestBranchesBulkDeleteWeb(t *testing.T) {
 			// a protected branch, an open pull request's branch and a missing one are refused one by one; the rest goes
 			bkPost(t, s, link, "", bkTip(t, repo, "m-a")+":m-a", bkTip(t, repo, "prot-merged")+":prot-merged", bkTip(t, repo, "pr-base")+":pr-base", ":ghost")
 			flash := bwFlash(s)
-			assert.Contains(t, flash, "1 branch deleted.")
+			assert.Contains(t, flash, "1 branch deleted (")
 			assert.Contains(t, flash, "Show deleted branches")
 			assert.Contains(t, flash, "3 branches were kept")
 			assert.Contains(t, flash, "prot-merged: protected by a branch rule")
@@ -263,7 +263,7 @@ func TestBranchesBulkDeleteCap(t *testing.T) {
 
 		since := auditMaxID(t)
 		bkPost(t, s, link, "ORG3/bk-cap", posted...)
-		assert.Contains(t, bwFlash(s), "200 branches deleted.")
+		assert.Contains(t, bwFlash(s), "200 branches deleted (")
 		assert.Len(t, dmBranches(t, repo), 7)
 		e := repoOne(t, since, "repo.branches.bulk_deleted", repo)
 		assert.Equal(t, map[string]any{"deleted": float64(200), "kept": float64(0)}, auditData(t, e)["counts"])

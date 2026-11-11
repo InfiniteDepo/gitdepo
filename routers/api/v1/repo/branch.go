@@ -15,13 +15,13 @@ import (
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/git"
 	"forgejo.org/modules/gitrepo"
-	"forgejo.org/modules/log"
 	"forgejo.org/modules/optional"
 	repo_module "forgejo.org/modules/repository"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
 	"forgejo.org/routers/api/v1/utils"
+	"forgejo.org/routers/common"
 	"forgejo.org/services/branchworkflow"
 	"forgejo.org/services/context"
 	"forgejo.org/services/convert"
@@ -247,10 +247,13 @@ func DeleteBranches(ctx *context.APIContext) {
 	} else {
 		filter := repo_service.BranchFilter{
 			Keyword: opt.Keyword, Type: opt.Type, Untyped: opt.Untyped, State: opt.Merged, Into: opt.MergedInto,
-			StaleDays: opt.StaleDays, PushedBy: opt.PushedBy,
+			StaleDays: opt.StaleDays, PushedBy: opt.PushedBy, Viewer: ctx.Doer(),
 		}
 		if !filter.IsSet() && filter.Type == "" && !filter.Untyped {
 			ctx.Error(http.StatusUnprocessableEntity, "", "name the branches or give a filter")
+			return
+		}
+		if !common.ChargeHeavyAPI(ctx) { // a filter walks the history and reads every branch row
 			return
 		}
 		model, err := branchworkflow.GetEffectiveModel(ctx, repo)
@@ -276,12 +279,12 @@ func DeleteBranches(ctx *context.APIContext) {
 	}
 
 	results, err := repo_service.DeleteSelectedBranches(ctx, ctx.Doer(), repo, ctx.Repo().GitRepo, selected)
-	if err != nil {
-		if results == nil {
-			ctx.Error(http.StatusInternalServerError, "DeleteSelectedBranches", err)
-			return
-		}
-		log.Error("DeleteBranches: %-v: %v", repo, err) // the branches are deleted and audited one by one; only the summary failed
+	if errors.Is(err, util.ErrPermissionDenied) {
+		ctx.Error(http.StatusForbidden, "", err)
+		return
+	} else if err != nil { // the branches are deleted and audited one by one; the summary entry failed: the request fails
+		ctx.Error(http.StatusInternalServerError, "DeleteSelectedBranches", err)
+		return
 	}
 	res := api.DeleteBranchesResult{Deleted: []string{}, Kept: []api.KeptBranch{}, More: more}
 	for _, r := range results {

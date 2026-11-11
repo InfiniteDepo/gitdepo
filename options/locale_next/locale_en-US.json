@@ -2341,6 +2341,7 @@
 	"admin.audit.action.repo.units.changed": "Changed the units of repository %s",
 	"admin.audit.action.repo.mirror.updated": "Changed the mirror settings of repository %s",
 	"admin.audit.action.repo.branch.deleted": "Deleted branch %s",
+	"admin.audit.action.repo.branch.restored": "Restored deleted branch %s",
 	"admin.audit.action.repo.branch.merged_forward": "Merged forward into branch %s",
 	"admin.audit.action.repo.branch.merge_forward_stopped": "Stopped merging forward into branch %s",
 	"admin.audit.action.repo.branch.merge_forward_skipped": "Merged into branch %s without merging forward",
@@ -4636,10 +4637,12 @@
 	"repo.branch.bulk.confirm_mismatch": "Nothing was deleted: the name you typed doesn't match.",
 	"repo.branch.bulk.nothing_deleted": "Nothing was deleted.",
 	"repo.branch.bulk.done": {
-		"one": "%d branch deleted. %s %s",
-		"other": "%d branches deleted. %s %s"
+		"one": "%d branch deleted (%s). %s",
+		"other": "%d branches deleted (%s). %s"
 	},
 	"repo.branch.bulk.show_deleted": "Show deleted branches",
+	"repo.branch.bulk.show_deleted_first": "Show deleted branches, the first %d are selected",
+	"repo.branch.restore_until": "Can be restored until %s",
 	"repo.branch.bulk.kept": {
 		"one": "%d branch was kept: %s.",
 		"other": "%d branches were kept: %s."
@@ -4653,6 +4656,10 @@
 		"one": "%d branch could not be restored: %s.",
 		"other": "%d branches could not be restored: %s."
 	},
+	"repo.branch.bulk.restore_reason.failed": "could not be restored",
+	"repo.branch.bulk.restore_reason.already_exists": "a branch with this name exists",
+	"repo.branch.bulk.restore_reason.type_required": "the branching model requires a branch type this name lacks",
+	"repo.branch.bulk.cap_more": "Only the first %d were deleted. Run it again for the rest.",
 	"repo.branch.bulk.reason.default": "default branch",
 	"repo.branch.bulk.reason.development": "development branch of the branching model",
 	"repo.branch.bulk.reason.production": "production branch of the branching model",

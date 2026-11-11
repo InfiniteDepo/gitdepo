@@ -164,6 +164,7 @@ export function initRepoBranchBulk() {
     }
     const all = boxes();
     master.checked = all.length > 0 && all.every((box) => box.checked);
+    master.indeterminate = !master.checked && all.some((box) => box.checked);
   };
   const setAll = (checked: boolean) => {
     for (const box of boxes()) box.checked = checked;
@@ -229,7 +230,14 @@ export function initRepoBranchBulk() {
     }
     items ??= [];
     listed = items.length;
-    for (const input of form.querySelectorAll('input[name="branch"]')) input.remove();
+    for (const input of form.querySelectorAll('input[name="branch"], input[name="more"]')) input.remove();
+    if (deletable > items.length) {
+      const more = document.createElement('input');
+      more.type = 'hidden';
+      more.name = 'more';
+      more.value = '1';
+      form.append(more);
+    }
     list.textContent = '';
     for (const item of items) {
       const li = document.createElement('li');

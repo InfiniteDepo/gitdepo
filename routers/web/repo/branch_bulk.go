@@ -4,6 +4,7 @@
 package repo
 
 import (
+	"errors"
 	"fmt"
 	"html"
 	"html/template"
@@ -12,14 +13,15 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
-	"forgejo.org/models/db"
-	git_model "forgejo.org/models/git"
-	"forgejo.org/modules/optional"
+	"forgejo.org/modules/timeutil"
 	"forgejo.org/modules/translation"
+	"forgejo.org/modules/util"
 	"forgejo.org/routers/common"
 	"forgejo.org/services/branchworkflow"
 	"forgejo.org/services/context"
+	"forgejo.org/services/cron"
 	repo_service "forgejo.org/services/repository"
 )
 
@@ -43,6 +45,7 @@ func branchFilterFromForm(ctx *context.Context) (repo_service.BranchFilter, bool
 		Into:     ctx.FormString("into"),
 		PushedBy: strings.TrimSpace(ctx.FormString("pusher")),
 		Deleted:  ctx.FormBool("deleted"),
+		Viewer:   ctx.Doer,
 	}
 	if s := ctx.FormString("stale"); s != "" {
 		f.StaleDays, _ = strconv.Atoi(s)
@@ -91,7 +94,7 @@ func branchQueryOf(ctx *context.Context, f repo_service.BranchFilter, model bran
 }
 
 // prepareBranchBulk sets what the writer's selection controls need: the kept reason of each listed branch, the
-// number of live branches that match the filters, the limits and the names to tick.
+// number of live branches that match the filters and may be deleted, the limits and the names to tick.
 func prepareBranchBulk(ctx *context.Context, f repo_service.BranchFilter, q repo_service.BranchQuery, model branchworkflow.EffectiveModel, branches []*repo_service.Branch) bool {
 	repo := ctx.Repo.Repository
 	ctx.Data["BranchDevelopment"] = model.DevelopmentBranch(repo)
@@ -104,6 +107,8 @@ func prepareBranchBulk(ctx *context.Context, f repo_service.BranchFilter, q repo
 		selected[n] = true
 	}
 	ctx.Data["SelectedNames"] = selected
+	ctx.Data["KeptTexts"] = map[string]string{}
+	ctx.Data["RestoreUntil"] = map[int64]timeutil.TimeStamp{}
 	if !ctx.Data["IsWriter"].(bool) || repo.IsArchived || repo.IsMirror {
 		return true
 	}
@@ -112,6 +117,15 @@ func prepareBranchBulk(ctx *context.Context, f repo_service.BranchFilter, q repo
 	ctx.Data["BulkConfirmAbove"] = bulkConfirmAbove
 	ctx.Data["BulkConfirmName"] = repo.FullName()
 	if f.Deleted {
+		if hours, ok := cron.DeletedBranchRestoreWindow(); ok && hours > 0 {
+			until := map[int64]timeutil.TimeStamp{}
+			for _, b := range branches {
+				if b.DBBranch.IsDeleted {
+					until[b.DBBranch.ID] = b.DBBranch.DeletedUnix.AddDuration(time.Duration(hours) * time.Hour)
+				}
+			}
+			ctx.Data["RestoreUntil"] = until
+		}
 		return true
 	}
 	kept, err := branchworkflow.NewKeptChecker(ctx, repo, true)
@@ -126,13 +140,13 @@ func prepareBranchBulk(ctx *context.Context, f repo_service.BranchFilter, q repo
 		}
 	}
 	ctx.Data["KeptTexts"] = texts
-	total, err := db.Count[git_model.Branch](ctx, git_model.FindBranchOptions{
-		RepoID: repo.ID, IsDeletedBranch: optional.Some(false), Keyword: q.Keyword, Cond: q.Cond, ExcludeBranchNames: []string{repo.DefaultBranch},
-	})
+	// the branches "select all matching" would delete: kept ones are not counted, so banner, button and dialog agree
+	found, err := repo_service.FindDeletableBranches(ctx, repo, q, 0)
 	if err != nil {
-		ctx.ServerError("Count", err)
+		ctx.ServerError("FindDeletableBranches", err)
 		return false
 	}
+	total := found.Total
 	ctx.Data["BranchMatchingTotal"] = total
 	return true
 }
@@ -166,6 +180,17 @@ func branchReasonText(locale translation.Locale, code string) string {
 	return locale.TrString("repo.branch.bulk.reason.error")
 }
 
+// restoreReasonText says in words why a restore was refused; the codes are a closed set.
+func restoreReasonText(locale translation.Locale, code string) string {
+	switch code {
+	case restoreAlreadyExists:
+		return locale.TrString("repo.branch.bulk.restore_reason.already_exists")
+	case restoreTypeRequired:
+		return locale.TrString("repo.branch.bulk.restore_reason.type_required")
+	}
+	return locale.TrString("repo.branch.bulk.restore_reason.failed")
+}
+
 // DeleteSelectedBranchesPreview answers, as JSON, exactly which branches "select all matching" would delete now: at
 // most MaxDeleteMergedBranches, with how many there are in all and how many matching branches are kept.
 func DeleteSelectedBranchesPreview(ctx *context.Context) {
@@ -183,7 +208,10 @@ func DeleteSelectedBranchesPreview(ctx *context.Context) {
 		return
 	}
 	found, err := repo_service.FindDeletableBranches(ctx, ctx.Repo.Repository, q, repo_service.MaxDeleteMergedBranches)
-	if err != nil {
+	if errors.Is(err, util.ErrInvalidArgument) {
+		ctx.Error(http.StatusUnprocessableEntity, err.Error())
+		return
+	} else if err != nil {
 		ctx.ServerError("FindDeletableBranches", err)
 		return
 	}
@@ -221,7 +249,10 @@ func DeleteSelectedBranchesPost(ctx *context.Context) {
 	}
 	selected = slices.DeleteFunc(selected, func(b repo_service.SelectedBranch) bool { return !slices.Contains(names, b.Name) })
 	results, err := repo_service.DeleteSelectedBranches(ctx, ctx.Doer, ctx.Repo.Repository, ctx.Repo.GitRepo, selected)
-	if err != nil && results == nil {
+	if errors.Is(err, util.ErrPermissionDenied) {
+		ctx.Error(http.StatusForbidden)
+		return
+	} else if err != nil { // the branches are deleted and audited one by one; the summary entry failed: the request fails
 		ctx.ServerError("DeleteSelectedBranches", err)
 		return
 	}
@@ -236,9 +267,16 @@ func DeleteSelectedBranchesPost(ctx *context.Context) {
 	}
 	if len(deleted) > 0 {
 		link := url.Values{"deleted": {"1"}, "selected": deleted[:min(len(deleted), maxPreselected)]}
+		linkText := ctx.Locale.TrString("repo.branch.bulk.show_deleted")
+		if len(deleted) > maxPreselected {
+			linkText = ctx.Locale.TrString("repo.branch.bulk.show_deleted_first", maxPreselected)
+		}
 		ctx.Flash.Success(ctx.Locale.TrPluralString(len(deleted), "repo.branch.bulk.done", len(deleted),
-			template.HTML(fmt.Sprintf(`<a href="%s?%s">%s</a>`, html.EscapeString(back), html.EscapeString(link.Encode()), ctx.Locale.TrString("repo.branch.bulk.show_deleted"))),
+			template.HTML(fmt.Sprintf(`<a href="%s?%s">%s</a>`, html.EscapeString(back), html.EscapeString(link.Encode()), html.EscapeString(linkText))),
 			RestoreText(ctx)))
+	}
+	if ctx.FormBool("more") && len(deleted) > 0 { // the dialog said more branches match than it listed
+		ctx.Flash.Info(ctx.Locale.TrString("repo.branch.bulk.cap_more", repo_service.MaxDeleteMergedBranches))
 	}
 	if len(kept) > 0 {
 		listed := strings.Join(kept[:min(len(kept), maxReportedBranches)], "; ")
@@ -276,8 +314,8 @@ func RestoreSelectedBranchesPost(ctx *context.Context) {
 		if err != nil {
 			continue
 		}
-		if name, errMsg := restoreDeletedBranch(ctx, id, v); errMsg != "" {
-			failed = append(failed, html.EscapeString(name))
+		if name, code := restoreDeletedBranch(ctx, id, v); code != "" {
+			failed = append(failed, html.EscapeString(name)+": "+html.EscapeString(restoreReasonText(ctx.Locale, code)))
 		} else {
 			restored++
 		}
@@ -286,7 +324,7 @@ func RestoreSelectedBranchesPost(ctx *context.Context) {
 		ctx.Flash.Success(ctx.Locale.TrPluralString(restored, "repo.branch.bulk.restored", restored))
 	}
 	if len(failed) > 0 {
-		ctx.Flash.Error(ctx.Locale.TrPluralString(len(failed), "repo.branch.bulk.restore_failed", len(failed), template.HTML(strings.Join(failed[:min(len(failed), maxReportedBranches)], ", "))))
+		ctx.Flash.Error(ctx.Locale.TrPluralString(len(failed), "repo.branch.bulk.restore_failed", len(failed), template.HTML(strings.Join(failed[:min(len(failed), maxReportedBranches)], "; "))))
 	}
 	ctx.Redirect(back)
 }

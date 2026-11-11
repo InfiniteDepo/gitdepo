@@ -51,6 +51,7 @@ type BranchFilter struct {
 	StaleDays int
 	PushedBy  string
 	Deleted   bool
+	Viewer    *user_model.User // who asks: a pusher the viewer can't see matches nothing
 }
 
 // IsSet tells if a filter other than the keyword and the type restricts the list.
@@ -76,6 +77,10 @@ type BranchQuery struct {
 	Deleted optional.Option[bool]
 	Keyword string
 	Cond    builder.Cond
+	// Merged, when not nil, is the merged filter: the branches git says are (not) merged with the tip it saw. The
+	// names stay out of SQL (a big repository has more than a statement can bind): rows match by the other
+	// conditions and are kept only when name and commit equal an entry, compared exactly in Go.
+	Merged map[string]string
 }
 
 // Query turns the filter into a database condition: the one builder behind the page, its count, "select all
@@ -92,7 +97,9 @@ func (f BranchFilter) Query(ctx context.Context, repo *repo_model.Repository, gi
 	if f.PushedBy != "" {
 		pusher := builder.Expr("1 = 0")
 		if u, err := user_model.GetUserByName(ctx, f.PushedBy); err == nil {
-			pusher = builder.Eq{"pusher_id": u.ID}
+			if user_model.IsUserVisibleToViewer(ctx, u, f.Viewer) {
+				pusher = builder.Eq{"pusher_id": u.ID}
+			}
 		} else if !user_model.IsErrUserNotExist(err) {
 			return q, err
 		}
@@ -113,21 +120,63 @@ func (f BranchFilter) Query(ctx context.Context, repo *repo_model.Repository, gi
 		if f.Into == MergedIntoDefault {
 			into = repo.DefaultBranch
 		}
-		names, err := branchesMergedInto(ctx, repo, gitRepo, into, f.State == BranchMerged)
+		walked, err := branchesMergedInto(ctx, repo, gitRepo, into, f.State == BranchMerged)
 		if err != nil {
 			return q, err
 		}
-		q.Cond = q.Cond.And(builder.In("name", names)) // no names: In() is false
+		q.Merged = walked
 	}
 	return q, nil
 }
 
-// branchesMergedInto lists the branches whose tip is (merged) or is not (!merged) in the branch into: one walk.
-func branchesMergedInto(ctx context.Context, repo *repo_model.Repository, gitRepo *git.Repository, into string, merged bool) ([]string, error) {
+// rows loads the live branch rows matching the query without the default branch, in the order of the Branches
+// page; only id, name and commit are read. With the merged filter a row stays if it is at the tip git walked.
+func (q BranchQuery) rows(ctx context.Context, repo *repo_model.Repository) ([]*git_model.Branch, error) {
+	opts := git_model.FindBranchOptions{
+		RepoID: repo.ID, IsDeletedBranch: optional.Some(false), Keyword: q.Keyword, Cond: q.Cond,
+		ExcludeBranchNames: []string{repo.DefaultBranch},
+	}
+	var rows []*git_model.Branch
+	if err := db.GetEngine(ctx).Table("branch").Cols("id", "name", "commit_id").Where(opts.ToConds()).OrderBy(opts.ToOrders()).Find(&rows); err != nil {
+		return nil, err
+	}
+	if q.Merged != nil {
+		rows = slices.DeleteFunc(rows, func(b *git_model.Branch) bool {
+			tip, ok := q.Merged[b.Name]
+			return !ok || tip != b.CommitID
+		})
+	}
+	rows = slices.DeleteFunc(rows, func(b *git_model.Branch) bool { return b.Name == repo.DefaultBranch })
+	return rows, nil
+}
+
+// Page narrows a query with the merged filter to the rows of one page, for LoadBranches, and returns how many rows
+// match in all. Without the merged filter it returns q as it is and -1.
+func (q BranchQuery) Page(ctx context.Context, repo *repo_model.Repository, page, pageSize int) (BranchQuery, int64, error) {
+	if q.Merged == nil {
+		return q, -1, nil
+	}
+	rows, err := q.rows(ctx, repo)
+	if err != nil {
+		return q, 0, err
+	}
+	total := int64(len(rows))
+	rows = rows[min(len(rows), max(page-1, 0)*pageSize):]
+	rows = rows[:min(len(rows), pageSize)]
+	ids := make([]int64, len(rows))
+	for i, r := range rows {
+		ids[i] = r.ID
+	}
+	return BranchQuery{Deleted: q.Deleted, Cond: builder.In("id", ids)}, total, nil
+}
+
+// branchesMergedInto maps the branches whose tip is (merged) or is not (!merged) in the branch into to that tip: one
+// walk. The map is never nil.
+func branchesMergedInto(ctx context.Context, repo *repo_model.Repository, gitRepo *git.Repository, into string, merged bool) (map[string]string, error) {
 	tip, err := gitRepo.GetBranchCommitID(into)
 	if err != nil {
 		if git.IsErrNotExist(err) {
-			return nil, nil
+			return map[string]string{}, nil
 		}
 		return nil, err
 	}
@@ -135,15 +184,16 @@ func branchesMergedInto(ctx context.Context, repo *repo_model.Repository, gitRep
 	if merged {
 		opt = "--merged=%s"
 	}
-	out, _, err := git.NewCommand(ctx, "for-each-ref", "--format=%(refname)").
+	out, _, err := git.NewCommand(ctx, "for-each-ref", "--format=%(objectname) %(refname)").
 		AddOptionFormat(opt, tip).AddArguments("refs/heads/").RunStdString(&git.RunOpts{Dir: repo.RepoPath()})
 	if err != nil {
 		return nil, err
 	}
-	var names []string
-	for ref := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
-		if name, ok := strings.CutPrefix(ref, git.BranchPrefix); ok {
-			names = append(names, name)
+	names := map[string]string{}
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
+		sha, ref, ok := strings.Cut(line, " ")
+		if name, isBranch := strings.CutPrefix(ref, git.BranchPrefix); ok && isBranch {
+			names[name] = sha
 		}
 	}
 	return names, nil
@@ -166,10 +216,10 @@ type BranchDeletion struct {
 // FindDeletableBranches lists the live branches matching q that no kept rule protects, newest first, at most limit.
 // It deletes nothing; DeleteSelectedBranches decides again.
 func FindDeletableBranches(ctx context.Context, repo *repo_model.Repository, q BranchQuery, limit int) (*BranchDeletion, error) {
-	rows, err := db.Find[git_model.Branch](ctx, git_model.FindBranchOptions{
-		RepoID: repo.ID, IsDeletedBranch: optional.Some(false), Keyword: q.Keyword, Cond: q.Cond,
-		ListOptions: db.ListOptionsAll, ExcludeBranchNames: []string{repo.DefaultBranch},
-	})
+	if has, deleted := q.Deleted.Get(); has && deleted {
+		return nil, util.NewInvalidArgumentErrorf("deleted branches can't be deleted again")
+	}
+	rows, err := q.rows(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -198,15 +248,20 @@ type BranchResult struct {
 	Reason string
 }
 
+// maxRefusedAudited is how many refused branches (name and reason) the summary audit entry lists.
+const maxRefusedAudited = 50
+
+type bulkDeleteKey struct{}
+
 // DeleteSelectedBranches deletes the selected branches one by one and reports each. Every branch is decided again
-// now: the kept rule (default, development, production, release, protected, merge queue and open pull request
-// branches stay), the doer's own permission on it and, through DeleteBranch, the commit it was at when the doer saw
-// it, so a push since or a rule added since keeps it. A refused branch never stops the others. Each deletion is
-// audited by DeleteBranch and the run once, and every deleted branch can be restored from the deleted branches.
+// right before its own deletion: the kept rule (default, development, production, release, protected, merge queue
+// and open pull request branches stay) read fresh for that branch, the doer's own permission on it and, through
+// DeleteBranch, the commit it was at when the doer saw it, so a push, a pull request or a rule added since keeps
+// it. A refused branch never stops the others. Each deletion is audited by DeleteBranch (marked "bulk") and the run
+// once, with the refused branches and their reasons; every deleted branch can be restored from the deleted branches.
 func DeleteSelectedBranches(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, gitRepo *git.Repository, selected []SelectedBranch) ([]BranchResult, error) {
-	kept, err := branchworkflow.NewKeptChecker(ctx, repo, true)
-	if err != nil {
-		return nil, err
+	if repo.IsMirror { // the next mirror sync brings them back
+		return nil, util.NewPermissionDeniedErrorf("branches of a mirror can't be deleted")
 	}
 	locked := PersonalRepoLocked(ctx, repo)
 	var results []BranchResult
@@ -217,9 +272,13 @@ func DeleteSelectedBranches(ctx context.Context, doer *user_model.User, repo *re
 			continue
 		}
 		seen[b.Name] = true
-		reason := kept.Reason(b.Name)
+		reason, err := branchworkflow.KeptReason(ctx, repo, b.Name, true)
+		if err != nil {
+			log.Error("DeleteSelectedBranches: kept check of %q in %-v: %v", b.Name, repo, err)
+			reason = "error"
+		}
 		if reason == "" {
-			reason = deleteSelectedBranch(ctx, doer, repo, gitRepo, b)
+			reason = deleteSelectedBranch(context.WithValue(ctx, bulkDeleteKey{}, true), doer, repo, gitRepo, b)
 		}
 		if reason == "" {
 			deleted++
@@ -230,7 +289,13 @@ func DeleteSelectedBranches(ctx context.Context, doer *user_model.User, repo *re
 	if len(results) == 0 {
 		return results, nil
 	}
-	data := map[string]any{"counts": map[string]any{"deleted": deleted, "kept": len(results) - deleted}}
+	var refused []string
+	for _, r := range results {
+		if r.Reason != "" && len(refused) < maxRefusedAudited {
+			refused = append(refused, r.Name+": "+r.Reason)
+		}
+	}
+	data := map[string]any{"counts": map[string]any{"deleted": deleted, "kept": len(results) - deleted}, "refused": refused}
 	return results, repo_model.RecordRepo(ctx, "repo.branches.bulk_deleted", repo, data)
 }
 
