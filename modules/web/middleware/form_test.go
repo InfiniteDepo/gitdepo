@@ -21,15 +21,15 @@ func formRequest(method, body string) *http.Request {
 }
 
 func TestParseForm(t *testing.T) {
-	assert.NoError(t, ParseForm(formRequest("POST", "a=1")))
+	require.NoError(t, ParseForm(formRequest("POST", "a=1")))
 
 	for _, body := range []string{"a=%zz", "a=1" + strings.Repeat("&f=1", 10000)} {
 		req := formRequest("POST", body)
-		assert.Error(t, ParseForm(req))
-		assert.Error(t, ParseForm(req), "the recorded error is returned again")
+		require.Error(t, ParseForm(req))
+		require.Error(t, ParseForm(req), "the recorded error is returned again")
 	}
 
-	assert.NoError(t, ParseForm(formRequest("GET", "")))
+	require.NoError(t, ParseForm(formRequest("GET", "")))
 }
 
 func TestRefuseForm(t *testing.T) {
