@@ -1,23 +1,20 @@
-/* the tables of the cleanup preview: on a narrow screen every row is a stack of labelled values */
+/* the tables of the cleanup preview: on a narrow screen Fomantic stacks the rows, so every value gets its label and
+   the header row is hidden visually (it stays for screen readers) */
 @media (max-width: 767.98px) {
-  .cleanup-table thead {
-    display: none;
+  .ui.table.cleanup-table > thead {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    overflow: hidden;
+    clip-path: inset(50%);
   }
 
-  .cleanup-table,
-  .cleanup-table tbody,
-  .cleanup-table tr,
-  .cleanup-table td {
-    display: block;
-    width: 100%;
-  }
-
-  .cleanup-table tr {
-    padding: 8px 0;
+  .cleanup-table > tbody > tr {
     border-bottom: 1px solid var(--color-secondary);
   }
 
-  .cleanup-table td::before {
+  .cleanup-table > tbody > tr > td::before {
     content: attr(data-label);
     display: block;
     font-weight: var(--font-weight-semibold);

@@ -233,6 +233,7 @@ func BranchCleanupPreview(ctx *context.Context) {
 		return
 	}
 	if plan.Skip != "" {
+		ctx.Data["CleanupState"] = "" // a skipped repository says only the skip
 		ctx.Data["SkipText"] = CleanupSkipText(ctx.Locale, plan.Skip)
 		ctx.HTML(http.StatusOK, tplBranchCleanup)
 		return

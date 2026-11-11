@@ -2,9 +2,9 @@
 <form class="ui form ignore-dirty tw-mt-4" action="{{.CleanupLink}}" method="post">
 	<div class="inline field">
 		<label for="turn_on_days">{{ctx.Locale.Tr "repo.settings.cleanup.days_input"}}</label>
-		<input id="turn_on_days" name="cleanup_days" type="number" min="1" max="3650" value="{{.PreviewDays}}">
+		<input id="turn_on_days" name="cleanup_days" type="number" value="{{.PreviewDays}}" readonly>
 	</div>
-	{{if .TurnOnStart}}<p>{{ctx.Locale.Tr "repo.settings.cleanup.turn_on_start" (DateUtils.FullTime .TurnOnStart)}}</p>{{else}}<p>{{ctx.Locale.Tr "repo.settings.cleanup.turn_on_now"}}</p>{{end}}
+	{{if .TurnOnStart}}<p>{{ctx.Locale.Tr "repo.settings.cleanup.turn_on_start" (.TurnOnStart.Format "2006-01-02 15:04 MST")}}</p>{{else}}<p>{{ctx.Locale.Tr "repo.settings.cleanup.turn_on_now"}}</p>{{end}}
 	<button class="ui primary button">{{ctx.Locale.Tr "repo.settings.cleanup.turn_on" .PreviewDays}}</button>
 </form>
 {{end}}

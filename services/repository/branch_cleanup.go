@@ -295,7 +295,10 @@ func cleanupCandidates(ctx context.Context) ([]int64, error) {
 // startOfDay is midnight of now's calendar day in server time: a repository's scheduled run is claimed per calendar
 // day (a second server, a second start of the task or a manual run from the admin page that day skips it), so there
 // is one run, and one summary, per repository per day, and a later-running night is never skipped.
+// The day is cut in time.Local, the zone the cron scheduler fires in (gocron.NewScheduler(time.Local) in
+// services/cron), never in the UI zone.
 func startOfDay(now time.Time) time.Time {
+	now = now.In(time.Local)
 	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 }
 

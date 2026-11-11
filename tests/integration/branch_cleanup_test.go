@@ -20,6 +20,7 @@ import (
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/test"
+	"forgejo.org/modules/timeutil"
 	"forgejo.org/services/branchworkflow"
 	"forgejo.org/services/cron"
 	repo_service "forgejo.org/services/repository"
@@ -148,6 +149,11 @@ func TestBranchCleanupPreviewAndRun(t *testing.T) {
 		resp = s.MakeRequest(t, NewRequest(t, "GET", link), http.StatusOK)
 		assert.NotContains(t, resp.Body.String(), `<button class="ui primary button">`)
 		assert.Contains(t, resp.Body.String(), "pending until")
+		// a date ahead is written out with its time, never as words
+		pending, err := repo_model.GetBranchCleanupState(t.Context(), repo.ID)
+		require.NoError(t, err)
+		require.NotNil(t, pending)
+		assert.Contains(t, resp.Body.String(), "pending until "+timeutil.TimeStamp(pending.PendingFrom).Format("2006-01-02 15:04 MST"))
 
 		// read-only maintenance pauses the run and the page says so
 		test.MockVariableValue(&setting.Maintenance.Mode, "read-only")

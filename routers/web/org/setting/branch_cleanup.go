@@ -143,8 +143,11 @@ func BranchCleanup(ctx *context.Context) {
 			return
 		}
 		row := cleanupRepoRow{Name: r.FullName(), Link: r.Link() + "/settings/branch_workflow/cleanup", Days: days}
+		if e.Days > 0 { // the days in force (a change that waits is not counted), as on the repository's own page
+			row.Days = e.Days
+		}
 		if e.Configured != nil && !e.Locked {
-			row.Own, row.Days, row.Off = true, e.Configured.Days, e.Configured.Days == 0
+			row.Own, row.Off = true, e.Configured.Days == 0
 		}
 		if !row.Off {
 			plan, err := repo_service.PlanBranchCleanup(ctx, r, row.Days, now)

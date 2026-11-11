@@ -15,10 +15,7 @@ import (
 	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/json"
-	"forgejo.org/modules/log"
 	"forgejo.org/modules/timeutil"
-
-	"code.forgejo.org/xorm/xorm/convert"
 )
 
 const (
@@ -179,7 +176,7 @@ func SetOrgCleanup(ctx context.Context, org *user_model.User, days int, locked b
 	if days < 0 || days > MaxCleanupDays {
 		return ErrInvalidCleanupDays
 	}
-	if err := db.WithTx(ctx, func(ctx context.Context) error {
+	return db.WithTx(ctx, func(ctx context.Context) error {
 		before, beforeLocked, err := GetOrgCleanup(ctx, org)
 		if err != nil {
 			return err
@@ -210,20 +207,20 @@ func SetOrgCleanup(ctx context.Context, org *user_model.User, days int, locked b
 		b, a := cleanupAudit(before), cleanupAudit(next)
 		b["cleanup_locked"], a["cleanup_locked"] = beforeLocked, locked
 		if changes := audit_model.Changes(b, a); changes != nil {
-			return user_model.RecordOrg(ctx, "org.branch_workflow.changed", org, changes)
+			if err := user_model.RecordOrg(ctx, "org.branch_workflow.changed", org, changes); err != nil {
+				return err
+			}
 		}
-		return nil
-	}); err != nil {
-		return err
-	}
-	return syncOrgCleanup(ctx, org)
+		// in the same transaction: a failure rolls the save back, and the scheduled run can't interleave
+		return syncOrgCleanup(ctx, org)
+	})
 }
 
 // syncOrgCleanup records at once what a change of the organization's level means for the repositories that have a
 // record (on or waiting), through SyncCleanup like the scheduled run: a less strict level applies, a stricter one
 // starts waiting. Without it an "off" between two runs would never be recorded, and turning cleanup on again would
-// skip the wait. A repository without a record needs nothing: the first sighting starts its wait. It is one pass
-// over the organization's recorded repositories; a failure is logged, the scheduled run does the same later.
+// skip the wait. A repository without a record needs nothing: the first sighting starts its wait. It is one batched
+// pass over the organization's recorded repositories, in the transaction of the save.
 func syncOrgCleanup(ctx context.Context, org *user_model.User) error {
 	var ids []int64
 	if err := db.GetEngine(ctx).Table("branch_cleanup_state").Join("INNER", "repository", "repository.id = branch_cleanup_state.repo_id").
@@ -237,8 +234,9 @@ func syncOrgCleanup(ctx context.Context, org *user_model.User) error {
 			return err
 		}
 		for _, repo := range repos {
+			repo.Owner = org
 			if _, err := SyncCleanup(ctx, repo); err != nil {
-				log.Error("branch cleanup: sync %-v: %v", repo, err)
+				return err
 			}
 		}
 	}
@@ -262,7 +260,7 @@ func SetRepoCleanup(ctx context.Context, repo *repo_model.Repository, days *int)
 	if days != nil && (*days < 0 || *days > MaxCleanupDays) {
 		return ErrInvalidCleanupDays
 	}
-	var newConfig convert.Conversion
+	oldConfig := u.Config
 	if err := db.WithTx(ctx, func(ctx context.Context) error {
 		stored, has, err := repo_model.GetRepoUnitForUpdate(ctx, repo.ID, unit.TypePullRequests)
 		if err != nil {
@@ -280,17 +278,20 @@ func SetRepoCleanup(ctx context.Context, repo *repo_model.Repository, days *int)
 		if err := repo_model.UpdateRepoUnit(ctx, stored); err != nil {
 			return err
 		}
-		newConfig = stored.Config
+		u.Config = stored.Config
 		b, a := cleanupAudit(before), cleanupAudit(next)
 		b["cleanup_inherit"], a["cleanup_inherit"] = before == nil, next == nil
 		if changes := audit_model.Changes(b, a); changes != nil {
-			return repo_model.RecordRepo(ctx, "repo.branch_workflow.changed", repo, changes)
+			if err := repo_model.RecordRepo(ctx, "repo.branch_workflow.changed", repo, changes); err != nil {
+				return err
+			}
 		}
-		return nil
+		// starts the waiting period of a change that deletes sooner, in the same transaction
+		_, err = SyncCleanup(ctx, repo)
+		return err
 	}); err != nil {
+		u.Config = oldConfig
 		return err
 	}
-	u.Config = newConfig
-	_, err = SyncCleanup(ctx, repo) // starts the waiting period of a change that deletes sooner
-	return err
+	return nil
 }
