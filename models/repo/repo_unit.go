@@ -254,12 +254,10 @@ type PullRequestsConfig struct {
 	BranchCleanup                 *BranchCleanup  `json:",omitempty"` // nil inherits from the organization
 }
 
-// BranchCleanup is the setting "Cleanup of merged branches". Days is what was chosen (0 is off). A turn-on or a
-// lowering waits: until EffectiveFrom (unix seconds) the setting in force is PreviousDays (0 was off).
+// BranchCleanup is the setting "Cleanup of merged branches" of a level: Days is what was chosen (0 is off). The days
+// that apply to a repository, with the waiting period of a turn-on or a lowering, are in BranchCleanupState.
 type BranchCleanup struct {
-	Days          int   `json:",omitempty"`
-	PreviousDays  int   `json:",omitempty"`
-	EffectiveFrom int64 `json:",omitempty"` // 0: nothing waits
+	Days int `json:",omitempty"`
 }
 
 // BranchingModel names the development branch and the release branches whose names end in a version.

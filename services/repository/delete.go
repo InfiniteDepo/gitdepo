@@ -205,6 +205,7 @@ func DeleteRepositoryDirectly(ctx context.Context, repoID int64, opts DeleteRepo
 			&asymkey_model.OrgDeployKeyRepo{RepoID: repoID},
 			&actions_model.ActionEnvironmentRepo{RepoID: repoID},
 			&activities_model.Action{RepoID: repo.ID},
+			&repo_model.BranchCleanupState{RepoID: repoID},
 			&repo_model.Collaboration{RepoID: repoID},
 			&issues_model.Comment{RefRepoID: repoID},
 			&git_model.CommitStatus{RepoID: repoID},

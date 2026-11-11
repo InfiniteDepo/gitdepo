@@ -12,94 +12,80 @@ import (
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
+	"forgejo.org/modules/timeutil"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestNextCleanup(t *testing.T) {
+func TestNextCleanupState(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	later := now.Add(CleanupDelay).Unix()
+	st := func(days, pendingDays int, from int64) *repo_model.BranchCleanupState {
+		return &repo_model.BranchCleanupState{RepoID: 7, LastRunUnix: 5, Days: days, PendingDays: pendingDays, PendingFrom: from}
+	}
 	cases := []struct {
-		name    string
-		inForce int
-		cur     *repo_model.BranchCleanup
-		want    int
-		next    *repo_model.BranchCleanup
-		err     error
+		name string
+		cur  *repo_model.BranchCleanupState
+		want int
+		next repo_model.BranchCleanupState
 	}{
-		{"turn on waits", 0, nil, 30, &repo_model.BranchCleanup{Days: 30, EffectiveFrom: later}, nil},
-		{"lowering waits and keeps the old days", 60, &repo_model.BranchCleanup{Days: 60}, 30, &repo_model.BranchCleanup{Days: 30, PreviousDays: 60, EffectiveFrom: later}, nil},
-		{"a raise applies at once", 30, &repo_model.BranchCleanup{Days: 30}, 60, &repo_model.BranchCleanup{Days: 60}, nil},
-		{"the same days again changes nothing", 30, &repo_model.BranchCleanup{Days: 30}, 30, &repo_model.BranchCleanup{Days: 30}, nil},
-		{"off applies at once", 30, &repo_model.BranchCleanup{Days: 30}, 0, &repo_model.BranchCleanup{}, nil},
-		{"a waiting turn-on saved again isn't postponed", 0, &repo_model.BranchCleanup{Days: 30, EffectiveFrom: now.Add(time.Hour).Unix()}, 30, &repo_model.BranchCleanup{Days: 30, EffectiveFrom: now.Add(time.Hour).Unix()}, nil},
-		{"another value while waiting waits again", 0, &repo_model.BranchCleanup{Days: 30, EffectiveFrom: now.Add(time.Hour).Unix()}, 20, &repo_model.BranchCleanup{Days: 20, EffectiveFrom: later}, nil},
-		{"the repository inherits 30 and chooses 10", 30, nil, 10, &repo_model.BranchCleanup{Days: 10, PreviousDays: 30, EffectiveFrom: later}, nil},
-		{"negative", 0, nil, -1, nil, ErrInvalidCleanupDays},
-		{"too many", 0, nil, MaxCleanupDays + 1, nil, ErrInvalidCleanupDays},
-		{"the maximum", 0, nil, MaxCleanupDays, &repo_model.BranchCleanup{Days: MaxCleanupDays, EffectiveFrom: later}, nil},
+		{"no record yet, turned on: waits", nil, 30, repo_model.BranchCleanupState{PendingDays: 30, PendingFrom: later}},
+		{"no record yet, off", nil, 0, repo_model.BranchCleanupState{}},
+		{"fewer days wait, the recorded days keep applying", st(60, 0, 0), 30, *st(60, 30, later)},
+		{"more days apply at once", st(30, 0, 0), 60, *st(60, 0, 0)},
+		{"the same days change nothing", st(30, 0, 0), 30, *st(30, 0, 0)},
+		{"off applies at once", st(30, 0, 0), 0, *st(0, 0, 0)},
+		{"off from off", st(0, 0, 0), 0, *st(0, 0, 0)},
+		{"on from off waits", st(0, 0, 0), 30, *st(0, 30, later)},
+		{"a waiting change seen again isn't postponed", st(0, 30, now.Add(time.Hour).Unix()), 30, *st(0, 30, now.Add(time.Hour).Unix())},
+		{"a waiting change that is due takes effect", st(0, 30, now.Add(-time.Second).Unix()), 30, *st(30, 0, 0)},
+		{"another value while waiting waits again", st(0, 30, now.Add(time.Hour).Unix()), 20, *st(0, 20, later)},
+		{"going back while waiting drops the waiting change", st(60, 30, now.Add(time.Hour).Unix()), 60, *st(60, 0, 0)},
+		{"less strict while waiting applies at once", st(60, 30, now.Add(time.Hour).Unix()), 90, *st(90, 0, 0)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := NextCleanup(c.inForce, c.cur, c.want, now)
-			require.ErrorIs(t, err, c.err)
+			got := NextCleanupState(c.cur, c.want, now)
+			if c.cur != nil {
+				c.next.RepoID, c.next.LastRunUnix = 7, 5 // kept
+			}
 			assert.Equal(t, c.next, got)
 		})
 	}
 }
 
-func TestCleanupDays(t *testing.T) {
-	now := time.Unix(1_800_000_000, 0)
-	assert.Equal(t, 0, CleanupDays(nil, now))
-	assert.Equal(t, 30, CleanupDays(&repo_model.BranchCleanup{Days: 30}, now))
-	assert.Equal(t, 0, CleanupDays(&repo_model.BranchCleanup{}, now))
-
-	waiting := &repo_model.BranchCleanup{Days: 30, PreviousDays: 60, EffectiveFrom: now.Add(time.Hour).Unix()}
-	assert.True(t, CleanupPending(waiting, now))
-	assert.Equal(t, 60, CleanupDays(waiting, now), "a lowering keeps the longer period until it is due")
-	assert.Equal(t, 30, CleanupDays(waiting, now.Add(2*time.Hour)))
-	assert.Equal(t, 0, CleanupDays(&repo_model.BranchCleanup{Days: 30, EffectiveFrom: now.Add(time.Hour).Unix()}, now), "a turn-on is off until it is due")
-
-	// a time far in the future can only keep the safer period: it is clamped to the delay
-	far := &repo_model.BranchCleanup{Days: 30, EffectiveFrom: now.Add(100 * 24 * time.Hour).Unix()}
-	assert.Equal(t, 0, CleanupDays(far, now))
-	assert.Equal(t, 0, CleanupDays(far, now.Add(CleanupDelay+time.Second)), "the clamp moves with the clock, so it never shortens the wait")
-	assert.Equal(t, 30, CleanupDays(far, now.Add(101*24*time.Hour)))
-}
-
 func TestResolveCleanup(t *testing.T) {
-	now := time.Unix(1_800_000_000, 0)
 	org := &repo_model.BranchCleanup{Days: 60}
 	own := &repo_model.BranchCleanup{Days: 10}
 
-	e := ResolveCleanup(nil, false, nil, now)
+	e := ResolveCleanup(nil, false, nil)
 	assert.Equal(t, SourceNone, e.Source)
-	assert.Zero(t, e.Days)
+	assert.Zero(t, e.Wanted)
 
-	e = ResolveCleanup(org, false, nil, now)
+	e = ResolveCleanup(org, false, nil)
 	assert.Equal(t, SourceOrg, e.Source)
-	assert.Equal(t, 60, e.Days)
+	assert.Equal(t, 60, e.Wanted)
 
-	e = ResolveCleanup(org, false, own, now)
+	e = ResolveCleanup(org, false, own)
 	assert.Equal(t, SourceRepo, e.Source)
-	assert.Equal(t, 10, e.Days)
+	assert.Equal(t, 10, e.Wanted)
 
-	e = ResolveCleanup(org, true, own, now)
+	e = ResolveCleanup(org, true, own)
 	assert.Equal(t, SourceOrg, e.Source)
 	assert.True(t, e.Locked)
-	assert.Equal(t, 60, e.Days, "under the lock the repository has no setting of its own")
+	assert.Equal(t, 60, e.Wanted, "under the lock the repository has no setting of its own")
 	assert.Equal(t, own, e.Configured)
 
 	// the lock needs the organization's own value
-	e = ResolveCleanup(nil, true, own, now)
+	e = ResolveCleanup(nil, true, own)
 	assert.False(t, e.Locked)
-	assert.Equal(t, 10, e.Days)
+	assert.Equal(t, 10, e.Wanted)
 
 	// an organization that enforces "off" turns the repository's own setting off
-	e = ResolveCleanup(&repo_model.BranchCleanup{}, true, own, now)
+	e = ResolveCleanup(&repo_model.BranchCleanup{}, true, own)
 	assert.True(t, e.Locked)
-	assert.Zero(t, e.Days)
+	assert.Zero(t, e.Wanted)
 }
 
 func TestSetOrgAndRepoCleanup(t *testing.T) {
@@ -119,13 +105,13 @@ func TestSetOrgAndRepoCleanup(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, locked)
 	assert.Equal(t, 60, c.Days)
-	assert.NotZero(t, c.EffectiveFrom, "turning it on waits")
 
 	eff, err := GetEffectiveCleanup(t.Context(), reload())
 	require.NoError(t, err)
 	assert.Equal(t, SourceOrg, eff.Source)
 	assert.Equal(t, org.Name, eff.SetBy)
 	assert.Zero(t, eff.Days, "not in force before the delay has passed")
+	assert.Equal(t, 60, eff.Wanted)
 
 	// the repository's own value, then the lock refuses further changes
 	require.NoError(t, SetRepoCleanup(t.Context(), reload(), days(10)))
@@ -166,4 +152,151 @@ func TestSetOrgAndRepoCleanup(t *testing.T) {
 	c, _, err = GetOrgCleanup(t.Context(), org)
 	require.NoError(t, err)
 	assert.Nil(t, c)
+}
+
+// cleanupScenario is a repository of org3 whose clock the test moves.
+type cleanupScenario struct {
+	t     *testing.T
+	org   *user_model.User
+	now   time.Time
+	start time.Time
+}
+
+func newCleanupScenario(t *testing.T) *cleanupScenario {
+	require.NoError(t, unittest.PrepareTestDatabase())
+	sc := &cleanupScenario{t: t, org: unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3}), start: time.Unix(1_800_000_000, 0)}
+	sc.at(0)
+	t.Cleanup(timeutil.MockUnset)
+	return sc
+}
+
+// at moves the clock to the given days after the start.
+func (sc *cleanupScenario) at(days int) {
+	sc.now = sc.start.Add(time.Duration(days) * 24 * time.Hour)
+	timeutil.MockSet(sc.now)
+}
+
+func (sc *cleanupScenario) repo() *repo_model.Repository {
+	return unittest.AssertExistsAndLoadBean(sc.t, &repo_model.Repository{ID: 3})
+}
+
+func (sc *cleanupScenario) own(days *int) {
+	require.NoError(sc.t, SetRepoCleanup(sc.t.Context(), sc.repo(), days))
+}
+
+func (sc *cleanupScenario) org3(days int, locked bool) {
+	require.NoError(sc.t, SetOrgCleanup(sc.t.Context(), sc.org, days, locked))
+}
+
+// sync is what the scheduled run does first; it returns the days in force.
+func (sc *cleanupScenario) sync() EffectiveCleanup {
+	e, err := SyncCleanup(sc.t.Context(), sc.repo())
+	require.NoError(sc.t, err)
+	return e
+}
+
+// waits asserts that the recorded days still apply and the wanted ones take effect 7 days after the start.
+func (sc *cleanupScenario) waits(e EffectiveCleanup, inForce, wanted int) {
+	assert.Equal(sc.t, inForce, e.Days)
+	assert.Equal(sc.t, wanted, e.PendingDays)
+	assert.Equal(sc.t, sc.now.Add(CleanupDelay).Unix(), e.PendingFrom.Unix())
+}
+
+func TestCleanupWaitingPeriodOnTheDaysInForce(t *testing.T) {
+	days := func(n int) *int { return &n }
+
+	t.Run("inherit to a shorter organization value waits", func(t *testing.T) {
+		sc := newCleanupScenario(t)
+		sc.org3(60, false)
+		sc.own(days(3650))
+		sc.at(8)
+		assert.Equal(t, 3650, sc.sync().Days)
+		sc.at(10)
+		sc.own(nil) // the repository now inherits the organization's 60 days
+		e := sc.sync()
+		sc.waits(e, 3650, 60)
+		sc.at(16)
+		assert.Equal(t, 3650, sc.sync().Days, "still waiting")
+		sc.at(17)
+		assert.Equal(t, 60, sc.sync().Days)
+	})
+
+	t.Run("inherit from off waits", func(t *testing.T) {
+		sc := newCleanupScenario(t)
+		sc.org3(30, false)
+		sc.own(days(0))
+		assert.Zero(t, sc.sync().Days)
+		sc.at(9)
+		sc.own(nil)
+		sc.waits(sc.sync(), 0, 30)
+	})
+
+	t.Run("an organization lock waits", func(t *testing.T) {
+		sc := newCleanupScenario(t)
+		sc.org3(30, false)
+		sc.own(days(365))
+		sc.at(8)
+		assert.Equal(t, 365, sc.sync().Days)
+		sc.at(9)
+		sc.org3(30, true)
+		sc.waits(sc.sync(), 365, 30)
+		sc.at(16)
+		assert.Equal(t, 30, sc.sync().Days)
+	})
+
+	t.Run("removing the lock lets a shorter own value wait", func(t *testing.T) {
+		sc := newCleanupScenario(t)
+		sc.org3(60, false)
+		sc.own(days(10)) // saved before the lock
+		sc.at(8)
+		assert.Equal(t, 10, sc.sync().Days)
+		sc.org3(60, true) // 10 -> 60: less aggressive, at once
+		sc.at(9)
+		assert.Equal(t, 60, sc.sync().Days)
+		sc.at(20)
+		sc.org3(60, false) // the own 10 comes back
+		sc.waits(sc.sync(), 60, 10)
+	})
+
+	t.Run("a repository that gets an organization's setting by a transfer waits", func(t *testing.T) {
+		sc := newCleanupScenario(t)
+		// no record: the repository ran no cleanup before; a record of an earlier owner's would be kept as it is
+		sc.org3(30, false)
+		sc.at(5)
+		e, err := GetEffectiveCleanup(t.Context(), sc.repo())
+		require.NoError(t, err)
+		sc.waits(e, 0, 30) // the page shows the first-run date before anything is stored
+		assert.Nil(t, e.State)
+		sc.waits(sc.sync(), 0, 30)
+		st, err := repo_model.GetBranchCleanupState(t.Context(), 3)
+		require.NoError(t, err)
+		require.NotNil(t, st)
+		assert.Equal(t, 30, st.PendingDays)
+	})
+
+	t.Run("raising applies at once and turning off too", func(t *testing.T) {
+		sc := newCleanupScenario(t)
+		sc.own(days(30))
+		sc.at(8)
+		assert.Equal(t, 30, sc.sync().Days)
+		sc.own(days(60))
+		e := sc.sync()
+		assert.Equal(t, 60, e.Days)
+		assert.True(t, e.PendingFrom.IsZero())
+		sc.own(days(0))
+		assert.Zero(t, sc.sync().Days)
+		// turning it on again waits again: the record is not a licence
+		sc.at(9)
+		sc.own(days(60))
+		sc.waits(sc.sync(), 0, 60)
+	})
+
+	t.Run("saving the same days again does not postpone", func(t *testing.T) {
+		sc := newCleanupScenario(t)
+		sc.own(days(30))
+		sc.at(3)
+		sc.own(days(30))
+		e := sc.sync()
+		assert.Equal(t, sc.start.Add(CleanupDelay).Unix(), e.PendingFrom.Unix())
+	})
 }

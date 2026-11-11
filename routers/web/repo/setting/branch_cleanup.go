@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"forgejo.org/models/organization"
 	repo_model "forgejo.org/models/repo"
@@ -33,19 +34,16 @@ const maxCleanupRows = 200
 // defaultPreviewDays is what the preview assumes when nothing is set and no number is asked for.
 const defaultPreviewDays = 30
 
-// SetCleanupData sets what the cleanup section of the settings pages shows about s, the setting that applies, and
-// the days in force: the days chosen, and when a waiting change takes effect.
-func SetCleanupData(ctx *context.Context, s *repo_model.BranchCleanup, inForce int) {
-	now := timeutil.TimeStampNow().AsTime()
-	ctx.Data["CleanupDays"] = 0
-	if s != nil {
-		ctx.Data["CleanupDays"] = s.Days
-	}
+// SetCleanupData sets what the cleanup section of the settings pages shows: the days chosen, the days in force,
+// and the change that waits with when it takes effect (zero when none).
+func SetCleanupData(ctx *context.Context, chosen, inForce, pendingDays int, pendingFrom time.Time) {
+	ctx.Data["CleanupDays"] = chosen
 	ctx.Data["CleanupInForce"] = inForce
 	ctx.Data["CleanupTaskOff"] = !cleanupTaskOn()
-	if branchworkflow.CleanupPending(s, now) {
+	if !pendingFrom.IsZero() {
 		ctx.Data["CleanupPending"] = true
-		ctx.Data["CleanupStart"] = timeutil.TimeStamp(branchworkflow.CleanupStart(s, now).Unix())
+		ctx.Data["CleanupPendingDays"] = pendingDays
+		ctx.Data["CleanupStart"] = timeutil.TimeStamp(pendingFrom.Unix())
 	}
 }
 
@@ -96,7 +94,7 @@ func prepareCleanup(ctx *context.Context) bool {
 		ctx.ServerError("GetEffectiveCleanup", err)
 		return false
 	}
-	SetCleanupData(ctx, e.Setting, e.Days)
+	SetCleanupData(ctx, e.Wanted, e.Days, e.PendingDays, e.PendingFrom)
 	ctx.Data["CleanupInherit"] = e.Configured == nil
 	ctx.Data["CleanupLocked"] = e.Locked
 	ctx.Data["CleanupLink"] = ctx.Repo.RepoLink + "/settings/branch_workflow/cleanup"
@@ -151,10 +149,10 @@ func BranchCleanupPost(ctx *context.Context) {
 // flashCleanupDue tells, after a save that leaves cleanup on or waiting, how many branches it would delete now.
 func flashCleanupDue(ctx *context.Context) {
 	e, err := branchworkflow.GetEffectiveCleanup(ctx, ctx.Repo.Repository)
-	if err != nil || e.Setting == nil || e.Setting.Days == 0 {
+	if err != nil || e.Wanted == 0 {
 		return
 	}
-	plan, err := repo_service.PlanBranchCleanup(ctx, ctx.Repo.Repository, e.Setting.Days, timeutil.TimeStampNow().AsTime())
+	plan, err := repo_service.PlanBranchCleanup(ctx, ctx.Repo.Repository, e.Wanted, timeutil.TimeStampNow().AsTime())
 	if err != nil || plan.Skip != "" {
 		return
 	}
@@ -182,7 +180,7 @@ func BranchCleanupPreview(ctx *context.Context) {
 	now := timeutil.TimeStampNow().AsTime()
 	days := PreviewDays(ctx, e.Setting)
 	if e.Locked {
-		days = max(e.Days, e.Setting.Days) // what the organization's setting makes of it, in force or waiting
+		days = e.Wanted // what the organization enforces, in force or waiting
 	}
 	ctx.Data["Title"] = ctx.Tr("repo.settings.cleanup.preview_title")
 	ctx.Data["PageIsSettingsBranchWorkflow"] = true
@@ -194,7 +192,7 @@ func BranchCleanupPreview(ctx *context.Context) {
 	if e.Source == branchworkflow.SourceOrg {
 		ctx.Data["CleanupSetBy"] = ctx.Locale.TrString("repo.pulls.delete_after_merge.set_by_org", e.SetBy)
 	}
-	SetCleanupData(ctx, e.Setting, e.Days)
+	SetCleanupData(ctx, e.Wanted, e.Days, e.PendingDays, e.PendingFrom)
 	ctx.Data["CleanupPaused"] = setting.GetMaintenance(ctx).ReadOnly()
 	ctx.Data["MaxPerRun"] = repo_service.MaxCleanupPerRepo
 	ctx.Data["RestoreText"] = repo.RestoreText(ctx)
@@ -204,14 +202,9 @@ func BranchCleanupPreview(ctx *context.Context) {
 
 	// "Turn on cleanup" for these days, with the date it would take effect; not offered when they already are the setting
 	if ctx.Repo.IsAdmin() && !e.Locked && !(e.Setting != nil && e.Setting.Days == days) {
-		next, err := branchworkflow.NextCleanup(e.Days, e.Configured, days, now)
-		if err != nil {
-			ctx.ServerError("NextCleanup", err)
-			return
-		}
 		ctx.Data["CanTurnOn"] = true
-		if branchworkflow.CleanupPending(next, now) {
-			ctx.Data["TurnOnStart"] = timeutil.TimeStamp(next.EffectiveFrom)
+		if next := branchworkflow.NextCleanupState(e.State, days, now); next.PendingFrom != 0 && next.Days != days {
+			ctx.Data["TurnOnStart"] = timeutil.TimeStamp(next.PendingFrom)
 		}
 	}
 

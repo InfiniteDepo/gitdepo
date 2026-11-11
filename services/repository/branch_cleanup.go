@@ -217,7 +217,7 @@ type CleanupRun struct {
 	More    int // due beyond MaxCleanupPerRepo, left for the next run
 }
 
-// RunBranchCleanup runs the cleanup of repo once: it reads the setting in force, plans, and deletes at most
+// RunBranchCleanup runs the cleanup of repo once: it reads the days in force (see branchworkflow.SyncCleanup), plans, and deletes at most
 // MaxCleanupPerRepo of the due branches through the same per-branch decision as the bulk delete (kept rule read
 // again, the doer's permission, the tip the plan saw), as the system. Each deletion is audited with via "cleanup",
 // and the run once. It does nothing while the instance is in read-only maintenance. Every branch can be restored.
@@ -276,14 +276,42 @@ func cleanupCandidates(ctx context.Context) ([]int64, error) {
 		return nil, err
 	}
 	ids = append(ids, own...)
+	// repositories with a record that is on or waits, so that turning it off (by whatever level) is recorded too
+	var recorded []int64
+	if err := db.GetEngine(ctx).Table("branch_cleanup_state").Where("days > 0 OR pending_from <> 0").Cols("repo_id").Find(&recorded); err != nil {
+		return nil, err
+	}
+	ids = append(ids, recorded...)
 	slices.Sort(ids)
 	return slices.Compact(ids), nil
 }
 
+// cleanupClaimWindow is how long a repository's scheduled run stays claimed: a second server (or a second start of
+// the task) inside it skips the repository, so there is one run, and one summary, per repository per day.
+const cleanupClaimWindow = 23 * time.Hour
+
+// runClaimedCleanup records the days in force of repo (starting the waiting period of a change that deletes sooner),
+// and when cleanup is on claims the repository's run with a conditional UPDATE and runs it. Whoever loses the claim
+// does nothing.
+func runClaimedCleanup(ctx context.Context, repo *repo_model.Repository) error {
+	e, err := branchworkflow.SyncCleanup(ctx, repo)
+	if err != nil || e.Days == 0 {
+		return err
+	}
+	now := timeutil.TimeStampNow().AsTime()
+	claimed, err := repo_model.ClaimBranchCleanupRun(ctx, repo.ID, now.Add(-cleanupClaimWindow).Unix(), now.Unix())
+	if err != nil || !claimed {
+		return err
+	}
+	_, err = RunBranchCleanup(ctx, repo)
+	return err
+}
+
 // CleanupMergedBranches is the cron task: it runs the cleanup in every repository that has it on. It stops when
-// the instance goes into read-only maintenance (checked for each repository) or is shutting down, and a repository
-// that fails is logged and skipped. There is no cluster lock: two servers deleting the same branch is harmless, the
-// deletion only succeeds at the tip it was planned for.
+// the instance goes into read-only maintenance (checked for each repository, and between the deletions of one) or is
+// shutting down, and a repository that fails is logged and skipped. Each repository's run is claimed in its
+// branch_cleanup_state record, so several servers run it once; the deletion itself only succeeds at the tip it was
+// planned for.
 func CleanupMergedBranches(ctx context.Context) error {
 	if audit_model.ActorFromContext(ctx) == nil {
 		ctx = audit_model.WithSystem(ctx, "cron:"+CleanupTaskName)
@@ -305,7 +333,7 @@ func CleanupMergedBranches(ctx context.Context) error {
 				log.Info("%s: stopping, maintenance mode is on", CleanupTaskName)
 				return nil
 			}
-			if _, err := RunBranchCleanup(ctx, repo); err != nil {
+			if err := runClaimedCleanup(ctx, repo); err != nil {
 				log.Error("%s: %-v: %v", CleanupTaskName, repo, err)
 			}
 		}

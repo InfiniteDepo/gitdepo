@@ -16,6 +16,7 @@ import (
 	"forgejo.org/modules/git"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/optional"
+	"forgejo.org/modules/setting"
 	"forgejo.org/modules/timeutil"
 	"forgejo.org/modules/util"
 	"forgejo.org/services/branchworkflow"
@@ -275,9 +276,15 @@ func deleteSelected(ctx context.Context, doer *user_model.User, repo *repo_model
 	var results []BranchResult
 	deleted := 0
 	seen := map[string]bool{}
-	for _, b := range selected {
+	stopped := 0 // branches left for the next run when the scheduled cleanup is stopped
+	for i, b := range selected {
 		if seen[b.Name] {
 			continue
+		}
+		// the scheduled cleanup stops between deletions when maintenance starts or the server shuts down
+		if via == "cleanup" && (ctx.Err() != nil || setting.GetMaintenance(ctx).ReadOnly()) {
+			stopped = len(selected) - i
+			break
 		}
 		seen[b.Name] = true
 		reason, err := branchworkflow.KeptReason(ctx, repo, b.Name, true)
@@ -305,6 +312,10 @@ func deleteSelected(ctx context.Context, doer *user_model.User, repo *repo_model
 	}
 	counts := map[string]any{"deleted": deleted, "kept": len(results) - deleted}
 	maps.Copy(counts, extra)
+	if stopped > 0 {
+		waiting, _ := counts["waiting"].(int)
+		counts["waiting"] = waiting + stopped
+	}
 	data := map[string]any{"counts": counts, "refused": refused}
 	if via == "cleanup" {
 		return results, repo_model.RecordRepo(ctx, "repo.branches.cleanup_deleted", repo, data)

@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
+	repo_model "forgejo.org/models/repo"
 	"forgejo.org/modules/base"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/timeutil"
@@ -33,7 +35,7 @@ func prepareCleanup(ctx *context.Context) bool {
 		ctx.ServerError("GetOrgCleanup", err)
 		return false
 	}
-	repo_setting.SetCleanupData(ctx, c, branchworkflow.CleanupDays(c, timeutil.TimeStampNow().AsTime()))
+	setOrgCleanupData(ctx, c)
 	ctx.Data["CleanupEnforce"] = locked
 	ctx.Data["CleanupLink"] = ctx.Org.OrgLink + "/settings/branch_workflow/cleanup"
 	if c != nil && c.Days > 0 {
@@ -45,6 +47,21 @@ func prepareCleanup(ctx *context.Context) bool {
 		ctx.Data["CleanupRepoCount"] = n
 	}
 	return true
+}
+
+// setOrgCleanupData sets the status of the organization's cleanup section. There is no one number in force for an
+// organization: each repository has its own record, so the page names the days chosen and the earliest date a
+// repository without a record starts at.
+func setOrgCleanupData(ctx *context.Context, c *repo_model.BranchCleanup) {
+	days := 0
+	if c != nil {
+		days = c.Days
+	}
+	repo_setting.SetCleanupData(ctx, days, days, 0, time.Time{})
+	if days > 0 {
+		first := branchworkflow.NextCleanupState(nil, days, timeutil.TimeStampNow().AsTime())
+		ctx.Data["CleanupOrgFirst"] = timeutil.TimeStamp(first.PendingFrom)
+	}
 }
 
 // BranchCleanupPost saves the organization's cleanup of merged branches.
@@ -93,7 +110,7 @@ func BranchCleanup(ctx *context.Context) {
 	now := timeutil.TimeStampNow().AsTime()
 	days := repo_setting.PreviewDays(ctx, c)
 	if locked {
-		days = max(branchworkflow.CleanupDays(c, now), c.Days)
+		days = c.Days
 	}
 	ctx.Data["Title"] = ctx.Tr("repo.settings.cleanup.preview_title")
 	ctx.Data["PageIsOrgSettings"] = true
@@ -102,22 +119,15 @@ func BranchCleanup(ctx *context.Context) {
 	ctx.Data["CleanupLink"] = ctx.Org.OrgLink + "/settings/branch_workflow/cleanup"
 	ctx.Data["BackLink"] = ctx.Org.OrgLink + "/settings/branch_workflow#cleanup"
 	ctx.Data["CleanupEnforce"] = locked
-	repo_setting.SetCleanupData(ctx, c, branchworkflow.CleanupDays(c, now))
+	setOrgCleanupData(ctx, c)
 	ctx.Data["CleanupPaused"] = setting.GetMaintenance(ctx).ReadOnly()
 	ctx.Data["MaxPerRun"] = repo_service.MaxCleanupPerRepo
 	if ctx.Doer != nil && (ctx.Doer.IsAdmin || ctx.Doer.IsAuditor) {
 		ctx.Data["AuditLink"] = setting.AppSubURL + "/-/admin/audit?action=repo.branches.cleanup_deleted"
 	}
 	if !locked && (c == nil || c.Days != days) {
-		next, err := branchworkflow.NextCleanup(branchworkflow.CleanupDays(c, now), c, days, now)
-		if err != nil {
-			ctx.ServerError("NextCleanup", err)
-			return
-		}
 		ctx.Data["CanTurnOn"] = true
-		if branchworkflow.CleanupPending(next, now) {
-			ctx.Data["TurnOnStart"] = timeutil.TimeStamp(next.EffectiveFrom)
-		}
+		ctx.Data["TurnOnStart"] = timeutil.TimeStamp(branchworkflow.NextCleanupState(nil, days, now).PendingFrom)
 	}
 
 	page := max(ctx.FormInt("page"), 1)

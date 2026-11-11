@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -123,6 +124,8 @@ func (f *cleanupFixture) setDays(days int) *repo_model.Repository {
 	require.True(f.t, has)
 	stored.PullRequestsConfig().BranchCleanup = &repo_model.BranchCleanup{Days: days}
 	require.NoError(f.t, repo_model.UpdateRepoUnit(f.t.Context(), stored))
+	// the days are in force, as if their waiting period had passed
+	require.NoError(f.t, repo_model.SaveBranchCleanupState(f.t.Context(), &repo_model.BranchCleanupState{RepoID: f.repo.ID, Days: days}))
 	repo, err := repo_model.GetRepositoryByID(f.t.Context(), f.repo.ID)
 	require.NoError(f.t, err)
 	return repo
@@ -424,4 +427,85 @@ func TestCleanupCandidates(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, ids, int64(9101))
 	assert.NotContains(t, ids, int64(9102))
+}
+
+// Two servers (or two starts of the task) at once: one run, one summary per repository.
+func TestCleanupMergedBranchesClaimsTheRun(t *testing.T) {
+	f := newCleanupFixture(t, "cleanup-unit")
+	noPushQueue(t)
+	f.branch("old-1", f.c1, 90)
+	f.branch("old-2", f.c2, 90)
+	f.setDays(30)
+	ctx := audit_model.WithSystem(t.Context(), "cron:"+CleanupTaskName)
+	since := newCleanupAudit(t).max()
+
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			assert.NoError(t, CleanupMergedBranches(ctx))
+		}()
+	}
+	wg.Wait()
+	assert.ElementsMatch(t, []string{"master"}, liveBranches(t, f.repo))
+	assert.Len(t, newCleanupAudit(t).entries(since, "repo.branches.cleanup_deleted"), 1)
+
+	// the claim holds for the day; a later day claims again
+	f.branch("old-3", f.c1, 90)
+	require.NoError(t, CleanupMergedBranches(ctx))
+	assert.Contains(t, liveBranches(t, f.repo), "old-3")
+	_, err := db.GetEngine(t.Context()).Exec("UPDATE branch_cleanup_state SET last_run_unix = ? WHERE repo_id = ?", time.Now().Add(-25*time.Hour).Unix(), f.repo.ID)
+	require.NoError(t, err)
+	require.NoError(t, CleanupMergedBranches(ctx))
+	assert.NotContains(t, liveBranches(t, f.repo), "old-3")
+}
+
+// A change that deletes sooner is recorded as waiting by the run and deletes nothing until it is due.
+func TestCleanupMergedBranchesWaitsForAChange(t *testing.T) {
+	f := newCleanupFixture(t, "cleanup-unit")
+	noPushQueue(t)
+	f.branch("old-1", f.c1, 90)
+	f.setDays(0)
+	stored, _, err := repo_model.GetRepoUnitForUpdate(t.Context(), f.repo.ID, unit.TypePullRequests)
+	require.NoError(t, err)
+	stored.PullRequestsConfig().BranchCleanup = &repo_model.BranchCleanup{Days: 30} // turned on without a record of its own
+	require.NoError(t, repo_model.UpdateRepoUnit(t.Context(), stored))
+	ctx := audit_model.WithSystem(t.Context(), "cron:"+CleanupTaskName)
+	require.NoError(t, CleanupMergedBranches(ctx))
+	assert.Contains(t, liveBranches(t, f.repo), "old-1", "30 days wait 7 more")
+	st, err := repo_model.GetBranchCleanupState(t.Context(), f.repo.ID)
+	require.NoError(t, err)
+	require.NotNil(t, st)
+	assert.Zero(t, st.Days)
+	assert.Equal(t, 30, st.PendingDays)
+	assert.NotZero(t, st.PendingFrom)
+}
+
+// Maintenance that starts in the middle of a run stops it between two deletions and the summary says what is left.
+func TestRunBranchCleanupStopsInMaintenance(t *testing.T) {
+	f := newCleanupFixture(t, "cleanup-unit")
+	noPushQueue(t)
+	for _, n := range []string{"m1", "m2", "m3"} {
+		f.branch(n, f.c1, 90)
+	}
+	repo := f.setDays(30)
+	ctx := audit_model.WithSystem(t.Context(), "cron:"+CleanupTaskName)
+	since := newCleanupAudit(t).max()
+	calls := 0
+	defer test.MockVariableValue(&DeleteBranchTestHook, func(_ *repo_model.Repository, _ string) {
+		if calls++; calls == 1 { // maintenance starts while the first branch is deleted
+			setting.Maintenance.Mode = setting.MaintenanceReadOnly
+		}
+	})()
+	defer func(m string) { setting.Maintenance.Mode = m }(setting.Maintenance.Mode)
+
+	run, err := RunBranchCleanup(ctx, repo)
+	require.NoError(t, err)
+	assert.Equal(t, 1, run.Deleted)
+	assert.Len(t, liveBranches(t, f.repo), 3) // master and two of the three
+	summary := newCleanupAudit(t).entries(since, "repo.branches.cleanup_deleted")
+	require.Len(t, summary, 1)
+	assert.Contains(t, summary[0].Data, `"deleted":1`)
+	assert.Contains(t, summary[0].Data, `"waiting":2`)
 }

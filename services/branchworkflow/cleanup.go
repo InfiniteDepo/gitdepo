@@ -33,59 +33,54 @@ const (
 // ErrInvalidCleanupDays is returned for a number of days outside 0 (off) to MaxCleanupDays.
 var ErrInvalidCleanupDays = errors.New("the days of the cleanup must be 0 to 3650")
 
-// CleanupPending tells if a turn-on or a lowering of c still waits. EffectiveFrom is clamped to now+CleanupDelay, so a
-// stored time far ahead can only keep the safer, longer period.
-func CleanupPending(c *repo_model.BranchCleanup, now time.Time) bool {
-	return c != nil && c.EffectiveFrom != 0 && now.Unix() < min(c.EffectiveFrom, now.Add(CleanupDelay).Unix())
+// moreAggressive tells if want days delete sooner than than days: from off to on, or fewer days (0 is off).
+func moreAggressive(want, than int) bool {
+	return want > 0 && (than == 0 || want < than)
 }
 
-// CleanupDays is the days in force at now: 0 when cleanup is off or its turn-on still waits, the old days while a
-// lowering waits.
-func CleanupDays(c *repo_model.BranchCleanup, now time.Time) int {
-	switch {
-	case c == nil:
-		return 0
-	case CleanupPending(c, now):
-		return c.PreviousDays
+// NextCleanupState is the one rule of the waiting period. want is the days the levels (repository, organization,
+// lock) resolve to now, 0 for off; cur is the repository's record, nil when it has none (as if off). A change that
+// deletes sooner (a turn-on or fewer days) waits CleanupDelay from when it is first seen, and the recorded days keep
+// applying meanwhile; any other change applies at once. Whatever made the days change counts, so inherit, an
+// organization's lock, turning the unit on or moving into an organization all wait. It doesn't store anything.
+func NextCleanupState(cur *repo_model.BranchCleanupState, want int, now time.Time) repo_model.BranchCleanupState {
+	var s repo_model.BranchCleanupState
+	if cur != nil {
+		s = *cur
 	}
-	return c.Days
-}
-
-// CleanupStart is when a waiting change takes effect.
-func CleanupStart(c *repo_model.BranchCleanup, now time.Time) time.Time {
-	return time.Unix(min(c.EffectiveFrom, now.Add(CleanupDelay).Unix()), 0)
-}
-
-// NextCleanup returns the setting after someone chose want days (0 is off) while inForce days apply. Off and a raise
-// apply at once; a turn-on and a lowering wait CleanupDelay, and saving the same days again doesn't postpone them.
-func NextCleanup(inForce int, cur *repo_model.BranchCleanup, want int, now time.Time) (*repo_model.BranchCleanup, error) {
 	switch {
-	case want < 0 || want > MaxCleanupDays:
-		return nil, ErrInvalidCleanupDays
-	case want == 0:
-		return &repo_model.BranchCleanup{}, nil
-	case CleanupPending(cur, now) && cur.Days == want:
-		return cur, nil
-	case inForce > 0 && want >= inForce:
-		return &repo_model.BranchCleanup{Days: want}, nil
+	case !moreAggressive(want, s.Days):
+		s.Days, s.PendingDays, s.PendingFrom = want, 0, 0
+	case s.PendingFrom != 0 && s.PendingDays == want:
+		if now.Unix() >= s.PendingFrom {
+			s.Days, s.PendingDays, s.PendingFrom = want, 0, 0
+		}
+	default:
+		s.PendingDays, s.PendingFrom = want, now.Add(CleanupDelay).Unix()
 	}
-	return &repo_model.BranchCleanup{Days: want, PreviousDays: inForce, EffectiveFrom: now.Add(CleanupDelay).Unix()}, nil
+	return s
 }
 
-// EffectiveCleanup is the cleanup setting that applies to a repository and where it comes from.
+// EffectiveCleanup is the cleanup that applies to a repository and where it comes from.
 type EffectiveCleanup struct {
-	Setting    *repo_model.BranchCleanup // the winning level's value, nil when none is set
-	Days       int                       // in force now
-	Source     string                    // SourceNone when neither the repository nor its organization sets it
-	Locked     bool
-	SetBy      string                    // name of the organization when Source is SourceOrg
-	Configured *repo_model.BranchCleanup // the repository's own value, nil when it inherits
-	Org        *repo_model.BranchCleanup // the organization's value, nil when it has none
+	Setting     *repo_model.BranchCleanup      // the winning level's value, nil when none is set
+	Wanted      int                            // the days that value makes of it (0 off)
+	Days        int                            // in force now: the recorded days, until a change that waits is due
+	PendingDays int                            // the change that waits, valid when PendingFrom is not zero
+	PendingFrom time.Time                      // when it takes effect, zero when nothing waits
+	State       *repo_model.BranchCleanupState // the stored record, nil when there is none
+	Next        repo_model.BranchCleanupState  // the record after the rule ran at now
+	Source      string                         // SourceNone when neither the repository nor its organization sets it
+	Locked      bool
+	SetBy       string                    // name of the organization when Source is SourceOrg
+	Configured  *repo_model.BranchCleanup // the repository's own value, nil when it inherits
+	Org         *repo_model.BranchCleanup // the organization's value, nil when it has none
 }
 
 // ResolveCleanup combines the levels like ResolveModel: a locked organization value wins, else the repository's own,
-// else the organization's. There is no instance default.
-func ResolveCleanup(org *repo_model.BranchCleanup, orgLocked bool, repo *repo_model.BranchCleanup, now time.Time) EffectiveCleanup {
+// else the organization's. There is no instance default. Days and the waiting period come from the repository's
+// record: see GetEffectiveCleanup.
+func ResolveCleanup(org *repo_model.BranchCleanup, orgLocked bool, repo *repo_model.BranchCleanup) EffectiveCleanup {
 	e := EffectiveCleanup{Source: SourceNone, Configured: repo, Org: org}
 	switch {
 	case org != nil && orgLocked:
@@ -95,7 +90,9 @@ func ResolveCleanup(org *repo_model.BranchCleanup, orgLocked bool, repo *repo_mo
 	case org != nil:
 		e.Setting, e.Source = org, SourceOrg
 	}
-	e.Days = CleanupDays(e.Setting, now)
+	if e.Setting != nil {
+		e.Wanted = e.Setting.Days
+	}
 	return e
 }
 
@@ -115,7 +112,8 @@ func GetOrgCleanup(ctx context.Context, org *user_model.User) (*repo_model.Branc
 	return c, c != nil && stored[keyCleanupLocked] != nil && stored[keyCleanupLocked].SettingValue == "true", nil
 }
 
-// GetEffectiveCleanup is the only way to read the cleanup setting that applies to a repository.
+// GetEffectiveCleanup is the only way to read the cleanup that applies to a repository: the levels are resolved and
+// the rule of the waiting period is applied to the repository's record. It reads only; SyncCleanup stores.
 func GetEffectiveCleanup(ctx context.Context, repo *repo_model.Repository) (EffectiveCleanup, error) {
 	if err := repo.LoadOwner(ctx); err != nil {
 		return EffectiveCleanup{}, err
@@ -132,33 +130,59 @@ func GetEffectiveCleanup(ctx context.Context, repo *repo_model.Repository) (Effe
 	if u, err := repo.GetUnit(ctx, unit.TypePullRequests); err == nil {
 		own = u.PullRequestsConfig().BranchCleanup
 	}
-	e := ResolveCleanup(org, orgLocked, own, timeutil.TimeStampNow().AsTime())
+	e := ResolveCleanup(org, orgLocked, own)
 	if e.Source == SourceOrg {
 		e.SetBy = repo.Owner.Name
 	}
+	var err error
+	if e.State, err = repo_model.GetBranchCleanupState(ctx, repo.ID); err != nil {
+		return EffectiveCleanup{}, err
+	}
+	e.Next = NextCleanupState(e.State, e.Wanted, timeutil.TimeStampNow().AsTime())
+	e.Days = e.Next.Days
+	if e.Next.PendingFrom != 0 {
+		e.PendingDays, e.PendingFrom = e.Next.PendingDays, time.Unix(e.Next.PendingFrom, 0)
+	}
 	return e, nil
+}
+
+// SyncCleanup is GetEffectiveCleanup that also records the result, so a change that waits starts its waiting
+// period now. The settings forms and the scheduled run call it.
+func SyncCleanup(ctx context.Context, repo *repo_model.Repository) (EffectiveCleanup, error) {
+	e, err := GetEffectiveCleanup(ctx, repo)
+	if err != nil {
+		return e, err
+	}
+	st := e.State
+	if st == nil && e.Next.Days == 0 && e.Next.PendingFrom == 0 {
+		return e, nil // off and nothing waits: no record needed
+	}
+	if st == nil || st.Days != e.Next.Days || st.PendingDays != e.Next.PendingDays || st.PendingFrom != e.Next.PendingFrom {
+		e.Next.RepoID = repo.ID
+		err = repo_model.SaveBranchCleanupState(ctx, &e.Next)
+	}
+	return e, err
 }
 
 func cleanupAudit(c *repo_model.BranchCleanup) map[string]any {
 	if c == nil {
 		c = &repo_model.BranchCleanup{}
 	}
-	return map[string]any{"cleanup_days": c.Days, "cleanup_previous_days": c.PreviousDays, "cleanup_effective_from": c.EffectiveFrom}
+	return map[string]any{"cleanup_days": c.Days}
 }
 
 // SetOrgCleanup stores the organization's cleanup of merged branches: days (0 is off, which without a lock removes
 // the setting) and whether repositories must follow it. A lock needs a value. Changes are audited.
 func SetOrgCleanup(ctx context.Context, org *user_model.User, days int, locked bool) error {
-	now := timeutil.TimeStampNow().AsTime()
+	if days < 0 || days > MaxCleanupDays {
+		return ErrInvalidCleanupDays
+	}
 	return db.WithTx(ctx, func(ctx context.Context) error {
 		before, beforeLocked, err := GetOrgCleanup(ctx, org)
 		if err != nil {
 			return err
 		}
-		next, err := NextCleanup(CleanupDays(before, now), before, days, now)
-		if err != nil {
-			return err
-		}
+		next := &repo_model.BranchCleanup{Days: days}
 		if next.Days == 0 && !locked {
 			next = nil
 		}
@@ -204,7 +228,9 @@ func SetRepoCleanup(ctx context.Context, repo *repo_model.Repository, days *int)
 	if err != nil {
 		return ErrNoPullRequests
 	}
-	now := timeutil.TimeStampNow().AsTime()
+	if days != nil && (*days < 0 || *days > MaxCleanupDays) {
+		return ErrInvalidCleanupDays
+	}
 	var newConfig convert.Conversion
 	if err := db.WithTx(ctx, func(ctx context.Context) error {
 		stored, has, err := repo_model.GetRepoUnitForUpdate(ctx, repo.ID, unit.TypePullRequests)
@@ -217,9 +243,7 @@ func SetRepoCleanup(ctx context.Context, repo *repo_model.Repository, days *int)
 		before := cfg.BranchCleanup
 		var next *repo_model.BranchCleanup
 		if days != nil {
-			if next, err = NextCleanup(e.Days, before, *days, now); err != nil {
-				return err
-			}
+			next = &repo_model.BranchCleanup{Days: *days}
 		}
 		cfg.BranchCleanup = next
 		if err := repo_model.UpdateRepoUnit(ctx, stored); err != nil {
@@ -236,5 +260,6 @@ func SetRepoCleanup(ctx context.Context, repo *repo_model.Repository, days *int)
 		return err
 	}
 	u.Config = newConfig
-	return nil
+	_, err = SyncCleanup(ctx, repo) // starts the waiting period of a change that deletes sooner
+	return err
 }

@@ -34,7 +34,7 @@
 				{{else if .OwnerIsOrg}}
 				<div class="field">
 					<div class="ui checkbox">
-						<input id="cleanup_inherit" name="inherit" type="checkbox" {{if .CleanupInherit}}checked{{end}}>
+						<input id="cleanup_inherit" name="cleanup_inherit" type="checkbox" {{if .CleanupInherit}}checked{{end}}>
 						<label for="cleanup_inherit">{{ctx.Locale.Tr "repo.settings.cleanup.inherit"}}</label>
 						<p class="help">{{ctx.Locale.Tr "repo.settings.cleanup.inherit_desc"}}</p>
 					</div>
@@ -42,7 +42,7 @@
 				{{end}}
 				<div class="field">
 					<label for="cleanup_days">{{ctx.Locale.Tr "repo.settings.cleanup.days"}}</label>
-					<input id="cleanup_days" name="days" type="number" min="0" max="3650" value="{{.CleanupDays}}" {{if .CleanupLocked}}disabled{{end}}>
+					<input id="cleanup_days" name="cleanup_days" type="number" min="0" max="3650" value="{{.CleanupDays}}" {{if .CleanupLocked}}disabled{{end}}>
 					<p class="help">{{ctx.Locale.Tr "repo.settings.cleanup.days_help"}}</p>
 				</div>
 				{{template "shared/branch_cleanup_status" .}}

@@ -48,14 +48,14 @@ func TestBranchCleanupSettings(t *testing.T) {
 		repoLink := path.Join("/org3", repo, "settings/branch_workflow/cleanup")
 		orgLink := "/org/org3/settings/branch_workflow/cleanup"
 
-		bcPost(t, owner, repoLink, map[string]string{"days": "30"}, http.StatusSeeOther)
+		bcPost(t, owner, repoLink, map[string]string{"cleanup_days": "30"}, http.StatusSeeOther)
 		resp := owner.MakeRequest(t, NewRequest(t, "GET", repoPage), http.StatusOK)
-		assert.Contains(t, resp.Body.String(), `name="days"`)
+		assert.Contains(t, resp.Body.String(), `name="cleanup_days"`)
 		assert.Contains(t, resp.Body.String(), "7 days")
 
 		// invalid days change nothing
 		for _, d := range []string{"abc", "3651", "-1"} {
-			bcPost(t, owner, repoLink, map[string]string{"days": d}, http.StatusSeeOther)
+			bcPost(t, owner, repoLink, map[string]string{"cleanup_days": d}, http.StatusSeeOther)
 			assert.NotEmpty(t, bwFlash(owner), d)
 		}
 		r := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{OwnerName: "org3", LowerName: repo})
@@ -69,18 +69,18 @@ func TestBranchCleanupSettings(t *testing.T) {
 
 		// readers see nothing
 		reader.MakeRequest(t, NewRequest(t, "GET", repoLink), http.StatusNotFound)
-		bcPost(t, reader, repoLink, map[string]string{"days": "5"}, http.StatusNotFound)
+		bcPost(t, reader, repoLink, map[string]string{"cleanup_days": "5"}, http.StatusNotFound)
 		reader.MakeRequest(t, NewRequest(t, "GET", orgLink), http.StatusNotFound)
-		bcPost(t, reader, orgLink, map[string]string{"days": "5"}, http.StatusNotFound)
+		bcPost(t, reader, orgLink, map[string]string{"cleanup_days": "5"}, http.StatusNotFound)
 
 		// an organization lock stops the repository's own setting
-		bcPost(t, owner, orgLink, map[string]string{"days": "60", "enforce": "on"}, http.StatusSeeOther)
-		bcPost(t, owner, repoLink, map[string]string{"days": "10"}, http.StatusForbidden)
+		bcPost(t, owner, orgLink, map[string]string{"cleanup_days": "60", "cleanup_enforce": "on"}, http.StatusSeeOther)
+		bcPost(t, owner, repoLink, map[string]string{"cleanup_days": "10"}, http.StatusForbidden)
 		resp = owner.MakeRequest(t, NewRequest(t, "GET", repoPage), http.StatusOK)
 		assert.Contains(t, resp.Body.String(), "disabled")
-		bcPost(t, owner, orgLink, map[string]string{"days": "60"}, http.StatusSeeOther)
-		bcPost(t, owner, repoLink, map[string]string{"days": "10"}, http.StatusSeeOther)
-		bcPost(t, owner, orgLink, map[string]string{"days": "abc"}, http.StatusSeeOther)
+		bcPost(t, owner, orgLink, map[string]string{"cleanup_days": "60"}, http.StatusSeeOther)
+		bcPost(t, owner, repoLink, map[string]string{"cleanup_days": "10"}, http.StatusSeeOther)
+		bcPost(t, owner, orgLink, map[string]string{"cleanup_days": "abc"}, http.StatusSeeOther)
 		assert.NotEmpty(t, bwFlash(owner))
 
 		assert.NotNil(t, cron.GetTask(repo_service.CleanupTaskName))
@@ -120,7 +120,7 @@ func TestBranchCleanupPreviewAndRun(t *testing.T) {
 		assert.Contains(t, body, `value="30"`) // turn-on form
 
 		// turning it on waits 7 days
-		bcPost(t, s, link, map[string]string{"days": "30"}, http.StatusSeeOther)
+		bcPost(t, s, link, map[string]string{"cleanup_days": "30"}, http.StatusSeeOther)
 		resp = s.MakeRequest(t, NewRequest(t, "GET", link), http.StatusOK)
 		assert.NotContains(t, resp.Body.String(), `<button class="ui primary button">`)
 
@@ -134,17 +134,17 @@ func TestBranchCleanupPreviewAndRun(t *testing.T) {
 		setting.Maintenance.Mode = ""
 
 		// while waiting, nothing is deleted
-		run, err = repo_service.RunBranchCleanup(t.Context(), repo)
-		require.NoError(t, err)
-		assert.Zero(t, run.Deleted)
+		require.NoError(t, repo_service.CleanupMergedBranches(audit_model.WithSystem(t.Context(), "cron:"+repo_service.CleanupTaskName)))
+		assert.Equal(t, before, dmBranches(t, repo))
 
 		// the wait is over
-		repoRow := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: repo.ID})
-		u := repoRow.MustGetUnit(t.Context(), 3)
-		cfg := u.PullRequestsConfig()
-		cfg.BranchCleanup.EffectiveFrom = time.Now().Add(-time.Hour).Unix()
-		u.Config = cfg
-		require.NoError(t, repo_model.UpdateRepoUnit(t.Context(), u))
+		st, err := repo_model.GetBranchCleanupState(t.Context(), repo.ID)
+		require.NoError(t, err)
+		require.NotNil(t, st)
+		assert.Zero(t, st.Days)
+		assert.Equal(t, 30, st.PendingDays)
+		_, err = db.GetEngine(t.Context()).Exec("UPDATE branch_cleanup_state SET pending_from = ? WHERE repo_id = ?", time.Now().Add(-time.Hour).Unix(), repo.ID)
+		require.NoError(t, err)
 
 		// a push after the preview survives (new commit moves the row and the tip)
 		testEditFileToNewBranch(t, s, "org3", repo.Name, "m-b", "m-b", "README.md", "late\n")
