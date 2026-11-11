@@ -40,6 +40,11 @@ type KeptChecker struct {
 
 // NewKeptChecker loads the model, the protection rules and, with openPRs, the branches the open pull requests use.
 func NewKeptChecker(ctx context.Context, repo *repo_model.Repository, openPRs bool) (*KeptChecker, error) {
+	return newKeptChecker(ctx, repo, openPRs, "")
+}
+
+// newKeptChecker is NewKeptChecker; a non-empty only loads just the open pull requests that name that branch.
+func newKeptChecker(ctx context.Context, repo *repo_model.Repository, openPRs bool, only string) (*KeptChecker, error) {
 	model, err := GetEffectiveModel(ctx, repo)
 	if err != nil {
 		return nil, err
@@ -60,11 +65,20 @@ func NewKeptChecker(ctx context.Context, repo *repo_model.Repository, openPRs bo
 	if !openPRs {
 		return k, nil
 	}
+	// A pull request keeps a branch only when this repository's own people can deal with it: it targets this
+	// repository, or it comes from here and goes to the fork parent. A pull request in someone else's fork whose head
+	// is a branch of this repository (opened by anyone who can fork it) keeps nothing.
+	var ours builder.Cond = builder.Eq{"pull_request.base_repo_id": repo.ID}
+	if repo.ForkID > 0 {
+		ours = builder.Or(ours, builder.Eq{"pull_request.head_repo_id": repo.ID, "pull_request.base_repo_id": repo.ForkID})
+	}
+	sess := db.GetEngine(ctx).Join("INNER", "issue", "issue.id = pull_request.issue_id").
+		Where(builder.Eq{"issue.is_closed": false, "pull_request.has_merged": false}).And(ours)
+	if only != "" {
+		sess = sess.And(builder.Or(builder.Eq{"pull_request.head_branch": only}, builder.Eq{"pull_request.base_branch": only}))
+	}
 	var prs []*issues_model.PullRequest
-	if err := db.GetEngine(ctx).Join("INNER", "issue", "issue.id = pull_request.issue_id").
-		Where(builder.Eq{"issue.is_closed": false, "pull_request.has_merged": false}).
-		And(builder.Eq{"pull_request.head_repo_id": repo.ID}.Or(builder.Eq{"pull_request.base_repo_id": repo.ID})).
-		Find(&prs); err != nil {
+	if err := sess.Find(&prs); err != nil {
 		return nil, err
 	}
 	for _, pr := range prs {
@@ -109,7 +123,7 @@ func (k *KeptChecker) Reason(name string) string {
 // branches of open pull requests count; the delete after merge, which retargets the children of the merged pull
 // request and has its own check of the open ones, passes false.
 func KeptReason(ctx context.Context, repo *repo_model.Repository, name string, openPRs bool) (string, error) {
-	k, err := NewKeptChecker(ctx, repo, openPRs)
+	k, err := newKeptChecker(ctx, repo, openPRs, name)
 	if err != nil {
 		return "", err
 	}

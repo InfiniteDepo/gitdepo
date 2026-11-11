@@ -79,9 +79,9 @@ func TestDeleteMergedBranches(t *testing.T) {
 		ctx := NewAPITestContext(t, "user2", repo.Name, auth_model.AccessTokenScopeWriteRepository)
 		bwProtect(t, ctx, repo.Name, "prot-merged", parameterProtectBranch{"enable_push": "true"})
 
-		// the Branches page links to the preview for a repository admin
+		// the Branches page has its own bulk delete; the settings page stays the place of this tool
 		resp := s.MakeRequest(t, NewRequest(t, "GET", path.Join("/org3", repo.Name, "branches")), http.StatusOK)
-		NewHTMLParser(t, resp.Body).AssertElement(t, `a[href$="/settings/branch_workflow/delete_merged#delete-merged"]`, true)
+		NewHTMLParser(t, resp.Body).AssertElement(t, `a[href$="/settings/branch_workflow/delete_merged#delete-merged"]`, false)
 
 		link := path.Join("/org3", repo.Name, "settings/branch_workflow/delete_merged")
 		id := strconv.FormatInt(repo.ID, 10)

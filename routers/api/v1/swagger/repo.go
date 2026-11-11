@@ -38,6 +38,13 @@ type swaggerResponseBranch struct {
 	Body api.Branch `json:"body"`
 }
 
+// DeleteBranchesResult
+// swagger:response DeleteBranchesResult
+type swaggerResponseDeleteBranchesResult struct {
+	// in:body
+	Body api.DeleteBranchesResult `json:"body"`
+}
+
 // BranchList
 // swagger:response BranchList
 type swaggerResponseBranchList struct {

@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"forgejo.org/models"
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
 	repo_model "forgejo.org/models/repo"
@@ -62,11 +63,31 @@ func Branches(ctx *context.Context) {
 		ctx.ServerError("GetEffectiveModel", err)
 		return
 	}
-	typeFilter, untyped := ctx.FormString("type"), ctx.FormBool("untyped")
-	defaultBranch, branches, branchesCount, err := repo_service.LoadBranches(ctx, ctx.Doer, ctx.Repo.Repository, ctx.Repo.GitRepo, optional.None[bool](), kw, branchworkflow.TypeFilter(model.Model, typeFilter, untyped), page, pageSize)
+	filter, ok := branchFilterFromForm(ctx)
+	if !ok {
+		return
+	}
+	query, ok := branchQueryOf(ctx, filter, model)
+	if !ok {
+		return
+	}
+	// with the merged filter the page's rows are chosen here (the git walk's names don't go into SQL)
+	pageQuery, matching, err := query.Page(ctx, ctx.Repo.Repository, page, pageSize)
+	if err != nil {
+		ctx.ServerError("BranchQuery.Page", err)
+		return
+	}
+	loadPage := page
+	if matching >= 0 {
+		loadPage = 1
+	}
+	defaultBranch, branches, branchesCount, err := repo_service.LoadBranches(ctx, ctx.Doer, ctx.Repo.Repository, ctx.Repo.GitRepo, pageQuery.Deleted, pageQuery.Keyword, pageQuery.Cond, loadPage, pageSize)
 	if err != nil {
 		ctx.ServerError("LoadBranches", err)
 		return
+	}
+	if matching >= 0 { // LoadBranches counted only this page's rows
+		branchesCount = matching
 	}
 
 	commitIDs := []string{defaultBranch.DBBranch.CommitID}
@@ -87,7 +108,10 @@ func Branches(ctx *context.Context) {
 
 	ctx.Data["Keyword"] = kw
 	ctx.Data["Branches"] = branches
-	prepareBranchGroups(ctx, model.Model, branches, typeFilter, untyped)
+	prepareBranchGroups(ctx, model.Model, branches, filter.Type, filter.Untyped)
+	if !prepareBranchBulk(ctx, filter, query, model, branches) {
+		return
+	}
 	if ctx.Repo.CanCreateBranch() && !PrepareBranchDialog(ctx, model) {
 		return
 	}
@@ -96,6 +120,15 @@ func Branches(ctx *context.Context) {
 	ctx.Data["DefaultBranchBranch"] = defaultBranch
 	pager := context.NewPagination(int(branchesCount), pageSize, page, 5)
 	pager.SetDefaultParams(ctx)
+	if filter.Type != "" {
+		pager.AddParamString("type", filter.Type)
+	}
+	if filter.Untyped {
+		pager.AddParamString("untyped", "1")
+	}
+	for k, v := range branchFilterValues(filter) {
+		pager.AddParamString(k, v[0])
+	}
 	ctx.Data["Page"] = pager
 
 	ctx.HTML(http.StatusOK, tplBranch)
@@ -223,24 +256,51 @@ func DeleteBranchPost(ctx *context.Context) {
 func RestoreBranchPost(ctx *context.Context) {
 	defer redirect(ctx)
 
-	branchID := ctx.FormInt64("branch_id")
-	branchName := ctx.FormString("name")
-
 	// a restore adds a branch, and the size limit's gc may have pruned its objects
 	if repo_service.PersonalRepoLocked(ctx, ctx.Repo.Repository) {
 		ctx.Flash.Error(ctx.Tr("repo.personal_repos.limit_reached_short"))
 		return
 	}
 
+	name, code := restoreDeletedBranch(ctx, ctx.FormInt64("branch_id"), ctx.FormString("name"))
+	switch code {
+	case "":
+	case restoreAlreadyExists:
+		ctx.Flash.Error(ctx.Tr("repo.branch.already_exists", name))
+		return
+	default:
+		ctx.Flash.Error(ctx.Tr("repo.branch.restore_failed", name))
+		return
+	}
+	ctx.Flash.Success(ctx.Tr("repo.branch.restore_success", name))
+}
+
+// The reason codes of a refused restore.
+const (
+	restoreFailed        = "failed"
+	restoreAlreadyExists = "already_exists"
+	restoreTypeRequired  = "type_required" // the branching model requires a branch type the name lacks
+)
+
+// restoreDeletedBranch pushes the deleted branch with that ID back, with the hooks of a push, and returns its name
+// and "" or the reason code it was refused; branchName only names the branch when the row is not found.
+func restoreDeletedBranch(ctx *context.Context, branchID int64, branchName string) (string, string) {
 	deletedBranch, err := git_model.GetDeletedBranchByID(ctx, ctx.Repo.Repository.ID, branchID)
 	if err != nil {
 		log.Error("GetDeletedBranchByID: %v", err)
-		ctx.Flash.Error(ctx.Tr("repo.branch.restore_failed", branchName))
-		return
+		return branchName, restoreFailed
 	} else if deletedBranch == nil {
 		log.Debug("RestoreBranch: Can't restore branch[%d] '%s', as it does not exist", branchID, branchName)
-		ctx.Flash.Error(ctx.Tr("repo.branch.restore_failed", branchName))
-		return
+		return branchName, restoreFailed
+	}
+
+	// the push below would be refused by the pre-receive hook; say why
+	if _, err := branchworkflow.CheckNewBranch(ctx, ctx.Repo.Repository, ctx.Doer.ID, false, deletedBranch.Name); err != nil {
+		if _, refused := errors.AsType[branchworkflow.ErrBranchTypeRequired](err); refused {
+			return deletedBranch.Name, restoreTypeRequired
+		}
+		log.Error("RestoreBranch: CheckNewBranch: %v", err)
+		return deletedBranch.Name, restoreFailed
 	}
 
 	if err := git.Push(ctx, ctx.Repo.Repository.RepoPath(), git.PushOptions{
@@ -250,12 +310,10 @@ func RestoreBranchPost(ctx *context.Context) {
 	}); err != nil {
 		if strings.Contains(err.Error(), "already exists") {
 			log.Debug("RestoreBranch: Can't restore branch '%s', since one with same name already exist", deletedBranch.Name)
-			ctx.Flash.Error(ctx.Tr("repo.branch.already_exists", deletedBranch.Name))
-			return
+			return deletedBranch.Name, restoreAlreadyExists
 		}
 		log.Error("RestoreBranch: CreateBranch: %v", err)
-		ctx.Flash.Error(ctx.Tr("repo.branch.restore_failed", deletedBranch.Name))
-		return
+		return deletedBranch.Name, restoreFailed
 	}
 
 	objectFormat := git.ObjectFormatFromName(ctx.Repo.Repository.ObjectFormatName)
@@ -276,7 +334,13 @@ func RestoreBranchPost(ctx *context.Context) {
 		log.Error("RestoreBranch: Update: %v", err)
 	}
 
-	ctx.Flash.Success(ctx.Tr("repo.branch.restore_success", deletedBranch.Name))
+	if err := repo_model.RecordRepoTarget(ctx, ctx.Repo.Repository, audit_model.Event{
+		Action: "repo.branch.restored", TargetType: "branch", TargetName: deletedBranch.Name,
+		Data: map[string]any{"name": deletedBranch.Name, "commit": deletedBranch.CommitID},
+	}); err != nil {
+		log.Error("RestoreBranch: audit: %v", err)
+	}
+	return deletedBranch.Name, ""
 }
 
 func redirect(ctx *context.Context) {

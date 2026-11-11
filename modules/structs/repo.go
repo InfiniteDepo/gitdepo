@@ -306,6 +306,61 @@ type CreateBranchRepoOption struct {
 	OldRefName string `json:"old_ref_name" binding:"GitRefName;MaxSize(100)"`
 }
 
+// DeleteBranchesOption options when deleting several branches of a repository at once. Either names or at least one
+// filter besides q is set; with names the filters are ignored.
+// swagger:model
+type DeleteBranchesOption struct {
+	// Names of the branches to delete, 1 to 100
+	Names []string `json:"names"`
+
+	// Filters, used when no names are given: only branches whose name contains this text
+	Keyword string `json:"q"`
+
+	// Only branches of this type ("Release" or the name of a branch type)
+	Type string `json:"type"`
+
+	// Only branches that match no type
+	Untyped bool `json:"untyped"`
+
+	// Only branches that are "merged" or "not_merged" into the development branch (or into merged_into)
+	// enum: merged,not_merged
+	Merged string `json:"merged"`
+
+	// The branch merged and not_merged look at: "development" (the default of the filter) or "default"
+	// enum: development,default
+	MergedInto string `json:"merged_into"`
+
+	// Only branches the server has not updated for this many days (1 to 3650; the age is never the commit date)
+	StaleDays int `json:"stale_days"`
+
+	// Only branches last pushed by this user name (not the commit author)
+	PushedBy string `json:"pushed_by"`
+}
+
+// KeptBranch is a branch a bulk delete did not delete, with the reason.
+// swagger:model
+type KeptBranch struct {
+	// Name of the branch
+	Name string `json:"name"`
+
+	// Why it was kept: default, development, production, release, protected, open_pr, merge_queue, base,
+	// new_commits, permission, not_found or error
+	Reason string `json:"reason"`
+}
+
+// DeleteBranchesResult is what a bulk delete of branches did, branch by branch.
+// swagger:model
+type DeleteBranchesResult struct {
+	// Names of the deleted branches; each can be restored from the deleted branches
+	Deleted []string `json:"deleted"`
+
+	// The branches that were kept
+	Kept []KeptBranch `json:"kept"`
+
+	// True when the filters matched more branches than one request deletes: send it again for the rest
+	More bool `json:"more"`
+}
+
 // UpdateBranchRepoOption options when updating a branch in a repository
 // swagger:model
 type UpdateBranchRepoOption struct {

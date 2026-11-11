@@ -21,6 +21,7 @@ import (
 	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
 	"forgejo.org/routers/api/v1/utils"
+	"forgejo.org/routers/common"
 	"forgejo.org/services/branchworkflow"
 	"forgejo.org/services/context"
 	"forgejo.org/services/convert"
@@ -170,6 +171,130 @@ func DeleteBranch(ctx *context.APIContext) {
 	}
 
 	ctx.Status(http.StatusNoContent)
+}
+
+// DeleteBranches deletes several branches of a repository, named or picked by filters, and reports each one
+func DeleteBranches(ctx *context.APIContext) {
+	// swagger:operation POST /repos/{owner}/{repo}/branches/delete repository repoDeleteBranches
+	// ---
+	// summary: Delete several branches, named or picked by filters
+	// description: Names up to 100 branches, or picks the first 100 that match the filters. The default, development, production, release and protected branches, branches of the merge queue and branches used by open pull requests are kept, and so is a branch that was pushed to since it was read. A kept branch does not stop the others. Every deleted branch can be restored from the deleted branches.
+	// consumes:
+	// - application/json
+	// produces:
+	// - application/json
+	// parameters:
+	// - name: owner
+	//   in: path
+	//   description: owner of the repo
+	//   type: string
+	//   required: true
+	// - name: repo
+	//   in: path
+	//   description: name of the repo
+	//   type: string
+	//   required: true
+	// - name: body
+	//   in: body
+	//   schema:
+	//     "$ref": "#/definitions/DeleteBranchesOption"
+	// responses:
+	//   "200":
+	//     "$ref": "#/responses/DeleteBranchesResult"
+	//   "403":
+	//     "$ref": "#/responses/forbidden"
+	//   "404":
+	//     "$ref": "#/responses/notFound"
+	//   "422":
+	//     "$ref": "#/responses/validationError"
+	//   "423":
+	//     "$ref": "#/responses/repoArchivedError"
+	repo := ctx.Repo().Repository
+	if repo.IsEmpty {
+		ctx.Error(http.StatusNotFound, "", "Git Repository is empty.")
+		return
+	}
+	if repo.IsMirror {
+		ctx.Error(http.StatusForbidden, "", "Git Repository is a mirror.")
+		return
+	}
+	opt := web.GetForm(ctx).(*api.DeleteBranchesOption)
+
+	// check whether branches of this repository has been synced
+	total, err := db.Count[git_model.Branch](ctx, git_model.FindBranchOptions{RepoID: repo.ID, IsDeletedBranch: optional.Some(false)})
+	if err != nil {
+		ctx.Error(http.StatusInternalServerError, "CountBranches", err)
+		return
+	}
+	if total == 0 {
+		if _, err := repo_module.SyncRepoBranches(ctx, repo.ID, 0); err != nil {
+			ctx.ServerError("SyncRepoBranches", err)
+			return
+		}
+	}
+
+	var selected []repo_service.SelectedBranch
+	more := false
+	if len(opt.Names) > 0 {
+		names, err := repo_service.CheckSelectedBranchNames(opt.Names, repo_service.MaxDeleteSelectedBranchesAPI)
+		if err != nil {
+			ctx.Error(http.StatusUnprocessableEntity, "", err)
+			return
+		}
+		for _, n := range names {
+			selected = append(selected, repo_service.SelectedBranch{Name: n})
+		}
+	} else {
+		filter := repo_service.BranchFilter{
+			Keyword: opt.Keyword, Type: opt.Type, Untyped: opt.Untyped, State: opt.Merged, Into: opt.MergedInto,
+			StaleDays: opt.StaleDays, PushedBy: opt.PushedBy, Viewer: ctx.Doer(),
+		}
+		if !filter.IsSet() && filter.Type == "" && !filter.Untyped {
+			ctx.Error(http.StatusUnprocessableEntity, "", "name the branches or give a filter")
+			return
+		}
+		if !common.ChargeHeavyAPI(ctx) { // a filter walks the history and reads every branch row
+			return
+		}
+		model, err := branchworkflow.GetEffectiveModel(ctx, repo)
+		if err != nil {
+			ctx.Error(http.StatusInternalServerError, "GetEffectiveModel", err)
+			return
+		}
+		q, err := filter.Query(ctx, repo, ctx.Repo().GitRepo, model)
+		if err != nil {
+			if errors.Is(err, util.ErrInvalidArgument) {
+				ctx.Error(http.StatusUnprocessableEntity, "", err)
+			} else {
+				ctx.Error(http.StatusInternalServerError, "BranchFilter.Query", err)
+			}
+			return
+		}
+		found, err := repo_service.FindDeletableBranches(ctx, repo, q, repo_service.MaxDeleteSelectedBranchesAPI)
+		if err != nil {
+			ctx.Error(http.StatusInternalServerError, "FindDeletableBranches", err)
+			return
+		}
+		selected, more = found.Branches, found.Total > len(found.Branches)
+	}
+
+	results, err := repo_service.DeleteSelectedBranches(ctx, ctx.Doer(), repo, ctx.Repo().GitRepo, selected)
+	if errors.Is(err, util.ErrPermissionDenied) {
+		ctx.Error(http.StatusForbidden, "", err)
+		return
+	} else if err != nil { // the branches are deleted and audited one by one; the summary entry failed: the request fails
+		ctx.Error(http.StatusInternalServerError, "DeleteSelectedBranches", err)
+		return
+	}
+	res := api.DeleteBranchesResult{Deleted: []string{}, Kept: []api.KeptBranch{}, More: more}
+	for _, r := range results {
+		if r.Reason == "" {
+			res.Deleted = append(res.Deleted, r.Name)
+		} else {
+			res.Kept = append(res.Kept, api.KeptBranch{Name: r.Name, Reason: r.Reason})
+		}
+	}
+	ctx.JSON(http.StatusOK, res)
 }
 
 // CreateBranch creates a branch for a user's repository

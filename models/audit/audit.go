@@ -173,7 +173,7 @@ var Fields = map[string][]string{
 		"is_mirror", "fork_id", "template_id", "units", "counts", "purge", "to_owner_id", "to_owner_name", "team_ids",
 		"interval", "enable_prune", "branch_filter", "tag_filter", "lfs", "lfs_endpoint", "address", "url_changed",
 		"credentials_changed", "development_branch", "release_prefixes", "production_branch", "merge_forward", "merge_forward_never_bypass", "merge_forward_anyone_may_skip", "types", "default_pr_target", "require_branch_type", "branch_exceptions", "exempt_user_ids", "exempt_team_ids", "inherit", "mode", "model_sha256",
-		"dependency_graph", "secret_scanning",
+		"dependency_graph", "secret_scanning", "refused",
 	},
 	"collaborator":       {"user_id", "mode"},
 	"branch":             {"name", "from", "to", "commit", "default", "pull", "reason", "conflict_pull", "pull_failed", "via"},

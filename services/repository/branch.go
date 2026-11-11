@@ -553,9 +553,12 @@ func DeleteBranch(ctx context.Context, doer *user_model.User, repo *repo_model.R
 				return err
 			}
 		}
+		data := map[string]any{"name": branchName, "commit": expected}
+		if ctx.Value(bulkDeleteKey{}) != nil {
+			data["via"] = "bulk"
+		}
 		if err := repo_model.RecordRepoTarget(ctx, repo, audit_model.Event{
-			Action: "repo.branch.deleted", TargetType: "branch", TargetName: branchName,
-			Data: map[string]any{"name": branchName, "commit": expected},
+			Action: "repo.branch.deleted", TargetType: "branch", TargetName: branchName, Data: data,
 		}); err != nil {
 			return err
 		}
