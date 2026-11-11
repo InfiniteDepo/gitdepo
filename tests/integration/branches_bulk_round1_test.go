@@ -19,6 +19,8 @@ import (
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/gitrepo"
+	"forgejo.org/modules/ratelimit"
+	"forgejo.org/modules/setting"
 	api "forgejo.org/modules/structs"
 	"forgejo.org/modules/test"
 	"forgejo.org/services/branchworkflow"
@@ -219,5 +221,27 @@ func TestBranchesBulkRestoreTypeRequired(t *testing.T) {
 		flash := bwFlash(s)
 		assert.Contains(t, flash, "m-a: the branching model requires a branch type this name lacks")
 		assert.NotContains(t, dmBranches(t, repo), "m-a")
+	})
+}
+
+// L3: the API filter delete walks the history and reads every branch row, so it takes a heavy token; naming
+// branches does not.
+func TestBranchesBulkAPIFilterHeavy(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, _ *url.URL) {
+		defer tests.PrintCurrentTest(t)()
+		s := loginUser(t, "user2")
+		repo := bkRepo(t, s, "bk-heavy")
+		tok := getTokenForLoggedInUser(t, s, auth_model.AccessTokenScopeWriteRepository)
+		endpoint := "/api/v1/repos/org3/" + repo.Name + "/branches/delete"
+		mockRateLimit(t, map[string]setting.RateLimitClass{
+			ratelimit.Heavy: {AuthenticatedRate: slow, AuthenticatedBurst: 1, AnonymousRate: slow, AnonymousBurst: 1},
+		}, "")
+		post := func(o *api.DeleteBranchesOption, status int) {
+			t.Helper()
+			MakeRequest(t, fromIP(NewRequestWithJSON(t, "POST", endpoint, o).AddTokenAuth(tok), "198.51.100.77"), status)
+		}
+		post(&api.DeleteBranchesOption{Names: []string{"ghost"}}, http.StatusOK) // naming is no heavy work
+		post(&api.DeleteBranchesOption{Merged: "merged"}, http.StatusOK)
+		post(&api.DeleteBranchesOption{Merged: "merged"}, http.StatusTooManyRequests)
 	})
 }
