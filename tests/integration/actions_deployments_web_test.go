@@ -236,7 +236,7 @@ func TestActionsDeploymentsWeb(t *testing.T) {
 			assert.Contains(t, flash(t, reviewer), "Choose at least one deployment to review.")
 
 			review(t, reviewer, run, "rejected", "not <b>now</b>", http.StatusSeeOther, job.ID)
-			assert.Contains(t, flash(t, reviewer), "The deployment was rejected.")
+			assert.Contains(t, flash(t, reviewer), "1 deployment was rejected.")
 			d := deployment(t, job)
 			assert.Equal(t, actions_model.DeploymentRejected, d.Status)
 			assert.Equal(t, user4.ID, d.ReviewedBy)
@@ -268,7 +268,7 @@ func TestActionsDeploymentsWeb(t *testing.T) {
 
 			since := auditNow(t)
 			review(t, reviewer, run, "approved", "", http.StatusSeeOther, job.ID)
-			assert.Contains(t, flash(t, reviewer), "The deployment was approved.")
+			assert.Contains(t, flash(t, reviewer), "1 deployment was approved.")
 			d := deployment(t, job)
 			assert.Equal(t, actions_model.DeploymentReleased, d.Status)
 			assert.Equal(t, user4.ID, d.ReviewedBy)
@@ -393,7 +393,7 @@ func TestActionsDeploymentsWebQueries(t *testing.T) {
 			require.NoError(t, db.Insert(db.DefaultContext, run))
 			job := &actions_model.ActionRunJob{RunID: run.ID, RepoID: repo.ID, OwnerID: repo.OwnerID, Name: "deploy", Attempt: 1, Status: actions_model.StatusBlocked, Handle: fmt.Sprintf("dq-%d", n)}
 			require.NoError(t, db.Insert(db.DefaultContext, job))
-			env, err := actions_model.GetRepoEnvironmentByName(ctx, repo.ID, "prod")
+			env, err := actions_model.GetEnvironmentByName(ctx, 0, repo.ID, "prod")
 			require.NoError(t, err)
 			require.NoError(t, db.Insert(db.DefaultContext, &actions_model.ActionDeployment{
 				RepoID: repo.ID, RunID: run.ID, JobID: job.ID, Attempt: 1, EnvironmentID: env.ID, Status: actions_model.DeploymentRejected,

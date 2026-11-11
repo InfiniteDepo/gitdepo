@@ -322,10 +322,10 @@ func (Action) ListVariables(ctx *context.APIContext) {
 // The bodies of the secrets and variables routes of a repository (environmentID 0) and of its environments.
 
 func listRepoSecrets(ctx *context.APIContext, environmentID int64) {
-	repo := ctx.Repo().Repository
-
+	ownerID, repoID := environmentScope(ctx)
 	opts := &secret_model.FindSecretsOptions{
-		RepoID:        repo.ID,
+		OwnerID:       ownerID,
+		RepoID:        repoID,
 		EnvironmentID: environmentID,
 		ListOptions:   utils.GetListOptions(ctx),
 	}
@@ -349,11 +349,10 @@ func listRepoSecrets(ctx *context.APIContext, environmentID int64) {
 }
 
 func putRepoSecret(ctx *context.APIContext, environmentID int64) {
-	repo := ctx.Repo().Repository
-
+	ownerID, repoID := environmentScope(ctx)
 	opt := web.GetForm(ctx).(*api.CreateOrUpdateSecretOption)
 
-	_, created, err := secrets_service.CreateOrUpdateSecret(ctx, 0, 0, repo.ID, environmentID, ctx.Params("secretname"), opt.Data)
+	_, created, err := secrets_service.CreateOrUpdateSecret(ctx, ownerID, 0, repoID, environmentID, ctx.Params("secretname"), opt.Data)
 	if err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusBadRequest, "CreateOrUpdateSecret", err)
@@ -375,9 +374,8 @@ func putRepoSecret(ctx *context.APIContext, environmentID int64) {
 }
 
 func deleteRepoSecret(ctx *context.APIContext, environmentID int64) {
-	repo := ctx.Repo().Repository
-
-	err := secrets_service.DeleteSecretByName(ctx, 0, 0, repo.ID, environmentID, ctx.Params("secretname"))
+	ownerID, repoID := environmentScope(ctx)
+	err := secrets_service.DeleteSecretByName(ctx, ownerID, 0, repoID, environmentID, ctx.Params("secretname"))
 	if err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusBadRequest, "DeleteSecret", err)
@@ -395,8 +393,10 @@ func deleteRepoSecret(ctx *context.APIContext, environmentID int64) {
 }
 
 func getRepoVariable(ctx *context.APIContext, environmentID int64) {
+	ownerID, repoID := environmentScope(ctx)
 	v, err := actions_service.GetVariable(ctx, actions_model.FindVariablesOpts{
-		RepoID:        ctx.Repo().Repository.ID,
+		OwnerID:       ownerID,
+		RepoID:        repoID,
 		EnvironmentID: environmentID,
 		Name:          ctx.Params("variablename"),
 	})
@@ -420,7 +420,8 @@ func getRepoVariable(ctx *context.APIContext, environmentID int64) {
 }
 
 func deleteRepoVariable(ctx *context.APIContext, environmentID int64) {
-	if err := actions_service.DeleteVariableByName(ctx, 0, 0, ctx.Repo().Repository.ID, environmentID, ctx.Params("variablename")); err != nil {
+	ownerID, repoID := environmentScope(ctx)
+	if err := actions_service.DeleteVariableByName(ctx, ownerID, 0, repoID, environmentID, ctx.Params("variablename")); err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusBadRequest, "DeleteVariableByName", err)
 		} else if errors.Is(err, util.ErrPermissionDenied) {
@@ -439,10 +440,11 @@ func deleteRepoVariable(ctx *context.APIContext, environmentID int64) {
 func createRepoVariable(ctx *context.APIContext, environmentID int64) {
 	opt := web.GetForm(ctx).(*api.CreateVariableOption)
 
-	repoID := ctx.Repo().Repository.ID
+	ownerID, repoID := environmentScope(ctx)
 	variableName := ctx.Params("variablename")
 
 	v, err := actions_service.GetVariable(ctx, actions_model.FindVariablesOpts{
+		OwnerID:       ownerID,
 		RepoID:        repoID,
 		EnvironmentID: environmentID,
 		Name:          variableName,
@@ -456,7 +458,7 @@ func createRepoVariable(ctx *context.APIContext, environmentID int64) {
 		return
 	}
 
-	if _, err := actions_service.CreateVariable(ctx, 0, 0, repoID, environmentID, variableName, opt.Value); err != nil {
+	if _, err := actions_service.CreateVariable(ctx, ownerID, 0, repoID, environmentID, variableName, opt.Value); err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusBadRequest, "CreateVariable", err)
 		} else if errors.Is(err, util.ErrPermissionDenied) {
@@ -474,9 +476,11 @@ func createRepoVariable(ctx *context.APIContext, environmentID int64) {
 
 func updateRepoVariable(ctx *context.APIContext, environmentID int64) {
 	opt := web.GetForm(ctx).(*api.UpdateVariableOption)
+	ownerID, repoID := environmentScope(ctx)
 
 	v, err := actions_service.GetVariable(ctx, actions_model.FindVariablesOpts{
-		RepoID:        ctx.Repo().Repository.ID,
+		OwnerID:       ownerID,
+		RepoID:        repoID,
 		EnvironmentID: environmentID,
 		Name:          ctx.Params("variablename"),
 	})
@@ -492,7 +496,7 @@ func updateRepoVariable(ctx *context.APIContext, environmentID int64) {
 	if opt.Name == "" {
 		opt.Name = ctx.Params("variablename")
 	}
-	if _, err := actions_service.UpdateVariable(ctx, v.ID, 0, 0, ctx.Repo().Repository.ID, environmentID, opt.Name, opt.Value); err != nil {
+	if _, err := actions_service.UpdateVariable(ctx, v.ID, v.OwnerID, 0, v.RepoID, environmentID, opt.Name, opt.Value); err != nil {
 		if errors.Is(err, util.ErrInvalidArgument) {
 			ctx.Error(http.StatusBadRequest, "UpdateVariable", err)
 		} else if errors.Is(err, util.ErrPermissionDenied) {
@@ -511,8 +515,10 @@ func updateRepoVariable(ctx *context.APIContext, environmentID int64) {
 }
 
 func listRepoVariables(ctx *context.APIContext, environmentID int64) {
+	ownerID, repoID := environmentScope(ctx)
 	vars, count, err := db.FindAndCount[actions_model.ActionVariable](ctx, &actions_model.FindVariablesOpts{
-		RepoID:        ctx.Repo().Repository.ID,
+		OwnerID:       ownerID,
+		RepoID:        repoID,
 		EnvironmentID: environmentID,
 		ListOptions:   utils.GetListOptions(ctx),
 	})

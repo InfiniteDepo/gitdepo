@@ -34,7 +34,7 @@ func CreateOrUpdateSecret(ctx context.Context, ownerID, groupID, repoID, environ
 	if !exists {
 		insert := func() (*secret_model.Secret, error) {
 			if environmentID != 0 {
-				return secret_model.InsertEncryptedEnvironmentSecret(ctx, repoID, environmentID, name, data)
+				return secret_model.InsertEncryptedEnvironmentSecret(ctx, ownerID, repoID, environmentID, name, data)
 			}
 			return secret_model.InsertEncryptedSecret(ctx, ownerID, groupID, repoID, name, data)
 		}
@@ -55,7 +55,7 @@ func CreateOrUpdateSecret(ctx context.Context, ownerID, groupID, repoID, environ
 // CreateSecret inserts a new secret of a level as CreateOrUpdateSecret names it (an existing name is an error).
 func CreateSecret(ctx context.Context, ownerID, groupID, repoID, environmentID int64, name, data string) (*secret_model.Secret, error) {
 	if environmentID != 0 {
-		return secret_model.InsertEncryptedEnvironmentSecret(ctx, repoID, environmentID, name, data)
+		return secret_model.InsertEncryptedEnvironmentSecret(ctx, ownerID, repoID, environmentID, name, data)
 	}
 	return secret_model.InsertEncryptedSecret(ctx, ownerID, groupID, repoID, name, data)
 }
@@ -66,7 +66,7 @@ func EditSecret(ctx context.Context, ownerID, groupID, repoID, environmentID, id
 	var s *secret_model.Secret
 	var err error
 	if environmentID != 0 {
-		s, err = secret_model.GetEnvironmentSecretByID(ctx, repoID, environmentID, id)
+		s, err = secret_model.GetEnvironmentSecretByID(ctx, ownerID, repoID, environmentID, id)
 	} else {
 		s, err = secret_model.GetSecretByID(ctx, ownerID, groupID, repoID, id)
 	}

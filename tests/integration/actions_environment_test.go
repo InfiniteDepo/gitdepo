@@ -115,11 +115,11 @@ jobs:
 			_, err = actions_model.InsertVariable(ctx, 0, 0, repo.ID, "SHARED_VAR", "from-repo")
 			require.NoError(t, err)
 			e := newEnv("Staging", nil)
-			_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, repo.ID, e.ID, "SHARED", "from-env")
+			_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, repo.ID, e.ID, "SHARED", "from-env")
 			require.NoError(t, err)
-			_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, repo.ID, e.ID, "ONLY_ENV", "only-env")
+			_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, repo.ID, e.ID, "ONLY_ENV", "only-env")
 			require.NoError(t, err)
-			_, err = actions_model.InsertEnvironmentVariable(ctx, repo.ID, e.ID, "SHARED_VAR", "from-env")
+			_, err = actions_model.InsertEnvironmentVariable(ctx, 0, repo.ID, e.ID, "SHARED_VAR", "from-env")
 			require.NoError(t, err)
 
 			// the name matches ignoring case, and the map form gives a url
@@ -147,7 +147,7 @@ jobs:
 		t.Run("unknown environment is created, a bad url is dropped", func(t *testing.T) {
 			jobs := push("env-b", "environment:\n      name: Fresh\n      url: javascript:alert(1)")
 			task := runner.fetchTask(t)
-			e, err := actions_model.GetRepoEnvironmentByName(t.Context(), repo.ID, "fresh")
+			e, err := actions_model.GetEnvironmentByName(t.Context(), 0, repo.ID, "fresh")
 			require.NoError(t, err)
 			assert.Equal(t, "Fresh", e.Name)
 			d := deployment(jobs[0], 1)
@@ -284,7 +284,7 @@ jobs:
 				&api.DispatchWorkflowOption{Ref: repo.DefaultBranch, Inputs: map[string]string{"target": "From-Input"}},
 			).AddTokenAuth(token), http.StatusNoContent)
 			task := runner.fetchTask(t)
-			e, err := actions_model.GetRepoEnvironmentByName(t.Context(), repo.ID, "from-input")
+			e, err := actions_model.GetEnvironmentByName(t.Context(), 0, repo.ID, "from-input")
 			require.NoError(t, err)
 			count, err := db.GetEngine(t.Context()).Where("environment_id = ? AND status = ?", e.ID, actions_model.DeploymentReleased).Count(new(actions_model.ActionDeployment))
 			require.NoError(t, err)
@@ -293,7 +293,7 @@ jobs:
 		})
 		t.Run("the job of a reusable workflow is gated, with the inputs of the call", func(t *testing.T) {
 			e := newEnv("called-env", func(e *actions_model.ActionEnvironment) { e.WaitTimerMinutes = 10 })
-			_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, repo.ID, e.ID, "CALLED_SECRET", "called-value")
+			_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, repo.ID, e.ID, "CALLED_SECRET", "called-value")
 			require.NoError(t, err)
 			createWorkflowFile(t, token, user2.Name, repo.Name, ".gitea/workflows/env-called.yml", getWorkflowCreateFileOptions(user2, repo.DefaultBranch, "add called", `name: env-called
 on:
@@ -344,7 +344,7 @@ jobs:
 		t.Run("the name from the matrix of the job", func(t *testing.T) {
 			for _, name := range []string{"mx-a", "mx-b"} {
 				e := newEnv(name, nil)
-				_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, repo.ID, e.ID, "WHO", name)
+				_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, repo.ID, e.ID, "WHO", name)
 				require.NoError(t, err)
 			}
 			jobs := push("env-k", "environment: ${{ matrix.target }}\n    strategy:\n      matrix:\n        target: [mx-a, mx-b]")
@@ -353,7 +353,7 @@ jobs:
 			for _, job := range jobs {
 				d := deployment(job, 1)
 				require.NotNil(t, d)
-				e, err := actions_model.GetRepoEnvironmentByID(t.Context(), repo.ID, d.EnvironmentID)
+				e, err := actions_model.GetEnvironmentByID(t.Context(), 0, repo.ID, d.EnvironmentID)
 				require.NoError(t, err)
 				names[e.Name] = true
 			}
@@ -466,7 +466,7 @@ jobs:
 				).AddTokenAuth(token), http.StatusBadRequest)
 			}
 			assert.Equal(t, before, unittest.GetCount(t, &actions_model.ActionRun{RepoID: repo.ID}), "none of them started a run")
-			e, err := actions_model.GetRepoEnvironmentByName(t.Context(), repo.ID, "tag-v")
+			e, err := actions_model.GetEnvironmentByName(t.Context(), 0, repo.ID, "tag-v")
 			require.NoError(t, err)
 			count, err := db.GetEngine(t.Context()).Where("environment_id = ?", e.ID).Count(new(actions_model.ActionDeployment))
 			require.NoError(t, err)
@@ -555,9 +555,9 @@ jobs:
 		t.Run("recovering tasks skips and stops one whose environment is gone", func(t *testing.T) {
 			keep := newEnv("rec-keep", nil)
 			gone := newEnv("rec-gone", nil)
-			_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, repo.ID, keep.ID, "REC", "kept")
+			_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, repo.ID, keep.ID, "REC", "kept")
 			require.NoError(t, err)
-			_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, repo.ID, gone.ID, "REC", "lost")
+			_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, repo.ID, gone.ID, "REC", "lost")
 			require.NoError(t, err)
 			keepJob := push("env-a", "environment: rec-keep")[0]
 			goneJob := push("env-a", "environment: rec-gone")[0]

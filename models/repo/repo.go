@@ -375,6 +375,15 @@ func (repo *Repository) groupSegment() string {
 	return repo.GroupName
 }
 
+// PathInOwner returns the [project/]name path of the repository within its owner, as GetRepositoryByRef takes it: a
+// repository in a project is never named by its leaf alone, which a root repository of the owner can share.
+func (repo *Repository) PathInOwner() string {
+	if group := repo.groupSegment(); group != "" {
+		return group + "/" + repo.Name
+	}
+	return repo.Name
+}
+
 // EscapedPath returns the escaped owner[/project]/name path of the repository.
 func (repo *Repository) EscapedPath() string {
 	if group := repo.groupSegment(); group != "" {

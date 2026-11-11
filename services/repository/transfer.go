@@ -217,6 +217,9 @@ func transferOwnership(ctx context.Context, doer *user_model.User, newOwnerName 
 	if err := branchworkflow.DropExemptTeams(ctx, repo); err != nil {
 		return fmt.Errorf("DropExemptTeams: %w", err)
 	}
+	if err := db.DeleteBeans(ctx, &actions_model.ActionEnvironmentRepo{RepoID: repo.ID}); err != nil {
+		return fmt.Errorf("delete environment selections: %w", err)
+	}
 	if err := auth_model.DropOwnedAccessTokensOfTransferredRepo(ctx, repo.ID); err != nil {
 		return fmt.Errorf("DropOwnedAccessTokensOfTransferredRepo: %w", err)
 	}
@@ -232,6 +235,9 @@ func transferOwnership(ctx context.Context, doer *user_model.User, newOwnerName 
 	// the environment keeps requiring reviews)
 	if err := actions_model.RemoveReviewers(ctx, actions_model.ForeignTeamReviewerCond(repo.ID, newOwner.ID)); err != nil {
 		return fmt.Errorf("RemoveReviewers: %w", err)
+	}
+	if err := actions_model.RefuseTwinsOnTransfer(ctx, repo.ID, newOwner.ID); err != nil {
+		return err
 	}
 
 	// Remove redundant collaborators.
@@ -534,6 +540,10 @@ func StartRepositoryTransfer(ctx context.Context, doer, newOwner *user_model.Use
 	if err := models.TestRepositoryReadyForTransfer(repo.Status); err != nil {
 		return err
 	}
+	// refused already here, so no pending transfer waits that can't be accepted (accepting checks it again)
+	if err := actions_model.RefuseTwinsOnTransfer(ctx, repo.ID, newOwner.ID); err != nil {
+		return err
+	}
 
 	// Admin is always allowed to transfer || user transfer repo back to his account
 	if doer.IsAdmin || doer.ID == newOwner.ID {
@@ -614,6 +624,7 @@ func transferCounts(ctx context.Context, repo *repo_model.Repository, oldOwner *
 	}{
 		{"teams", "team_repo", builder.Eq{"repo_id": repo.ID, "org_id": oldOwner.ID}},
 		{"deploy_key_selections", "org_deploy_key_repo", builder.Eq{"repo_id": repo.ID}},
+		{"environment_selections", "action_environment_repo", builder.Eq{"repo_id": repo.ID}},
 		{"access_tokens", "access_token", builder.Eq{"owner_type": auth_model.AccessTokenOwnerRepo, "owner_id": repo.ID}},
 		{"token_selections", "access_token_resource_repo", builder.Eq{"repo_id": repo.ID}.And(builder.In("token_id", builder.Select("id").From("access_token").Where(builder.Neq{"owner_type": auth_model.AccessTokenOwnerUser})))},
 	} {

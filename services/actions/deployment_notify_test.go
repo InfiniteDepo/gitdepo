@@ -210,7 +210,7 @@ func TestDeploymentApprovalTwoFactorForEveryone(t *testing.T) {
 	}
 	check := func(t *testing.T, f *reviewFixture) *EnvironmentReviewerCheck {
 		repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 63})
-		env, err := actions_model.GetRepoEnvironmentByID(t.Context(), repo.ID, f.env.ID)
+		env, err := actions_model.GetEnvironmentByID(t.Context(), 0, repo.ID, f.env.ID)
 		require.NoError(t, err)
 		reviewers, err := actions_model.FindEnvironmentReviewers(t.Context(), env.ID)
 		require.NoError(t, err)

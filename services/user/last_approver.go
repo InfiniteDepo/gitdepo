@@ -83,10 +83,13 @@ func environmentReviewerWarnings(ctx context.Context, userIDs []int64) ([]LastAp
 	}
 	warnings := make([]LastApproverWarning, 0, len(found))
 	for _, f := range found {
+		link, name := f.Repo.Link(), translation.NewLocale("").TrString("admin.users.last_approver.environment_item", f.Env.Name, f.Repo.FullName())
+		if f.Org != nil {
+			link, name = f.Org.OrganisationLink(), translation.NewLocale("").TrString("admin.users.last_approver.environment_item_org", f.Env.Name, f.Org.Name, f.Repo.FullName())
+		}
 		warnings = append(warnings, LastApproverWarning{
 			UserID: f.UserID, Kind: LastApproverEnvironment,
-			Link: f.Repo.Link() + "/settings/actions/environments/" + strconv.FormatInt(f.Env.ID, 10),
-			Name: translation.NewLocale("").TrString("admin.users.last_approver.environment_item", f.Env.Name, f.Repo.FullName()),
+			Link: link + "/settings/actions/environments/" + strconv.FormatInt(f.Env.ID, 10), Name: name,
 		})
 	}
 	return warnings, nil

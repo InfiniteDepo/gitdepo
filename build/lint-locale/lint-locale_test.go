@@ -105,3 +105,12 @@ func TestNextLocalizationPolicy(t *testing.T) {
     }}`)))
 	})
 }
+
+// Every plural form takes the arguments of the "other" form, so none appends "%!(EXTRA int=1)".
+func TestCheckPluralVerbs(t *testing.T) {
+	assert.Empty(t, checkPluralVerbs([]byte(`{"a": {"one": "%d deployment", "other": "%d deployments"}, "b": "no %s plural", "c": {"one": "100%% of %[1]s", "other": "%[1]s"}}`)))
+	assert.Equal(t, []string{`a.one: placeholders "" differ from those of the other form "%d"`},
+		checkPluralVerbs([]byte(`{"a": {"one": "The deployment", "other": "%d deployments"}}`)))
+	assert.Equal(t, []string{`a.few: placeholders "%d %s" differ from those of the other form "%d"`},
+		checkPluralVerbs([]byte(`{"a": {"few": "%d of %s", "one": "%d", "other": "%d"}}`)))
+}

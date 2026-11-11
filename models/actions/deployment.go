@@ -8,6 +8,7 @@ import (
 	"net/url"
 
 	"forgejo.org/models/db"
+	repo_model "forgejo.org/models/repo"
 	"forgejo.org/modules/timeutil"
 
 	"xorm.io/builder"
@@ -61,9 +62,10 @@ const (
 	DeploymentReasonEnvironmentLimit   = "environment_limit"
 	DeploymentReasonEnvironmentDeleted = "environment_deleted"
 	DeploymentReasonInvalidName        = "invalid_name"
-	DeploymentReasonNotFound           = "environment_not_found"   // a fork pull request names an environment that doesn't exist
-	DeploymentReasonUnsupported        = "environment_unsupported" // a job of a reusable workflow whose environment can't be read
-	DeploymentReasonWorkflowNotAllowed = "workflow_not_allowed"    // the run's workflow file is not in the environment's allowed workflows
+	DeploymentReasonNotFound           = "environment_not_found"     // a fork pull request names an environment that doesn't exist
+	DeploymentReasonUnsupported        = "environment_unsupported"   // a job of a reusable workflow whose environment can't be read
+	DeploymentReasonWorkflowNotAllowed = "workflow_not_allowed"      // the run's workflow file is not in the environment's allowed workflows
+	DeploymentReasonNotAvailable       = "environment_not_available" // an organization environment that doesn't apply to the repository
 )
 
 const (
@@ -193,7 +195,7 @@ func TouchDeployment(ctx context.Context, id int64, now timeutil.TimeStamp) erro
 // it yet. Times have second resolution, so an edit in the same second as the deployment's last change isn't seen here;
 // that edit's own pass decides it.
 const staleDeployment = "(action_deployment.status IN (?, ?) AND EXISTS (SELECT 1 FROM action_environment " +
-	"WHERE action_environment.id = action_deployment.environment_id AND action_environment.repo_id = action_deployment.repo_id " +
+	"WHERE action_environment.id = action_deployment.environment_id AND action_environment.repo_id IN (0, action_deployment.repo_id) " +
 	"AND action_environment.updated > action_deployment.updated))"
 
 // MaxDueRunsPerRepo is how many runs of one repository one tick of the due-deployments task takes, so that one
@@ -251,12 +253,16 @@ func CancelOpenDeployments(ctx context.Context, jobID int64) error {
 }
 
 // FindUnpickedEnvironmentJobs returns the jobs of the environment that no runner took yet, whose current attempt waits
-// for the gate or was released by it.
+// for the gate or was released by it: of the repository, or of any repository for repoID 0 (an organization's).
 func FindUnpickedEnvironmentJobs(ctx context.Context, repoID, environmentID int64) ([]*ActionRunJob, error) {
+	cond := builder.Eq{"action_deployment.environment_id": environmentID}
+	if repoID != 0 {
+		cond["action_deployment.repo_id"] = repoID
+	}
 	var jobs []*ActionRunJob
 	return jobs, db.GetEngine(ctx).Table("action_run_job").Select("action_run_job.*").
 		Join("INNER", "action_deployment", "action_run_job.id = action_deployment.job_id AND action_run_job.attempt = action_deployment.attempt").
-		Where("action_deployment.repo_id = ? AND action_deployment.environment_id = ?", repoID, environmentID).
+		Where(cond).
 		And(builder.In("action_deployment.status", DeploymentWaitingTimer, DeploymentWaitingReview, DeploymentReleased)).
 		And(builder.In("action_run_job.status", StatusBlocked, StatusWaiting)).
 		And("action_run_job.task_id = 0").
@@ -279,10 +285,33 @@ func FindRunDeployments(ctx context.Context, runID int64) ([]*ActionDeployment, 
 	return ds, db.GetEngine(ctx).Where("run_id = ?", runID).OrderBy("job_id, attempt").Find(&ds)
 }
 
-// FindLastDeployments returns the newest deployment of each of the environments of the repository that has one.
-func FindLastDeployments(ctx context.Context, repoID int64, environmentIDs []int64) (map[int64]*ActionDeployment, error) {
+// deploymentsOfCond binds the deployments of the repository repoID, or, with repoID 0, of the repositories the
+// organization ownerID owns now.
+func deploymentsOfCond(ownerID, repoID int64) builder.Cond {
+	if repoID != 0 {
+		return builder.Eq{"repo_id": repoID}
+	}
+	return builder.In("repo_id", builder.Select("id").From("repository").Where(builder.Eq{"owner_id": ownerID}))
+}
+
+// CountDeployedRepos counts, for each of the organization's environments, the repositories of the organization that
+// have a deployment of it, not counting the ones in the trash, in one query.
+func CountDeployedRepos(ctx context.Context, ownerID int64, environmentIDs []int64) (map[int64]int64, error) {
+	var rows []struct{ EnvironmentID, N int64 }
+	err := db.GetEngine(ctx).Table("action_deployment").Select("environment_id, COUNT(DISTINCT repo_id) AS n").
+		Where(deploymentsOfCond(ownerID, 0)).And(repo_model.NotTrashedCond("repo_id")).In("environment_id", environmentIDs).GroupBy("environment_id").Find(&rows)
+	out := make(map[int64]int64, len(rows))
+	for _, r := range rows {
+		out[r.EnvironmentID] = r.N
+	}
+	return out, err
+}
+
+// FindLastDeployments returns the newest deployment of each of the environments that has one, of the repository, or
+// with repoID 0 of the repositories the organization ownerID owns now (deploymentsOfCond).
+func FindLastDeployments(ctx context.Context, ownerID, repoID int64, environmentIDs []int64) (map[int64]*ActionDeployment, error) {
 	var ids []int64
-	if err := db.GetEngine(ctx).Table("action_deployment").Select("MAX(id)").Where("repo_id = ?", repoID).
+	if err := db.GetEngine(ctx).Table("action_deployment").Select("MAX(id)").Where(deploymentsOfCond(ownerID, repoID)).
 		In("environment_id", environmentIDs).GroupBy("environment_id").Find(&ids); err != nil {
 		return nil, err
 	}
@@ -298,7 +327,8 @@ func FindLastDeployments(ctx context.Context, repoID int64, environmentIDs []int
 }
 
 // FindDeploymentTasks returns, by deployment ID, the task of the job attempt of each released deployment: its outcome,
-// which is not stored on the deployment. One query, bound to the repository; a released job no runner took yet has none.
+// which is not stored on the deployment. One query, bound to the repository (if not 0); a released job no runner took
+// yet has none.
 func FindDeploymentTasks(ctx context.Context, repoID int64, ds []*ActionDeployment) (map[int64]*ActionTask, error) {
 	jobIDs := make([]int64, 0, len(ds))
 	for _, d := range ds {
@@ -311,7 +341,11 @@ func FindDeploymentTasks(ctx context.Context, repoID int64, ds []*ActionDeployme
 		return out, nil
 	}
 	var tasks []*ActionTask
-	if err := db.GetEngine(ctx).Where("repo_id = ?", repoID).In("job_id", jobIDs).
+	cond := builder.In("job_id", jobIDs)
+	if repoID != 0 {
+		cond = cond.And(builder.Eq{"repo_id": repoID})
+	}
+	if err := db.GetEngine(ctx).Where(cond).
 		Cols("id", "job_id", "attempt", "status", "started", "stopped", "updated").OrderBy("id").Find(&tasks); err != nil {
 		return nil, err
 	}

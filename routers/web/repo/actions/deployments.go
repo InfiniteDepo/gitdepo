@@ -99,6 +99,8 @@ func refusalText(ctx *app_context.Context, d *actions_model.ActionDeployment) st
 		return ctx.Locale.TrString("actions.deployments.refused.environment_not_found")
 	case actions_model.DeploymentReasonUnsupported:
 		return ctx.Locale.TrString("actions.deployments.refused.environment_unsupported")
+	case actions_model.DeploymentReasonNotAvailable:
+		return ctx.Locale.TrString("actions.deployments.refused.environment_not_available")
 	}
 	return ctx.Locale.TrString("actions.deployments.refused.other")
 }
@@ -439,9 +441,9 @@ func Deployments(ctx *app_context.Context) {
 	ctx.Data["PageIsActions"] = true
 	ctx.Data["PageIsDeployments"] = true
 	repo := ctx.Repo.Repository
-	envs, _, err := actions_model.FindRepoEnvironments(ctx, repo.ID, db.ListOptions{ListAll: true})
+	envs, _, err := actions_model.FindEnvironmentsOfRepo(ctx, repo.ID, db.ListOptions{ListAll: true})
 	if err != nil {
-		ctx.ServerError("FindRepoEnvironments", err)
+		ctx.ServerError("FindEnvironmentsOfRepo", err)
 		return
 	}
 	ctx.Data["DeploymentEnvironments"] = envs
@@ -456,11 +458,11 @@ func Deployments(ctx *app_context.Context) {
 	name := ctx.FormString("environment")
 	var env *actions_model.ActionEnvironment
 	if name != "" {
-		env, err = actions_model.GetRepoEnvironmentByName(ctx, repo.ID, name)
+		env, err = actions_model.ResolveEnvironment(ctx, repo.ID, name)
 		if errors.Is(err, actions_model.ErrEnvironmentNotFound) {
 			ctx.Data["UnknownEnvironment"] = name
 		} else if err != nil {
-			ctx.ServerError("GetRepoEnvironmentByName", err)
+			ctx.ServerError("ResolveEnvironment", err)
 			return
 		}
 	}
@@ -469,7 +471,7 @@ func Deployments(ctx *app_context.Context) {
 		for _, e := range envs {
 			ids = append(ids, e.ID)
 		}
-		last, err := actions_model.FindLastDeployments(ctx, repo.ID, ids)
+		last, err := actions_model.FindLastDeployments(ctx, 0, repo.ID, ids)
 		if err != nil {
 			ctx.ServerError("FindLastDeployments", err)
 			return

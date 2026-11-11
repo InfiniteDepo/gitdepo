@@ -946,6 +946,8 @@ type EnvironmentForm struct {
 	Patterns          []string `form:"pattern"`
 	RunnerLabels      string
 	AllowedWorkflows  string
+	Scope             string // of an organization environment: "all" repositories, else the selected RepoIDs
+	RepoIDs           string `form:"repo_ids"`
 }
 
 func (f *EnvironmentForm) Validate(req *http.Request, errs binding.Errors) binding.Errors {

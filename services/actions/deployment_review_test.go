@@ -42,7 +42,7 @@ type reviewFixture struct {
 // site administrator. A listed user is made a read collaborator first if they have no path to the repository (only
 // members can be listed): a test takes the access away to see the reviewer refused.
 func setReviewers(ctx context.Context, e *actions_model.ActionEnvironment, userIDs, teamIDs []int64) error {
-	stored, err := actions_model.GetRepoEnvironmentByID(ctx, e.RepoID, e.ID)
+	stored, err := actions_model.GetEnvironmentByID(ctx, 0, e.RepoID, e.ID)
 	if err != nil {
 		return err
 	}
@@ -69,7 +69,7 @@ func setReviewers(ctx context.Context, e *actions_model.ActionEnvironment, userI
 
 // replaceReviewers is setReviewers without the checks of the users and teams and without the pass of the emitter.
 func replaceReviewers(ctx context.Context, e *actions_model.ActionEnvironment, reviewers []actions_model.ActionEnvironmentReviewer) error {
-	stored, err := actions_model.GetRepoEnvironmentByID(ctx, e.RepoID, e.ID)
+	stored, err := actions_model.GetEnvironmentByID(ctx, 0, e.RepoID, e.ID)
 	if err != nil {
 		return err
 	}

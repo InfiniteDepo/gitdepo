@@ -48,6 +48,9 @@ func entryData(t *testing.T, e *audit_model.Entry) map[string]any {
 // audit entries they leave.
 // envRules fills every rule the body leaves out with its explicit "no rule" value: the API requires them all.
 func envRules(o api.CreateOrUpdateEnvironmentOption) api.CreateOrUpdateEnvironmentOption {
+	if o.RepositorySelection == "" { // as a new environment of the organization by default; ignored for a repository
+		o.RepositorySelection = "selected"
+	}
 	if o.RefPolicy == "" {
 		o.RefPolicy = "any"
 	}
@@ -284,7 +287,7 @@ func TestAPIActionsEnvironments(t *testing.T) {
 			require.NoError(t, actions_service.DeleteEnvironment(ctx, kept))
 
 			// the 101st environment
-			for i := range actions_model.MaxEnvironmentsPerRepo - 1 { // "listed" exists
+			for i := range actions_model.MaxEnvironments - 1 { // "listed" exists
 				require.NoError(t, actions_model.CreateEnvironment(ctx, &actions_model.ActionEnvironment{RepoID: repo.ID, Name: fmt.Sprintf("cap-%d", i)}, nil))
 			}
 			put(ownerToken, "one-too-many", api.CreateOrUpdateEnvironmentOption{}, http.StatusUnprocessableEntity)

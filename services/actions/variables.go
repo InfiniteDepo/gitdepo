@@ -27,7 +27,7 @@ func CreateVariable(ctx context.Context, ownerID, groupID, repoID, environmentID
 	}
 
 	if environmentID != 0 {
-		return actions_model.InsertEnvironmentVariable(ctx, repoID, environmentID, name, util.ReserveLineBreakForTextarea(data))
+		return actions_model.InsertEnvironmentVariable(ctx, ownerID, repoID, environmentID, name, util.ReserveLineBreakForTextarea(data))
 	}
 	return actions_model.InsertVariable(ctx, ownerID, groupID, repoID, name, util.ReserveLineBreakForTextarea(data))
 }
@@ -55,7 +55,7 @@ func UpdateVariable(ctx context.Context, variableID, ownerID, groupID, repoID, e
 // DeleteVariableByID deletes the variable with that ID of a level (see CreateVariable) and reports if there was one.
 func DeleteVariableByID(ctx context.Context, variableID, ownerID, groupID, repoID, environmentID int64) (bool, error) {
 	if environmentID != 0 {
-		return actions_model.DeleteEnvironmentVariable(ctx, variableID, repoID, environmentID)
+		return actions_model.DeleteEnvironmentVariable(ctx, variableID, ownerID, repoID, environmentID)
 	}
 	return actions_model.DeleteVariable(ctx, variableID, ownerID, groupID, repoID)
 }
@@ -73,7 +73,7 @@ func DeleteVariableByName(ctx context.Context, ownerID, groupID, repoID, environ
 	}
 
 	if environmentID != 0 {
-		_, err = actions_model.DeleteEnvironmentVariable(ctx, v.ID, repoID, environmentID)
+		_, err = actions_model.DeleteEnvironmentVariable(ctx, v.ID, ownerID, repoID, environmentID)
 	} else {
 		_, err = actions_model.DeleteVariable(ctx, v.ID, ownerID, groupID, repoID)
 	}

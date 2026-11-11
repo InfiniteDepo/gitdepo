@@ -23,7 +23,7 @@ func TestEnvironmentReviewerList(t *testing.T) {
 	require.NoError(t, CreateEnvironment(ctx, e, nil))
 
 	required := func() bool {
-		stored, err := GetRepoEnvironmentByID(ctx, e.RepoID, e.ID)
+		stored, err := GetEnvironmentByID(ctx, 0, e.RepoID, e.ID)
 		require.NoError(t, err)
 		return stored.ReviewsRequired
 	}

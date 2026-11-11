@@ -65,14 +65,14 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, rs)
 		// "other" lost every reviewer: it still holds until someone edits its rules
-		stored, err := actions_model.GetRepoEnvironmentByID(f.ctx, 63, other.ID)
+		stored, err := actions_model.GetEnvironmentByID(f.ctx, 0, 63, other.ID)
 		require.NoError(t, err)
 		assert.True(t, stored.ReviewsRequired)
 		d := &actions_model.ActionDeployment{Status: actions_model.DeploymentWaitingReview, Created: 1 << 40}
 		nextDeploymentStatus(d, stored, "", 1)
 		assert.Equal(t, actions_model.DeploymentWaitingReview, d.Status)
 		require.NoError(t, setReviewers(f.ctx, stored, nil, nil))
-		stored, err = actions_model.GetRepoEnvironmentByID(f.ctx, 63, other.ID)
+		stored, err = actions_model.GetEnvironmentByID(f.ctx, 0, 63, other.ID)
 		require.NoError(t, err)
 		assert.False(t, stored.ReviewsRequired, "an edit is how the rule is lifted")
 	})
@@ -110,7 +110,7 @@ func TestReviewRulesAreEvaluatedOnEveryPass(t *testing.T) {
 		require.Len(t, rs, 1)
 		assert.EqualValues(t, 2, rs[0].UserID)
 		assert.Len(t, auditActions(t, since, "repo.actions_env.updated"), 1)
-		stored, err := actions_model.GetRepoEnvironmentByID(f.ctx, 63, f.env.ID)
+		stored, err := actions_model.GetEnvironmentByID(f.ctx, 0, 63, f.env.ID)
 		require.NoError(t, err)
 		assert.True(t, stored.ReviewsRequired)
 	})
@@ -416,7 +416,7 @@ func TestRevokeApprovalLostRace(t *testing.T) {
 	stale := f.deployment(t)                                        // read before the race
 	_, err = db.GetEngine(t.Context()).Exec("UPDATE action_deployment SET reviewed_by = 2 WHERE id = ?", stale.ID)
 	require.NoError(t, err) // somebody else approved meanwhile
-	env, err := actions_model.GetRepoEnvironmentByID(f.ctx, 63, f.env.ID)
+	env, err := actions_model.GetEnvironmentByID(f.ctx, 0, 63, f.env.ID)
 	require.NoError(t, err)
 	title := func() string {
 		return unittest.AssertExistsAndLoadBean(t, &actions_model.ActionRun{ID: f.run.ID}).Title
