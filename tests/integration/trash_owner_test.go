@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"forgejo.org/models/asymkey"
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	"forgejo.org/models/organization"
@@ -279,8 +280,8 @@ func TestTrashOrgNameReserved(t *testing.T) {
 		Username: "org3", Email: "org3-new@example.com", Password: "password1234",
 	}).AddTokenAuth(adminToken), http.StatusUnprocessableEntity)
 	user4 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 4})
-	require.Error(t, user_service.RenameUser(t.Context(), user4, "org3"))
-	require.Error(t, user_service.AdminRenameUser(t.Context(), user4, "org3"))
+	require.Error(t, user_service.RenameUser(audit_model.WithSystem(t.Context(), "test"), user4, "org3"))
+	require.Error(t, user_service.AdminRenameUser(audit_model.WithSystem(t.Context(), "test"), user4, "org3"))
 	// nobody creates a repository under it
 	resp := MakeRequest(t, NewRequestWithJSON(t, "POST", "/api/v1/orgs/org3/repos", &api.CreateRepoOption{Name: "fresh"}).AddTokenAuth(adminToken), NoExpectedStatus)
 	assert.Equal(t, http.StatusNotFound, resp.Code)
@@ -408,7 +409,7 @@ func TestTrashOrgRace(t *testing.T) {
 func TestTrashRestoreNewOwnerAndName(t *testing.T) {
 	defer prepareTrash(t)()
 	admin := trashAdminUser(t)
-	ctx := t.Context()
+	ctx := audit_model.WithSystem(t.Context(), "test")
 	user4 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 4})
 	require.NoError(t, repo_service.DeleteRepository(ctx, admin, trashRepoByID(t, 5), false))
 	deleteOrg3(t)
@@ -664,7 +665,7 @@ func TestTrashUserTombstoneCleanup(t *testing.T) {
 	defer prepareTrash(t)()
 	missingRepoDirs(t)
 	admin := trashAdminUser(t)
-	ctx := t.Context()
+	ctx := audit_model.WithSystem(t.Context(), "test")
 	deleteUser27(t)
 
 	require.NoError(t, trash_service.Purge(ctx, admin, 45))
@@ -691,7 +692,7 @@ func TestTrashUserTombstoneRestoreAndSweep(t *testing.T) {
 	defer prepareTrash(t)()
 	missingRepoDirs(t)
 	admin := trashAdminUser(t)
-	ctx := t.Context()
+	ctx := audit_model.WithSystem(t.Context(), "test")
 	deleteUser27(t)
 
 	for _, id := range []int64{44, 49} {
@@ -847,7 +848,7 @@ func TestTrashRestoreNoStaleAccess(t *testing.T) {
 func TestTrashRestoreMoveConflict(t *testing.T) {
 	defer prepareTrash(t)()
 	admin := trashAdminUser(t)
-	ctx := t.Context()
+	ctx := audit_model.WithSystem(t.Context(), "test")
 	require.NoError(t, repo_service.DeleteRepository(ctx, admin, trashRepoByID(t, 5), false))
 
 	t.Run("purge claimed first", func(t *testing.T) {

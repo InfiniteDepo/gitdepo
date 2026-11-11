@@ -23,6 +23,8 @@ type accessTokenAuthenticationResult struct {
 	scope   auth_model.AccessTokenScope
 	reducer authz.AuthorizationReducer
 	expires timeutil.TimeStamp
+	// restricted is AccessToken.RestrictsAccount: a user's own token narrower than the account it acts as
+	restricted bool
 }
 
 func (r *accessTokenAuthenticationResult) User() *user_model.User {
@@ -49,5 +51,5 @@ func (r *accessTokenAuthenticationResult) ExpiresAt() optional.Option[timeutil.T
 }
 
 func (r *accessTokenAuthenticationResult) Credential() audit_model.Credential {
-	return audit_model.Credential{Type: audit_model.CredentialAccessToken, ID: r.id, Name: r.name, OwnerID: r.user.ID}
+	return audit_model.Credential{Type: audit_model.CredentialAccessToken, ID: r.id, Name: r.name, OwnerID: r.user.ID, Restricted: r.restricted}
 }

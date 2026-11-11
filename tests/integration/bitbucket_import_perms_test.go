@@ -72,7 +72,7 @@ func TestBitbucketImportPermissions(t *testing.T) {
 			keys[i], _ = newTestSSHKey(t)
 		}
 		user8 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 8})
-		_, err := asymkey_model.AddPublicKey(ctx, user8.ID, "user8 key", keys[5], 0, 0)
+		_, err := asymkey_model.AddPublicKey(audit_model.WithSystem(ctx, "test"), user8.ID, "user8 key", keys[5], 0, 0)
 		require.NoError(t, err)
 
 		server.pages = map[string]any{

@@ -210,7 +210,7 @@ func TestOwnedAccessTokenWeb(t *testing.T) {
 		n = name()
 		session.MakeRequest(t, NewRequestWithValues(t, "POST", link+"/tokens/new", map[string]string{"token_name": n, "token_permission": "read", "token_scopes": "read:repository"}), http.StatusSeeOther)
 		tok := unittest.AssertExistsAndLoadBean(t, &auth_model.AccessToken{Name: n, OwnerType: auth_model.AccessTokenOwnerRepo, OwnerID: 1})
-		_, err := authz.RotateOwnedAccessToken(db.DefaultContext, auth_model.FindOwnedAccessTokensOptions{OwnerType: auth_model.AccessTokenOwnerRepo, OwnerID: 1}, tok.ID, tok.TokenHash, optional.None[timeutil.TimeStamp](), 2)
+		_, err := authz.RotateOwnedAccessToken(audit_model.WithSystem(db.DefaultContext, "test"), auth_model.FindOwnedAccessTokensOptions{OwnerType: auth_model.AccessTokenOwnerRepo, OwnerID: 1}, tok.ID, tok.TokenHash, optional.None[timeutil.TimeStamp](), 2)
 		require.NoError(t, err)
 		page := NewHTMLParser(t, session.MakeRequest(t, NewRequest(t, "GET", link), http.StatusOK).Body)
 		assert.Zero(t, page.Find("#new-access-token-value").Length())

@@ -11,6 +11,7 @@ import (
 
 	actions_model "forgejo.org/models/actions"
 	asymkey_model "forgejo.org/models/asymkey"
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
@@ -74,7 +75,7 @@ func TestPreReceiveRecordsBranchPusher(t *testing.T) {
 			Name: "bp-token", OwnerType: auth_model.AccessTokenOwnerRepo, OwnerID: 1, Mode: perm_model.AccessModeWrite,
 			Scope: "write:repository", ResourceAllRepos: true, CreatorID: 5,
 		}
-		require.NoError(t, auth_model.NewAccessToken(db.DefaultContext, token, nil))
+		require.NoError(t, auth_model.NewAccessToken(audit_model.WithSystem(db.DefaultContext, "test"), token, nil))
 		bot := user_model.AccessTokenBotID(token.ID)
 		require.NoError(t, hook(1, "bp-token", zero, commit, private.HookOptions{UserID: bot}).Error)
 		assert.Equal(t, []int64{5}, pushers(1, "bp-token"))
@@ -106,7 +107,7 @@ func TestPreReceiveRecordsBranchPusher(t *testing.T) {
 				Name: name, OwnerType: auth_model.AccessTokenOwnerRepo, OwnerID: task.RepoID, Mode: perm_model.AccessModeWrite,
 				Scope: "write:repository", ResourceAllRepos: true, CreatorID: creator,
 			}
-			require.NoError(t, auth_model.NewAccessToken(db.DefaultContext, token, nil))
+			require.NoError(t, auth_model.NewAccessToken(audit_model.WithSystem(db.DefaultContext, "test"), token, nil))
 			return token.ID
 		}
 		assert.Equal(t, []int64{0}, runAs("bp-scheduled", user_model.ActionsUserID), "a scheduled run")

@@ -17,6 +17,7 @@ import (
 
 	actions_model "forgejo.org/models/actions"
 	asymkey_model "forgejo.org/models/asymkey"
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
@@ -376,7 +377,7 @@ func TestRepoGroupServ(t *testing.T) {
 	defer tests.PrepareTestEnv(t)()
 	ctx := t.Context()
 	f, rootPub := prepareRepoGroupGit(t)
-	user8Key, err := asymkey_model.AddPublicKey(ctx, 8, "user8 key", newOrgDeployKeyContent(t), 0, 0)
+	user8Key, err := asymkey_model.AddPublicKey(audit_model.WithSystem(ctx, "test"), 8, "user8 key", newOrgDeployKeyContent(t), 0, 0)
 	require.NoError(t, err)
 
 	serv := func(keyID int64, repoPath string, mode perm.AccessMode, verb string) (*private.ServCommandResults, private.ResponseExtra) {

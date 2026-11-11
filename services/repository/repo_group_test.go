@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"forgejo.org/models"
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unittest"
@@ -171,7 +172,7 @@ func TestRepoGroupTransfer(t *testing.T) {
 	// the claim moves with the owner
 	repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 1})
 	require.NoError(t, repo.LoadOwner(ctx))
-	require.NoError(t, TransferOwnership(ctx, doer, org3, repo, nil))
+	require.NoError(t, TransferOwnership(audit_model.WithSystem(ctx, "test"), doer, org3, repo, nil))
 	unittest.AssertExistsAndLoadBean(t, &repo_model.RepoGroupNameClaim{OwnerID: org3.ID, LowerName: "repo1"})
 	unittest.AssertNotExistsBean(t, &repo_model.RepoGroupNameClaim{OwnerID: user2.ID, LowerName: "repo1"})
 
@@ -179,7 +180,7 @@ func TestRepoGroupTransfer(t *testing.T) {
 	repo2 := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 2})
 	require.NoError(t, repo2.LoadOwner(ctx))
 	require.NoError(t, ChangeRepositoryName(ctx, doer, repo2, "pay"))
-	require.True(t, repo_model.IsErrRepoAlreadyExist(TransferOwnership(ctx, doer, org3, repo2, nil)))
+	require.True(t, repo_model.IsErrRepoAlreadyExist(TransferOwnership(audit_model.WithSystem(ctx, "test"), doer, org3, repo2, nil)))
 
 	// a repository in a project lands at the root of the new owner, and its old path redirects
 	nested, err := CreateRepositoryDirectly(ctx, doer, org3, CreateRepoOptions{Name: "api", GroupID: pay.ID})
@@ -187,7 +188,7 @@ func TestRepoGroupTransfer(t *testing.T) {
 	require.NoError(t, nested.LoadOwner(ctx))
 	require.NoError(t, models.CreatePendingRepositoryTransfer(ctx, doer, user2, nested.ID, nil))
 	require.NoError(t, CancelRepositoryTransfer(ctx, nested, false))
-	require.NoError(t, TransferOwnership(ctx, doer, user2, nested, nil))
+	require.NoError(t, TransferOwnership(audit_model.WithSystem(ctx, "test"), doer, user2, nested, nil))
 	nested = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: nested.ID})
 	assert.Equal(t, "user2/api", nested.FullName())
 	assertDir(t, true, filepath.Join(setting.RepoRootPath, "user2", "api.git"))
@@ -200,7 +201,7 @@ func TestRepoGroupTransfer(t *testing.T) {
 
 func TestRepoGroupTrashAndDelete(t *testing.T) {
 	unittest.PrepareTestEnv(t)
-	ctx := t.Context()
+	ctx := audit_model.WithSystem(t.Context(), "test")
 	doer := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 1})
 	org3 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3})
 	user2 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2})

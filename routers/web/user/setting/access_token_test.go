@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
@@ -277,4 +278,26 @@ func TestAuthorizedIntegrationFormProjectRepo(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, cr, again)
 	})
+}
+
+// contexttest.LoadUser keeps an audit actor set before it, so a test can act through a delegated credential.
+func TestAccessTokenCreatePostNotOwnAct(t *testing.T) {
+	unittest.PrepareTestEnv(t)
+
+	ctx, resp := contexttest.MockContext(t, "user/settings/keys/tokens/new")
+	grant := &audit_model.Actor{Type: audit_model.ActorUser, ID: 2, Name: "user2", Credential: audit_model.Credential{Type: audit_model.CredentialOAuth2Grant}}
+	ctx.AppendContextValue(audit_model.ActorContextKey, grant)
+	contexttest.LoadUser(t, ctx, 2)
+	require.Same(t, grant, audit_model.ActorFromContext(ctx))
+
+	web.SetForm(ctx, &forms.NewAccessTokenPostForm{
+		Name:         "via grant",
+		Resource:     "repo-specific",
+		Scope:        []string{"read:repository"},
+		SelectedRepo: []string{"user2/repo1"},
+	})
+	AccessTokenCreatePost(ctx)
+	assert.Equal(t, http.StatusOK, resp.Result().StatusCode)
+	assert.Equal(t, "settings.credential_not_own_act", ctx.Flash.ErrorMsg)
+	unittest.AssertNotExistsBean(t, &auth_model.AccessToken{UID: 2, Name: "via grant"})
 }

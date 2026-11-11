@@ -186,10 +186,15 @@ func TestAuditAccessTokenAPI(t *testing.T) {
 			assert.EqualValues(t, 2, e.SubjectUserID)
 		}
 
+		// creating a token under sudo gives user2 a credential that isn't their own act: refused, nothing recorded
 		since := auditMaxID(t)
-		token := create(t, newToken("/api/v1/users/user2/tokens", "audit-sudo").AddBasicAuth("user1").SetHeader("Sudo", "user2"))
-		assertSudo(t, auditOne(t, since, "credential.access_token.created"))
+		MakeRequest(t, newToken("/api/v1/users/user2/tokens", "audit-sudo").AddBasicAuth("user1").SetHeader("Sudo", "user2"), http.StatusForbidden)
+		for _, e := range auditSince(t, since) {
+			assert.NotEqual(t, "credential.access_token.created", e.Action)
+		}
 
+		// deleting one under sudo is allowed and records the admin
+		token := create(t, newToken("/api/v1/users/user2/tokens", "audit-sudo").AddBasicAuth("user2"))
 		since = auditMaxID(t)
 		MakeRequest(t, NewRequest(t, "DELETE", fmt.Sprintf("/api/v1/users/user2/tokens/%d?sudo=user2", token.ID)).AddBasicAuth("user1"), http.StatusNoContent)
 		assertSudo(t, auditOne(t, since, "credential.access_token.deleted"))

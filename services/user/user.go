@@ -111,8 +111,8 @@ func renameUser(ctx context.Context, u *user_model.User, newUserName string, doe
 	}
 
 	onlyCapitalization := strings.EqualFold(newUserName, u.Name)
-	// login sources find organizations by name, so a new name points their team sync at this organization
-	if u.IsOrganization() && !onlyCapitalization {
+	// login sources find organizations and users by name, so a new name points their sync and sign-in at this account
+	if !onlyCapitalization {
 		if err := audit_model.CheckOwnAct(ctx); err != nil {
 			return err
 		}

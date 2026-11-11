@@ -303,6 +303,8 @@ func Create(ctx *context.APIContext) {
 			db.IsErrNameCharsNotAllowed(err) ||
 			db.IsErrNamePatternNotAllowed(err) {
 			ctx.Error(http.StatusUnprocessableEntity, "", err)
+		} else if errors.Is(err, util.ErrPermissionDenied) { // not an own act, or the owner may not create organizations
+			ctx.Error(http.StatusForbidden, "", err)
 		} else {
 			ctx.Error(http.StatusInternalServerError, "CreateOrganization", err)
 		}

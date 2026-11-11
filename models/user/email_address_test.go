@@ -8,6 +8,7 @@ import (
 	"slices"
 	"testing"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
@@ -183,9 +184,17 @@ func TestActivateUserEmail(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 
 	t.Run("Activate email", func(t *testing.T) {
-		require.NoError(t, user_model.ActivateUserEmail(t.Context(), 1001, "AnotherTestUserWithUpperCaseEmail@otto.splvs.net", true))
+		require.NoError(t, user_model.ActivateUserEmail(audit_model.WithSystem(t.Context(), "test"), 1001, "AnotherTestUserWithUpperCaseEmail@otto.splvs.net", true))
 
 		unittest.AssertExistsAndLoadBean(t, &user_model.EmailAddress{UID: 1001}, "is_activated = true")
+	})
+
+	t.Run("Not an own act", func(t *testing.T) {
+		grant := audit_model.WithActor(t.Context(), &audit_model.Actor{Type: audit_model.ActorUser, ID: 1, Credential: audit_model.Credential{Type: audit_model.CredentialOAuth2Grant}})
+		require.NoError(t, user_model.ActivateUserEmail(grant, 1001, "AnotherTestUserWithUpperCaseEmail@otto.splvs.net", false), "a deactivation stays allowed")
+		require.ErrorIs(t, user_model.ActivateUserEmail(grant, 1001, "AnotherTestUserWithUpperCaseEmail@otto.splvs.net", true), audit_model.ErrNotOwnAct)
+		unittest.AssertExistsAndLoadBean(t, &user_model.EmailAddress{UID: 1001}, "is_activated = false")
+		require.NoError(t, user_model.ActivateUserEmail(audit_model.WithSystem(t.Context(), "test"), 1001, "AnotherTestUserWithUpperCaseEmail@otto.splvs.net", true))
 	})
 
 	t.Run("Deactivate email", func(t *testing.T) {

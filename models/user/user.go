@@ -24,6 +24,7 @@ import (
 
 	_ "image/jpeg" // Needed for jpeg support
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/auth"
 	"forgejo.org/models/db"
 	"forgejo.org/modules/auth/openid"
@@ -799,6 +800,13 @@ func createUser(ctx context.Context, u *User, createdByAdmin bool, overwriteDefa
 	// no new accounts while maintenance mode is on, whatever the sign-up or sign-in path
 	if m := setting.GetMaintenance(ctx); m.ReadOnly() {
 		return util.NewPermissionDeniedErrorf("%s", m.Refusal())
+	}
+
+	// a new site admin takes a privilege, so only a person's own act creates one
+	if u.IsAdmin {
+		if err := audit_model.CheckOwnAct(ctx); err != nil {
+			return err
+		}
 	}
 
 	overwriteDefaultPresent := len(overwriteDefault) != 0 && overwriteDefault[0] != nil

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	issues_model "forgejo.org/models/issues"
 	repo_model "forgejo.org/models/repo"
@@ -411,7 +412,7 @@ func TestBitbucketImport(t *testing.T) {
 			blocked(t, opts, "PAY/api")
 
 			api = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: api.ID})
-			require.NoError(t, repo_service.TransferOwnership(ctx, admin, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 17}), api, nil))
+			require.NoError(t, repo_service.TransferOwnership(audit_model.WithSystem(ctx, "test"), admin, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 17}), api, nil))
 			blocked(t, opts, "PAY/api")
 		})
 

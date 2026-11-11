@@ -435,7 +435,7 @@ func TestDependencyGraphAccess(t *testing.T) {
 			require.NoError(t, err)
 			specific := &auth_model.AccessToken{Name: "dep-specific", UID: user2.ID, Scope: scope}
 			resourceRepos := []*auth_model.AccessTokenResourceRepo{{RepoID: pub.ID}}
-			require.NoError(t, auth_model.NewAccessToken(t.Context(), specific, resourceRepos))
+			require.NoError(t, auth_model.NewAccessToken(audit_model.WithSystem(t.Context(), "test"), specific, resourceRepos))
 			t.Cleanup(func() {
 				unittest.AssertSuccessfulDelete(t, &auth_model.AccessTokenResourceRepo{ID: resourceRepos[0].ID})
 				unittest.AssertSuccessfulDelete(t, &auth_model.AccessToken{ID: specific.ID})

@@ -12,6 +12,7 @@ import (
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/lfs"
 	"forgejo.org/services/auth"
+	"forgejo.org/services/authz"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,7 +24,12 @@ func TestCredential(t *testing.T) {
 		result auth.AuthenticationResult
 		want   audit_model.Credential
 	}{
-		{&accessTokenAuthenticationResult{id: 3, name: "ci", user: u}, audit_model.Credential{Type: "access_token", ID: 3, Name: "ci", OwnerID: 7}},
+		{&accessTokenAuthenticationResult{id: 3, name: "ci", user: u, reducer: &authz.AllAccessAuthorizationReducer{}}, audit_model.Credential{Type: "access_token", ID: 3, Name: "ci", OwnerID: 7}},
+		// a token limited to public data or to some repositories is restricted: never an own act
+		{&accessTokenAuthenticationResult{id: 3, name: "ci", user: u, reducer: &authz.PublicReposAuthorizationReducer{}, restricted: true}, audit_model.Credential{Type: "access_token", ID: 3, Name: "ci", OwnerID: 7, Restricted: true}},
+		{&accessTokenAuthenticationResult{id: 3, name: "ci", user: u, reducer: &authz.SpecificReposAuthorizationReducer{}, restricted: true}, audit_model.Credential{Type: "access_token", ID: 3, Name: "ci", OwnerID: 7, Restricted: true}},
+		// an organization, project or repository token acts as its own identity: no account to widen
+		{&accessTokenAuthenticationResult{id: 3, name: "ci", user: u, reducer: &authz.SpecificReposAuthorizationReducer{}}, audit_model.Credential{Type: "access_token", ID: 3, Name: "ci", OwnerID: 7}},
 		{&oAuth2JWTAuthenticationResult{grantID: 4, appID: 5, user: u}, audit_model.Credential{Type: "oauth2_grant", ID: 4, AppID: 5, OwnerID: 7}},
 		{&authorizedIntegrationAuthenticationResult{id: 6, name: "deploy", user: u}, audit_model.Credential{Type: "authorized_integration", ID: 6, Name: "deploy", OwnerID: 7}},
 		{&httpSignAuthenticationResult{user: u, key: &asymkey_model.PublicKey{ID: 8, Name: "laptop"}}, audit_model.Credential{Type: "ssh_key", ID: 8, Name: "laptop", OwnerID: 7}},

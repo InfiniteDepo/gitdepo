@@ -17,6 +17,7 @@ import (
 	access_model "forgejo.org/models/perm/access"
 	repo_model "forgejo.org/models/repo"
 	api "forgejo.org/modules/structs"
+	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
 	"forgejo.org/routers/web/shared/user"
 	"forgejo.org/services/authz"
@@ -226,7 +227,10 @@ func CreateAccessToken(ctx *context.APIContext) {
 		return
 	}
 
-	if err := auth_model.NewAccessToken(ctx, t, resourceRepos); err != nil {
+	if err := auth_model.NewAccessToken(ctx, t, resourceRepos); errors.Is(err, util.ErrPermissionDenied) {
+		ctx.Error(http.StatusForbidden, "NewAccessToken", err)
+		return
+	} else if err != nil {
 		ctx.Error(http.StatusInternalServerError, "NewAccessToken", err)
 		return
 	}

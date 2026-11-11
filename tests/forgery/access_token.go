@@ -6,6 +6,7 @@ package forgery
 import (
 	"testing"
 
+	audit_model "forgejo.org/models/audit"
 	auth_model "forgejo.org/models/auth"
 	"forgejo.org/models/unittest"
 	user_model "forgejo.org/models/user"
@@ -51,7 +52,7 @@ func CreateAccessToken(t testing.TB, user *user_model.User, opts *CreateAccessTo
 	for _, repoID := range opts.RepositoryIDs {
 		resourceRepos = append(resourceRepos, &auth_model.AccessTokenResourceRepo{RepoID: repoID})
 	}
-	require.NoError(t, auth_model.NewAccessToken(t.Context(), accessToken, resourceRepos))
+	require.NoError(t, auth_model.NewAccessToken(audit_model.WithSystem(t.Context(), "forgery"), accessToken, resourceRepos))
 	for _, accessTokenResourceRepo := range resourceRepos {
 		t.Cleanup(func() {
 			unittest.AssertSuccessfulDelete(t, &auth_model.AccessTokenResourceRepo{ID: accessTokenResourceRepo.ID})

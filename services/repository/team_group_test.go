@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"forgejo.org/models"
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	"forgejo.org/models/organization"
 	"forgejo.org/models/perm"
@@ -204,7 +205,7 @@ func TestTeamGroupMoveAndDelete(t *testing.T) {
 
 	// a transfer out of the organization leaves no row
 	require.NoError(t, MoveRepository(ctx, f.owner, reloadRepo(t, repo.ID), f.pay.ID))
-	require.NoError(t, TransferOwnership(ctx, f.admin, f.owner, reloadRepo(t, repo.ID), nil))
+	require.NoError(t, TransferOwnership(audit_model.WithSystem(ctx, "test"), f.admin, f.owner, reloadRepo(t, repo.ID), nil))
 	unittest.AssertNotExistsBean(t, &organization.TeamRepo{RepoID: repo.ID})
 	consistent(t)
 

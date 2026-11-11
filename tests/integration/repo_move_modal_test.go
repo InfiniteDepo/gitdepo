@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"testing"
 
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unittest"
@@ -175,7 +176,7 @@ func TestRepoMoveModalFields(t *testing.T) {
 			_, err = db.GetEngine(ctx).Exec("UPDATE `repository` SET status = ? WHERE id = ?", repo_model.RepositoryReady, repo.ID)
 			require.NoError(t, err)
 
-			require.NoError(t, repo_service.StartRepositoryTransfer(ctx, user2, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5}), reload(repo.ID), nil))
+			require.NoError(t, repo_service.StartRepositoryTransfer(audit_model.WithSystem(ctx, "test"), user2, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 5}), reload(repo.ID), nil))
 			assert.Contains(t, move(t, repo, repo.FullName(), proj.ID, http.StatusOK), "transfer")
 			assert.EqualValues(t, 0, reload(repo.ID).GroupID)
 		})

@@ -51,7 +51,7 @@ func fixtureCreateToken(t *testing.T, user *user_model.User, scope auth_model.Ac
 	for _, repoID := range repoIDs {
 		resourceRepos = append(resourceRepos, &auth_model.AccessTokenResourceRepo{RepoID: repoID})
 	}
-	require.NoError(t, auth_model.NewAccessToken(t.Context(), accessToken, resourceRepos))
+	require.NoError(t, auth_model.NewAccessToken(audit_model.WithSystem(t.Context(), "test"), accessToken, resourceRepos))
 	return accessToken, nil
 }
 
@@ -119,7 +119,7 @@ func fixtureCreateUser(t *testing.T, user *user_model.User) *user_model.User {
 	overwriteDefault.Visibility = &visibility
 	allowCreateOrganization := user.AllowCreateOrganization
 	overwriteDefault.AllowCreateOrganization = optional.Some(allowCreateOrganization)
-	require.NoError(t, user_model.CreateUser(t.Context(), user, overwriteDefault))
+	require.NoError(t, user_model.CreateUser(audit_model.WithSystem(t.Context(), "test"), user, overwriteDefault)) // test setup, not a request
 	user.AllowCreateOrganization = allowCreateOrganization
 	return user
 }

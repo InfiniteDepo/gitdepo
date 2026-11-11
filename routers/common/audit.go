@@ -32,10 +32,15 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// SetAuditActor stores the request's audit actor right after authentication. It is stored once per request; API sudo
-// changes it in place (Actor.SetSudo).
+// SetAuditActor stores the request's audit actor right after authentication: it fills in the anonymous actor that
+// AuthShared stored before Verify, or stores a new one. It is stored once per request; API sudo changes it in place
+// (Actor.SetSudo).
 func SetAuditActor(ctx *context.Base, ar auth_service.AuthenticationResult) {
-	a := RequestAuditActor(ctx.Req)
+	a := audit_model.ActorFromContext(ctx)
+	if a == nil || a.Type != audit_model.ActorAnonymous {
+		a = RequestAuditActor(ctx.Req)
+		ctx.AppendContextValue(audit_model.ActorContextKey, a)
+	}
 	a.Credential = ar.Credential()
 	if u := ar.User(); u != nil {
 		a.Type, a.ID, a.Name = audit_model.ActorUser, u.ID, u.Name
@@ -48,7 +53,6 @@ func SetAuditActor(ctx *context.Base, ar auth_service.AuthenticationResult) {
 		// a deploy-key LFS token carries the repository owner as its user: the key is the actor, as in the hooks
 		a.Type, a.ID, a.Name = audit_model.ActorDeployKey, 0, ""
 	}
-	ctx.AppendContextValue(audit_model.ActorContextKey, a)
 }
 
 // RequestAuditActor is the anonymous actor of req: its client IP, user agent and a new request ID. req must have

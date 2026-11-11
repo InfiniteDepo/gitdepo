@@ -4,13 +4,26 @@
 package common
 
 import (
+	audit_model "forgejo.org/models/audit"
 	"forgejo.org/modules/web/middleware"
 	auth_service "forgejo.org/services/auth"
 	"forgejo.org/services/context"
 )
 
+// VerifyWithRequestActor runs authMethod.Verify with the anonymous request actor stored first, on ctx and on the
+// request Verify gets: Verify can write (a reverse proxy user, the first one an admin, is created on first sight), and
+// SetAuditActor fills in this same actor afterwards. Every caller of an authentication method's Verify uses it.
+func VerifyWithRequestActor(ctx *context.Base, sessionStore auth_service.SessionStore, authMethod auth_service.Method) auth_service.MethodOutput {
+	a := audit_model.ActorFromContext(ctx)
+	if a == nil {
+		a = RequestAuditActor(ctx.Req)
+		ctx.AppendContextValue(audit_model.ActorContextKey, a)
+	}
+	return authMethod.Verify(ctx.Req.WithContext(audit_model.WithActor(ctx.Req.Context(), a)), ctx.Resp, sessionStore)
+}
+
 func AuthShared(ctx *context.Base, sessionStore auth_service.SessionStore, authMethod auth_service.Method) auth_service.MethodOutput {
-	output := authMethod.Verify(ctx.Req, ctx.Resp, sessionStore)
+	output := VerifyWithRequestActor(ctx, sessionStore, authMethod)
 
 	var interactiveReauthenticationPossible bool
 	var ar auth_service.AuthenticationResult
