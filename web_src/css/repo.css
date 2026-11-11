@@ -1270,6 +1270,37 @@ citation-information .tab:not(.active) {
   color: var(--color-text-light-2);
 }
 
+.repository.branches .branch-bulk-bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--color-box-body);
+}
+
+.repository.branches .branch-select-cell input,
+.repository.branches .branch-bulk-bar input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+
+.branch-delete-list {
+  max-height: 40vh;
+  overflow-block: auto;
+  margin: 0.5rem 0;
+  padding-inline-start: 1.5rem;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 767.98px) {
+  .repository.branches .branch-select-cell {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .repository.branches .branch-bulk-bar button {
+    min-height: 44px;
+  }
+}
+
 .repository.branches .commit-divergence .bar-group {
   position: relative;
   float: inline-start;

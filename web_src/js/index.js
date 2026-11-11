@@ -75,7 +75,7 @@ import {initAddOrgMemberButton} from './features/add-org-member.ts';
 import {initCompSearchUserBox} from './features/comp/SearchUserBox.js';
 import {initInstall} from './features/install.js';
 import {initCompWebHookEditor} from './features/comp/WebHookEditor.js';
-import {initRepoBranchButton, initRepoBranchGroups} from './features/repo-branch.ts';
+import {initRepoBranchBulk, initRepoBranchButton, initRepoBranchGroups} from './features/repo-branch.ts';
 import {initCommonOrganization} from './features/common-organization.js';
 import {initRepoWikiForm} from './features/repo-wiki.js';
 import {initRepoCommentForm, initRepository} from './features/repo-legacy.js';
@@ -163,6 +163,7 @@ onDomReady(() => {
   initRepoSecretAlerts();
   initRepoBranchButton();
   initRepoBranchGroups();
+  initRepoBranchBulk();
   initRepoCodeView();
   initRepoCommentForm();
   initRepoEllipsisButton();

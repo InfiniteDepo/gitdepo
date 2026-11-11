@@ -190,6 +190,9 @@ type swaggerParameterBodies struct {
 	CreateBranchRepoOption api.CreateBranchRepoOption
 
 	// in:body
+	DeleteBranchesOption api.DeleteBranchesOption
+
+	// in:body
 	CreateBranchProtectionOption api.CreateBranchProtectionOption
 
 	// in:body

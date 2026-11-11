@@ -62,8 +62,15 @@ func Branches(ctx *context.Context) {
 		ctx.ServerError("GetEffectiveModel", err)
 		return
 	}
-	typeFilter, untyped := ctx.FormString("type"), ctx.FormBool("untyped")
-	defaultBranch, branches, branchesCount, err := repo_service.LoadBranches(ctx, ctx.Doer, ctx.Repo.Repository, ctx.Repo.GitRepo, optional.None[bool](), kw, branchworkflow.TypeFilter(model.Model, typeFilter, untyped), page, pageSize)
+	filter, ok := branchFilterFromForm(ctx)
+	if !ok {
+		return
+	}
+	query, ok := branchQueryOf(ctx, filter, model)
+	if !ok {
+		return
+	}
+	defaultBranch, branches, branchesCount, err := repo_service.LoadBranches(ctx, ctx.Doer, ctx.Repo.Repository, ctx.Repo.GitRepo, query.Deleted, query.Keyword, query.Cond, page, pageSize)
 	if err != nil {
 		ctx.ServerError("LoadBranches", err)
 		return
@@ -87,7 +94,10 @@ func Branches(ctx *context.Context) {
 
 	ctx.Data["Keyword"] = kw
 	ctx.Data["Branches"] = branches
-	prepareBranchGroups(ctx, model.Model, branches, typeFilter, untyped)
+	prepareBranchGroups(ctx, model.Model, branches, filter.Type, filter.Untyped)
+	if !prepareBranchBulk(ctx, filter, query, model, branches) {
+		return
+	}
 	if ctx.Repo.CanCreateBranch() && !PrepareBranchDialog(ctx, model) {
 		return
 	}
@@ -96,6 +106,15 @@ func Branches(ctx *context.Context) {
 	ctx.Data["DefaultBranchBranch"] = defaultBranch
 	pager := context.NewPagination(int(branchesCount), pageSize, page, 5)
 	pager.SetDefaultParams(ctx)
+	if filter.Type != "" {
+		pager.AddParamString("type", filter.Type)
+	}
+	if filter.Untyped {
+		pager.AddParamString("untyped", "1")
+	}
+	for k, v := range branchFilterValues(filter) {
+		pager.AddParamString(k, v[0])
+	}
 	ctx.Data["Page"] = pager
 
 	ctx.HTML(http.StatusOK, tplBranch)
@@ -223,24 +242,30 @@ func DeleteBranchPost(ctx *context.Context) {
 func RestoreBranchPost(ctx *context.Context) {
 	defer redirect(ctx)
 
-	branchID := ctx.FormInt64("branch_id")
-	branchName := ctx.FormString("name")
-
 	// a restore adds a branch, and the size limit's gc may have pruned its objects
 	if repo_service.PersonalRepoLocked(ctx, ctx.Repo.Repository) {
 		ctx.Flash.Error(ctx.Tr("repo.personal_repos.limit_reached_short"))
 		return
 	}
 
+	name, errMsg := restoreDeletedBranch(ctx, ctx.FormInt64("branch_id"), ctx.FormString("name"))
+	if errMsg != "" {
+		ctx.Flash.Error(errMsg)
+		return
+	}
+	ctx.Flash.Success(ctx.Tr("repo.branch.restore_success", name))
+}
+
+// restoreDeletedBranch pushes the deleted branch with that ID back, with the hooks of a push, and returns its name,
+// or the error text to show; branchName only names the branch in the error when the row is not found.
+func restoreDeletedBranch(ctx *context.Context, branchID int64, branchName string) (string, template.HTML) {
 	deletedBranch, err := git_model.GetDeletedBranchByID(ctx, ctx.Repo.Repository.ID, branchID)
 	if err != nil {
 		log.Error("GetDeletedBranchByID: %v", err)
-		ctx.Flash.Error(ctx.Tr("repo.branch.restore_failed", branchName))
-		return
+		return branchName, ctx.Tr("repo.branch.restore_failed", branchName)
 	} else if deletedBranch == nil {
 		log.Debug("RestoreBranch: Can't restore branch[%d] '%s', as it does not exist", branchID, branchName)
-		ctx.Flash.Error(ctx.Tr("repo.branch.restore_failed", branchName))
-		return
+		return branchName, ctx.Tr("repo.branch.restore_failed", branchName)
 	}
 
 	if err := git.Push(ctx, ctx.Repo.Repository.RepoPath(), git.PushOptions{
@@ -250,12 +275,10 @@ func RestoreBranchPost(ctx *context.Context) {
 	}); err != nil {
 		if strings.Contains(err.Error(), "already exists") {
 			log.Debug("RestoreBranch: Can't restore branch '%s', since one with same name already exist", deletedBranch.Name)
-			ctx.Flash.Error(ctx.Tr("repo.branch.already_exists", deletedBranch.Name))
-			return
+			return deletedBranch.Name, ctx.Tr("repo.branch.already_exists", deletedBranch.Name)
 		}
 		log.Error("RestoreBranch: CreateBranch: %v", err)
-		ctx.Flash.Error(ctx.Tr("repo.branch.restore_failed", deletedBranch.Name))
-		return
+		return deletedBranch.Name, ctx.Tr("repo.branch.restore_failed", deletedBranch.Name)
 	}
 
 	objectFormat := git.ObjectFormatFromName(ctx.Repo.Repository.ObjectFormatName)
@@ -276,7 +299,7 @@ func RestoreBranchPost(ctx *context.Context) {
 		log.Error("RestoreBranch: Update: %v", err)
 	}
 
-	ctx.Flash.Success(ctx.Tr("repo.branch.restore_success", deletedBranch.Name))
+	return deletedBranch.Name, ""
 }
 
 func redirect(ctx *context.Context) {

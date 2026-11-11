@@ -31,7 +31,7 @@ func bnBranchRows(doc *HTMLDoc) (groups []string, rows map[string][]string) {
 	})
 	doc.doc.Find("tr[data-order]").Each(func(_ int, s *goquery.Selection) {
 		g := s.AttrOr("data-group", "")
-		rows[g] = append(rows[g], strings.TrimSpace(s.Find("td").First().Find("a.gt-ellipsis, span.gt-ellipsis").First().Text()))
+		rows[g] = append(rows[g], strings.TrimSpace(s.Find("a.gt-ellipsis, span.gt-ellipsis").First().Text()))
 	})
 	return groups, rows
 }

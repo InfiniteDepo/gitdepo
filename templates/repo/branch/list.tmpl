@@ -79,30 +79,91 @@
 		</h4>
 
 		<div class="ui attached segment">
-			<form class="ignore-dirty" method="get">
+			<form class="ignore-dirty" method="get" id="branch-filters">
 				{{template "shared/search/combo" dict "Value" .Keyword "Placeholder" (ctx.Locale.Tr "search.branch_kind")}}
+				{{if .BranchFilter.Type}}<input type="hidden" name="type" value="{{.BranchFilter.Type}}">{{end}}
+				{{if .BranchFilter.Untyped}}<input type="hidden" name="untyped" value="1">{{end}}
+				<div class="flex-text-block tw-flex-wrap tw-mt-3">
+					<label for="branch-filter-state">{{ctx.Locale.Tr "repo.branch.filter_state"}}</label>
+					<select id="branch-filter-state" name="state">
+						<option value="">{{ctx.Locale.Tr "repo.branch.filter_state_all"}}</option>
+						<option value="merged"{{if eq .BranchFilter.State "merged"}} selected{{end}}>{{ctx.Locale.Tr "repo.branch.filter_state_merged"}}</option>
+						<option value="not_merged"{{if eq .BranchFilter.State "not_merged"}} selected{{end}}>{{ctx.Locale.Tr "repo.branch.filter_state_not_merged"}}</option>
+					</select>
+					<label for="branch-filter-into">{{ctx.Locale.Tr "repo.branch.filter_into"}}</label>
+					<select id="branch-filter-into" name="into">
+						<option value="">{{ctx.Locale.Tr "repo.branch.filter_into_dev" .BranchDevelopment}}</option>
+						{{if ne .BranchDevelopment .Repository.DefaultBranch}}<option value="default"{{if eq .BranchFilter.Into "default"}} selected{{end}}>{{ctx.Locale.Tr "repo.branch.filter_into_default" .Repository.DefaultBranch}}</option>{{end}}
+					</select>
+					<label for="branch-filter-stale" data-tooltip-content="{{ctx.Locale.Tr "repo.branch.filter_stale_tip"}}">{{ctx.Locale.Tr "repo.branch.filter_stale"}}</label>
+					<input id="branch-filter-stale" name="stale" type="number" min="1" max="3650" class="tw-w-20" value="{{if gt .BranchFilter.StaleDays 0}}{{.BranchFilter.StaleDays}}{{end}}">
+					<span>{{ctx.Locale.Tr "repo.branch.filter_stale_days"}}</span>
+					<label for="branch-filter-pusher" data-tooltip-content="{{ctx.Locale.Tr "repo.branch.filter_pusher_tip"}}">{{ctx.Locale.Tr "repo.branch.filter_pusher"}}</label>
+					<input id="branch-filter-pusher" type="search" name="pusher" value="{{.BranchFilter.PushedBy}}" placeholder="{{ctx.Locale.Tr "repo.branch.filter_pusher_placeholder"}}" autocomplete="off">
+					{{if .IsSigned}}<a href="?pusher={{.SignedUser.Name}}">{{ctx.Locale.Tr "repo.branch.filter_mine"}}</a>{{end}}
+					<label class="flex-text-block"><input type="checkbox" name="deleted" value="1"{{if .BranchFilter.Deleted}} checked{{end}}> {{ctx.Locale.Tr "repo.branch.filter_deleted"}}</label>
+					<button class="ui small primary button">{{ctx.Locale.Tr "repo.branch.filter_apply"}}</button>
+					{{if .BranchFilterSet}}<a href="{{.Link}}">{{ctx.Locale.Tr "repo.branch.filter_clear"}}</a>{{end}}
+				</div>
 			</form>
 			{{if .HasBranchTypes}}
 			<div class="flex-text-block tw-flex-wrap tw-mt-3" id="branch-type-filter">
 				<span>{{ctx.Locale.Tr "repo.branch.filter_type"}}</span>
-				<a class="ui small label {{if and (not .BranchTypeFilter) (not .BranchUntypedFilter)}}primary{{else}}basic{{end}}" href="?q={{.Keyword}}">{{ctx.Locale.Tr "repo.branch.filter_all"}}</a>
-				{{range .BranchTypeNames}}<a class="ui small label {{if eq $.BranchTypeFilter .}}primary{{else}}basic{{end}}" href="?q={{$.Keyword}}&type={{.}}">{{.}}</a>{{end}}
-				<a class="ui small label {{if .BranchUntypedFilter}}primary{{else}}basic{{end}}" href="?q={{.Keyword}}&untyped=1">{{ctx.Locale.Tr "repo.branch.no_type"}}</a>
+				<a class="ui small label {{if and (not .BranchTypeFilter) (not .BranchUntypedFilter)}}primary{{else}}basic{{end}}" href="?q={{.Keyword}}&{{.BranchFilterQuery}}">{{ctx.Locale.Tr "repo.branch.filter_all"}}</a>
+				{{range .BranchTypeNames}}<a class="ui small label {{if eq $.BranchTypeFilter .}}primary{{else}}basic{{end}}" href="?q={{$.Keyword}}&type={{.}}&{{$.BranchFilterQuery}}">{{.}}</a>{{end}}
+				<a class="ui small label {{if .BranchUntypedFilter}}primary{{else}}basic{{end}}" href="?q={{.Keyword}}&untyped=1&{{.BranchFilterQuery}}">{{ctx.Locale.Tr "repo.branch.no_type"}}</a>
 				<button type="button" class="ui small basic button tw-ml-auto" id="branch-group-toggle" data-text-type="{{ctx.Locale.Tr "repo.branch.group_by_type"}}" data-text-none="{{ctx.Locale.Tr "repo.branch.group_by_none"}}"></button>
 			</div>
 			{{end}}
 		</div>
+
+		{{if .CanBulkDelete}}
+		<div class="ui attached segment branch-bulk-bar" id="branch-bulk-bar" data-total="{{.BranchMatchingTotal}}" data-deleted="{{.BranchFilter.Deleted}}" data-preview-url="{{.Link}}/delete_preview" data-confirm-above="{{.BulkConfirmAbove}}" data-confirm-name="{{.BulkConfirmName}}"
+			data-text-selected="{{ctx.Locale.Tr "repo.branch.bulk.selected" "%s"}}"
+			data-text-select-all="{{ctx.Locale.Tr "repo.branch.bulk.select_all" "%s"}}"
+			data-text-all-selected="{{ctx.Locale.Tr "repo.branch.bulk.all_selected" "%s"}}"
+			data-text-delete="{{ctx.Locale.Tr "repo.branch.bulk.delete_n" "%s"}}"
+			data-text-restore="{{ctx.Locale.Tr "repo.branch.bulk.restore_n" "%s"}}"
+			data-title-one="{{ctx.Locale.TrPluralString 1 "repo.branch.bulk.title" "%s"}}" data-title-other="{{ctx.Locale.TrPluralString 2 "repo.branch.bulk.title" "%s"}}"
+			data-ok-one="{{ctx.Locale.TrPluralString 1 "repo.branch.bulk.ok" "%s"}}" data-ok-other="{{ctx.Locale.TrPluralString 2 "repo.branch.bulk.ok" "%s"}}"
+			data-text-cap="{{ctx.Locale.Tr "repo.branch.bulk.cap" "%s" "%s"}}"
+			data-text-kept="{{ctx.Locale.Tr "repo.branch.bulk.kept_note" "%s"}}"
+			data-text-none="{{ctx.Locale.Tr "repo.branch.bulk.none"}}"
+			data-text-error="{{ctx.Locale.Tr "repo.branch.bulk.load_error"}}">
+			<div class="flex-text-block tw-flex-wrap">
+				<label class="flex-text-block branch-select-box"><input type="checkbox" id="branch-select-page" aria-label="{{ctx.Locale.Tr "repo.branch.bulk.select_page"}}"> <span id="branch-selected-count" aria-live="polite"></span></label>
+				<button type="button" class="ui small basic button tw-hidden" id="branch-select-all"></button>
+				<button type="button" class="ui small basic button tw-hidden" id="branch-clear-selection">{{ctx.Locale.Tr "repo.branch.bulk.clear"}}</button>
+				{{if .BranchFilter.Deleted}}
+				{{if not .PersonalRepoLocked}}<button class="ui small primary button tw-ml-auto" id="branch-restore-selected" form="restore-selected-form" disabled></button>{{end}}
+				{{else}}
+				<button type="button" class="ui small red button tw-ml-auto" id="branch-delete-selected" disabled></button>
+				{{end}}
+			</div>
+		</div>
+		{{if and .BranchFilter.Deleted (not .PersonalRepoLocked)}}<form id="restore-selected-form" method="post" action="{{.Link}}/restore_selected"></form>{{end}}
+		{{end}}
 
 		<div class="ui attached table segment">
 			<table class="ui very basic striped fixed table single line">
 				<tbody id="branch-list-body">
 					{{range $group := .BranchGroups}}
 					{{if $.HasBranchTypes}}
-						<tr class="branch-group-header" data-group="{{$group.Name}}"><th colspan="4">{{if $group.Name}}{{$group.Name}}{{else}}{{ctx.Locale.Tr "repo.branch.no_type"}}{{end}}</th></tr>
+						<tr class="branch-group-header" data-group="{{$group.Name}}"><th colspan="5">{{if $group.Name}}{{$group.Name}}{{else}}{{ctx.Locale.Tr "repo.branch.no_type"}}{{end}}</th></tr>
 					{{end}}
 					{{range .Branches}}
 						<tr data-order="{{.Order}}" data-group="{{$group.Name}}">
-							<td class="eight wide">
+							{{if $.CanBulkDelete}}
+							<td class="one wide branch-select-cell">
+								{{if .DBBranch.IsDeleted}}
+									{{if and $.BranchFilter.Deleted (not .IsProtected) (not $.PersonalRepoLocked)}}<input type="checkbox" class="branch-select" name="branch_id" form="restore-selected-form" value="{{.DBBranch.ID}}"{{if index $.SelectedNames .DBBranch.Name}} checked{{end}} aria-label="{{ctx.Locale.Tr "repo.branch.bulk.row_select" .DBBranch.Name}}">{{end}}
+								{{else}}
+									{{$kept := index $.KeptTexts .DBBranch.Name}}
+									<input type="checkbox" class="branch-select" value="{{.DBBranch.CommitID}}:{{.DBBranch.Name}}" data-name="{{.DBBranch.Name}}"{{if $kept}} disabled aria-describedby="branch-kept-{{.Order}}"{{end}} aria-label="{{ctx.Locale.Tr "repo.branch.bulk.row_select" .DBBranch.Name}}">
+								{{end}}
+							</td>
+							{{end}}
+							<td class="{{if $.CanBulkDelete}}seven{{else}}eight{{end}} wide">
 							{{if .DBBranch.IsDeleted}}
 								<div class="flex-text-block">
 									<span class="gt-ellipsis">{{.DBBranch.Name}}</span>
@@ -122,6 +183,7 @@
 									{{template "repo/commit_statuses" dict "Status" (index $.CommitStatus .DBBranch.CommitID) "Statuses" (index $.CommitStatuses .DBBranch.CommitID)}}
 								</div>
 								<p class="info tw-flex tw-items-center tw-my-1">{{svg "octicon-git-commit" 16 "tw-mr-1"}}<a href="{{$.RepoLink}}/commit/{{PathEscape .DBBranch.CommitID}}">{{ShortSha .DBBranch.CommitID}}</a> · <span class="commit-message">{{RenderCommitMessage $.Context .DBBranch.CommitMessage ($.Repository.ComposeMetas ctx)}}</span> · {{ctx.Locale.Tr "org.repo_updated" (DateUtils.TimeSince .DBBranch.CommitTime)}}{{if .DBBranch.Pusher}} &nbsp;{{template "shared/user/avatarlink" dict "user" .DBBranch.Pusher}} &nbsp;{{template "shared/user/namelink" .DBBranch.Pusher}}{{end}}</p>
+								{{if and $.CanBulkDelete (not $.BranchFilter.Deleted)}}{{$order := .Order}}{{with index $.KeptTexts .DBBranch.Name}}<p class="info tw-my-1" id="branch-kept-{{$order}}">{{ctx.Locale.Tr "repo.branch.bulk.kept_row" .}}</p>{{end}}{{end}}
 							{{end}}
 							</td>
 							<td class="two wide ui">
@@ -223,6 +285,7 @@
 				</tbody>
 			</table>
 		</div>
+		{{if and (not .Branches) .BranchFilterSet}}<p class="ui attached segment">{{ctx.Locale.Tr "repo.branch.filter_none"}}</p>{{end}}
 		{{template "base/paginate" .}}
 	</div>
 </div>
@@ -240,6 +303,31 @@
 
 {{if and (not .PersonalRepoLocked) .BranchDialog}}
 {{template "repo/branch/create_dialog" .}}
+{{end}}
+
+{{if and .CanBulkDelete (not .BranchFilter.Deleted)}}
+<dialog class="modal" id="delete-selected-modal" aria-labelledby="delete-selected-title">
+	<article>
+		<header id="delete-selected-title"></header>
+		<form class="ui form" id="delete-selected-form" method="post" action="{{.Link}}/delete_selected">
+			<div class="content">
+				<p>{{ctx.Locale.Tr "repo.branch.bulk.intro"}} {{.RestoreText}}</p>
+				<div class="ui warning message tw-hidden" id="delete-selected-cap"></div>
+				<ul class="branch-delete-list" id="delete-selected-list" tabindex="0"></ul>
+				<p class="info tw-hidden" id="delete-selected-kept"></p>
+				<div class="field tw-hidden" id="delete-selected-confirm">
+					<label for="delete-selected-name">{{ctx.Locale.Tr "repo.settings.delete_merged.confirm_name" .BulkConfirmName}}</label>
+					<input id="delete-selected-name" name="confirm_name" autocomplete="off">
+				</div>
+				<p class="text red tw-hidden" id="delete-selected-error"></p>
+			</div>
+			<div class="actions">
+				<button type="button" class="ui basic button" command="close" commandfor="delete-selected-modal">{{svg "octicon-x"}} {{ctx.Locale.Tr "cancel"}}</button>
+				<button type="submit" class="ui red button" id="delete-selected-ok" disabled></button>
+			</div>
+		</form>
+	</article>
+</dialog>
 {{end}}
 
 <dialog class="modal" id="rename-branch-modal">

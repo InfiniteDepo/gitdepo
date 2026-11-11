@@ -14462,6 +14462,62 @@
         }
       }
     },
+    "/repos/{owner}/{repo}/branches/delete": {
+      "post": {
+        "description": "Names up to 100 branches, or picks the first 100 that match the filters. The default, development, production, release and protected branches, branches of the merge queue and branches used by open pull requests are kept, and so is a branch that was pushed to since it was read. A kept branch does not stop the others. Every deleted branch can be restored from the deleted branches.",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "repository"
+        ],
+        "summary": "Delete several branches, named or picked by filters",
+        "operationId": "repoDeleteBranches",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "owner of the repo",
+            "name": "owner",
+            "in": "path",
+            "required": true
+          },
+          {
+            "type": "string",
+            "description": "name of the repo",
+            "name": "repo",
+            "in": "path",
+            "required": true
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "schema": {
+              "$ref": "#/definitions/DeleteBranchesOption"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/responses/DeleteBranchesResult"
+          },
+          "403": {
+            "$ref": "#/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/notFound"
+          },
+          "422": {
+            "$ref": "#/responses/validationError"
+          },
+          "423": {
+            "$ref": "#/responses/repoArchivedError"
+          }
+        }
+      }
+    },
     "/repos/{owner}/{repo}/branches/{branch}": {
       "get": {
         "produces": [
@@ -37077,6 +37133,93 @@
       },
       "x-go-package": "forgejo.org/modules/structs"
     },
+    "DeleteBranchesOption": {
+      "description": "DeleteBranchesOption options when deleting several branches of a repository at once. Either names or at least one\nfilter besides q is set; with names the filters are ignored.",
+      "type": "object",
+      "properties": {
+        "merged": {
+          "description": "Only branches that are \"merged\" or \"not_merged\" into the development branch (or into merged_into)",
+          "type": "string",
+          "enum": [
+            "merged",
+            "not_merged"
+          ],
+          "x-go-name": "Merged"
+        },
+        "merged_into": {
+          "description": "The branch merged and not_merged look at: \"development\" (the default of the filter) or \"default\"",
+          "type": "string",
+          "enum": [
+            "development",
+            "default"
+          ],
+          "x-go-name": "MergedInto"
+        },
+        "names": {
+          "description": "Names of the branches to delete, 1 to 100",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-name": "Names"
+        },
+        "pushed_by": {
+          "description": "Only branches last pushed by this user name (not the commit author)",
+          "type": "string",
+          "x-go-name": "PushedBy"
+        },
+        "q": {
+          "description": "Filters, used when no names are given: only branches whose name contains this text",
+          "type": "string",
+          "x-go-name": "Keyword"
+        },
+        "stale_days": {
+          "description": "Only branches the server has not updated for this many days (1 to 3650; the age is never the commit date)",
+          "type": "integer",
+          "format": "int64",
+          "x-go-name": "StaleDays"
+        },
+        "type": {
+          "description": "Only branches of this type (\"Release\" or the name of a branch type)",
+          "type": "string",
+          "x-go-name": "Type"
+        },
+        "untyped": {
+          "description": "Only branches that match no type",
+          "type": "boolean",
+          "x-go-name": "Untyped"
+        }
+      },
+      "x-go-package": "forgejo.org/modules/structs"
+    },
+    "DeleteBranchesResult": {
+      "type": "object",
+      "title": "DeleteBranchesResult is what a bulk delete of branches did, branch by branch.",
+      "properties": {
+        "deleted": {
+          "description": "Names of the deleted branches; each can be restored from the deleted branches",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-name": "Deleted"
+        },
+        "kept": {
+          "description": "The branches that were kept",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/KeptBranch"
+          },
+          "x-go-name": "Kept"
+        },
+        "more": {
+          "description": "True when the filters matched more branches than one request deletes: send it again for the rest",
+          "type": "boolean",
+          "x-go-name": "More"
+        }
+      },
+      "x-go-package": "forgejo.org/modules/structs"
+    },
     "DeleteEmailOption": {
       "description": "DeleteEmailOption options when deleting email addresses",
       "type": "object",
@@ -40304,6 +40447,23 @@
       "type": "array",
       "items": {
         "type": "string"
+      },
+      "x-go-package": "forgejo.org/modules/structs"
+    },
+    "KeptBranch": {
+      "type": "object",
+      "title": "KeptBranch is a branch a bulk delete did not delete, with the reason.",
+      "properties": {
+        "name": {
+          "description": "Name of the branch",
+          "type": "string",
+          "x-go-name": "Name"
+        },
+        "reason": {
+          "description": "Why it was kept: default, development, production, release, protected, open_pr, merge_queue, base,\nnew_commits, permission, not_found or error",
+          "type": "string",
+          "x-go-name": "Reason"
+        }
       },
       "x-go-package": "forgejo.org/modules/structs"
     },
@@ -46553,6 +46713,12 @@
       "description": "DeleteActionRunsResult",
       "schema": {
         "$ref": "#/definitions/DeleteActionRunsResult"
+      }
+    },
+    "DeleteBranchesResult": {
+      "description": "DeleteBranchesResult",
+      "schema": {
+        "$ref": "#/definitions/DeleteBranchesResult"
       }
     },
     "DependencyList": {

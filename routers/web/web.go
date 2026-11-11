@@ -1826,6 +1826,9 @@ func registerRoutes(m *web.Route) {
 			}, web.Bind(forms.NewBranchForm{}), context.EnforceQuotaWeb(quota_model.LimitSubjectSizeReposAll, context.QuotaTargetRepo))
 			m.Post("/delete", repo.DeleteBranchPost)
 			m.Post("/restore", repo.RestoreBranchPost)
+			m.Get("/delete_preview", repo.DeleteSelectedBranchesPreview)
+			m.Post("/delete_selected", repo.DeleteSelectedBranchesPost)
+			m.Post("/restore_selected", repo.RestoreSelectedBranchesPost)
 		}, context.RepoMustNotBeArchived(), reqRepoCodeWriter, repo.MustBeNotEmpty)
 	}, reqSignIn, context.RepoAssignment, context.UnitTypes())
 
