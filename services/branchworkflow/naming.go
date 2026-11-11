@@ -81,7 +81,7 @@ func compileException(p string) (*regexp.Regexp, error) {
 	if p == "" || len(p) > maxExceptionLen || !utf8.ValidString(p) || strings.ContainsFunc(p, unicode.IsControl) {
 		return nil, ErrInvalidBranchingModel{Value: p, Reason: ReasonException}
 	}
-	g, err := glob.Compile(p, '/')
+	g, err := glob.CompileExact(p, '/')
 	if err != nil {
 		return nil, ErrInvalidBranchingModel{Value: p, Reason: ReasonException}
 	}

@@ -132,7 +132,7 @@ func (protectBranch *ProtectedBranch) loadGlob() {
 	}
 	// now we load the glob
 	var err error
-	protectBranch.globRule, err = linearglob.Compile(protectBranch.RuleName, '/')
+	protectBranch.globRule, err = linearglob.CompileExact(protectBranch.RuleName, '/')
 	if err != nil {
 		log.Warn("Invalid glob rule for ProtectedBranch[%d]: %s %v", protectBranch.ID, protectBranch.RuleName, err)
 		protectBranch.globRule = regexp.MustCompile(`\A` + regexp.QuoteMeta(protectBranch.RuleName) + `\z`)
