@@ -4,7 +4,9 @@
 package code
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -45,4 +47,10 @@ func TestIsIndexedBranchName(t *testing.T) {
 	assert.False(t, isIndexedBranchName("main", nil, "develop"))
 	// a pattern that compiles but panics in glob's Match counts as no match
 	assert.NotPanics(t, func() { assert.False(t, isIndexedBranchName("main", []string{"?a{}{,*"}, "xa")) })
+}
+
+func TestBranchPatternIsLinear(t *testing.T) {
+	start := time.Now()
+	matches(strings.Repeat("{a,aa}*", 16)+"b", strings.Repeat("ab", 125))
+	assert.Less(t, time.Since(start), 100*time.Millisecond)
 }

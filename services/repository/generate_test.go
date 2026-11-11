@@ -4,9 +4,12 @@
 package repository
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var giteaTemplate = []byte(`
@@ -45,7 +48,7 @@ func TestGiteaTemplate(t *testing.T) {
 		t.Run(tc.Path, func(t *testing.T) {
 			match := false
 			for _, g := range gt.Globs() {
-				if g.Match(tc.Path) {
+				if g.MatchString(tc.Path) {
 					match = true
 					break
 				}
@@ -134,4 +137,12 @@ func TestTransformers(t *testing.T) {
 			assert.Equal(t, tt.expected, got)
 		})
 	}
+}
+
+func TestGiteaTemplateGlobsAreLinear(t *testing.T) {
+	gt := &GiteaTemplate{Content: []byte(strings.Repeat("{a,aa}*", 16) + "b")}
+	require.Len(t, gt.Globs(), 1)
+	start := time.Now()
+	gt.Globs()[0].MatchString(strings.Repeat("ab", 125))
+	assert.Less(t, time.Since(start), 100*time.Millisecond)
 }

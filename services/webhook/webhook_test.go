@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
@@ -151,4 +153,11 @@ func TestDeliverTestPayloadWithoutPushEvent(t *testing.T) {
 		HookID:    hook.ID,
 		EventType: webhook_module.HookEventPush,
 	})
+}
+
+func TestCheckBranchIsLinear(t *testing.T) {
+	w := &webhook_model.Webhook{HookEvent: &webhook_module.HookEvent{BranchFilter: strings.Repeat("{a,aa}*", 16) + "b"}}
+	start := time.Now()
+	checkBranch(w, strings.Repeat("ab", 125))
+	assert.Less(t, time.Since(start), 100*time.Millisecond)
 }

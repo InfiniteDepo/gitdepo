@@ -24,7 +24,6 @@ import (
 	"forgejo.org/modules/timeutil"
 	"forgejo.org/modules/util"
 
-	"github.com/gobwas/glob"
 	"github.com/gobwas/glob/syntax"
 	"xorm.io/builder"
 )
@@ -315,22 +314,22 @@ func IsUserOfficialReviewer(ctx context.Context, protectBranch *ProtectedBranch,
 	return inTeam, nil
 }
 
-// GetProtectedFilePatterns parses a semicolon separated list of protected file patterns and returns a glob.Glob slice
-func (protectBranch *ProtectedBranch) GetProtectedFilePatterns() []glob.Glob {
+// GetProtectedFilePatterns parses a semicolon separated list of protected file patterns and returns a slice of compiled patterns
+func (protectBranch *ProtectedBranch) GetProtectedFilePatterns() []*regexp.Regexp {
 	return getFilePatterns(protectBranch.ProtectedFilePatterns)
 }
 
-// GetUnprotectedFilePatterns parses a semicolon separated list of unprotected file patterns and returns a glob.Glob slice
-func (protectBranch *ProtectedBranch) GetUnprotectedFilePatterns() []glob.Glob {
+// GetUnprotectedFilePatterns parses a semicolon separated list of unprotected file patterns and returns a slice of compiled patterns
+func (protectBranch *ProtectedBranch) GetUnprotectedFilePatterns() []*regexp.Regexp {
 	return getFilePatterns(protectBranch.UnprotectedFilePatterns)
 }
 
-func getFilePatterns(filePatterns string) []glob.Glob {
-	extarr := make([]glob.Glob, 0, 10)
+func getFilePatterns(filePatterns string) []*regexp.Regexp {
+	extarr := make([]*regexp.Regexp, 0, 10)
 	for expr := range strings.SplitSeq(strings.ToLower(filePatterns), ";") {
 		expr = strings.TrimSpace(expr)
 		if expr != "" {
-			if g, err := glob.Compile(expr, '.', '/'); err != nil {
+			if g, err := linearglob.CompileExact(expr, '.', '/'); err != nil {
 				log.Info("Invalid glob expression '%s' (skipped): %v", expr, err)
 			} else {
 				extarr = append(extarr, g)
@@ -360,7 +359,7 @@ func (protectBranch *ProtectedBranch) MergeBlockedByProtectedFiles(changedProtec
 }
 
 // IsProtectedFile return if path is protected
-func (protectBranch *ProtectedBranch) IsProtectedFile(patterns []glob.Glob, path string) bool {
+func (protectBranch *ProtectedBranch) IsProtectedFile(patterns []*regexp.Regexp, path string) bool {
 	if len(patterns) == 0 {
 		patterns = protectBranch.GetProtectedFilePatterns()
 		if len(patterns) == 0 {
@@ -372,7 +371,7 @@ func (protectBranch *ProtectedBranch) IsProtectedFile(patterns []glob.Glob, path
 
 	r := false
 	for _, pat := range patterns {
-		if pat.Match(lpath) {
+		if pat.MatchString(lpath) {
 			r = true
 			break
 		}
@@ -382,7 +381,7 @@ func (protectBranch *ProtectedBranch) IsProtectedFile(patterns []glob.Glob, path
 }
 
 // IsUnprotectedFile return if path is unprotected
-func (protectBranch *ProtectedBranch) IsUnprotectedFile(patterns []glob.Glob, path string) bool {
+func (protectBranch *ProtectedBranch) IsUnprotectedFile(patterns []*regexp.Regexp, path string) bool {
 	if len(patterns) == 0 {
 		patterns = protectBranch.GetUnprotectedFilePatterns()
 		if len(patterns) == 0 {
@@ -394,7 +393,7 @@ func (protectBranch *ProtectedBranch) IsUnprotectedFile(patterns []glob.Glob, pa
 
 	r := false
 	for _, pat := range patterns {
-		if pat.Match(lpath) {
+		if pat.MatchString(lpath) {
 			r = true
 			break
 		}

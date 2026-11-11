@@ -39,10 +39,10 @@ func TestCompileMatchesGobwas(t *testing.T) {
 			want, wantErr := gobwas.Compile(p, seps...)
 			got, err := glob.Compile(p, seps...)
 			if wantErr != nil {
-				require.Error(t, err, "pattern %q is refused like gobwas does", p)
+				require.Error(t, err, "pattern %q, separators %q is refused like gobwas does", p, string(seps))
 				continue
 			}
-			require.NoError(t, err, "pattern %q", p)
+			require.NoError(t, err, "pattern %q, separators %q", p, string(seps))
 			for _, n := range corpusNames {
 				if gobwasDefects[[2]string{p, n}] {
 					continue
@@ -86,30 +86,45 @@ var protectionPatterns = []string{
 	"{P,**/P}", "{,**/}x", "{,**/}a/b", "a{,/**}", "heads/{a,**/b}", "feature/**/{x,y}", "r\\*", "release-[0-9]*", "v[!0-9]*",
 }
 
+var separatorSets = [][]rune{{'.', '/'}, {'/'}, nil}
+
+// compareExact compares CompileExact with gobwas for every separator set the callers use.
 func compareExact(t *testing.T, p string, names []string) {
 	t.Helper()
-	want, wantErr := gobwas.Compile(p, '/')
-	got, err := glob.CompileExact(p, '/')
+	for _, seps := range separatorSets {
+		compareExactSeps(t, p, names, seps)
+	}
+}
+
+func compareExactSeps(t *testing.T, p string, names []string, seps []rune) {
+	t.Helper()
+	want, wantErr := gobwas.Compile(p, seps...)
+	got, err := glob.CompileExact(p, seps...)
 	if wantErr == nil { // gobwas panics on some patterns (match.Row.matchAll): nothing to compare
 		defer func() { _ = recover() }()
 	}
 	if wantErr != nil {
-		require.Error(t, err, "pattern %q is refused like gobwas does", p)
+		require.Error(t, err, "pattern %q, separators %q is refused like gobwas does", p, string(seps))
 		return
 	}
-	require.NoError(t, err, "pattern %q", p)
+	require.NoError(t, err, "pattern %q, separators %q", p, string(seps))
 	for _, n := range names {
-		// gobwas defects, not copied: a prefix and suffix around `**` overlapping, `?` runs with separators
-		if (p == "ab**bc" && n == "abc") || (strings.Contains(p, "??") && strings.Contains(n, "/")) {
+		// gobwas defects, not copied: a prefix and suffix around `**` overlapping; a row of `?`, or `?` next to `*`,
+		// ignores the separators when there are two of them (`*?` matches `a.`), and with one only a row of `?`
+		// does; an empty alternative `{}` before `**` is dropped, although `{}` alone matches nothing
+		row := strings.Contains(p, "*?") || strings.Contains(p, "?*")
+		if (p == "ab**bc" && n == "abc") ||
+			((strings.Contains(p, "??") || (row && len(seps) > 1)) && strings.ContainsAny(n, string(append([]rune{'/'}, seps...)))) ||
+			(strings.Contains(p, "{}") && strings.Contains(p, "**")) {
 			continue
 		}
-		assert.Equal(t, want.Match(n), got.MatchString(n), "pattern %q, name %q", p, n)
+		assert.Equal(t, want.Match(n), got.MatchString(n), "pattern %q, separators %q, name %q", p, string(seps), n)
 	}
 }
 
 // CompileExact means what gobwas means, a leading `**/` included.
 func TestCompileExactMatchesGobwas(t *testing.T) {
-	names := append([]string{"release/hotfix", "release/a/hotfix", "release//hotfix", "hotfix", "/hotfix", "a/hotfix", "x", "a/x", "/x", "a/b", "feature/x", "feature/a/y", "feature//y", "heads/a", "heads/b", "heads/c/b", "r*", "release-1", "release-1/x", "va", "v1"}, corpusNames...)
+	names := append([]string{".", "..", "a/..", "../a", "release/hotfix", "release/a/hotfix", "release//hotfix", "hotfix", "/hotfix", "a/hotfix", "x", "a/x", "/x", "a/b", "feature/x", "feature/a/y", "feature//y", "heads/a", "heads/b", "heads/c/b", "r*", "release-1", "release-1/x", "va", "v1"}, corpusNames...)
 	for _, p := range append(slices.Clone(corpusPatterns), protectionPatterns...) {
 		compareExact(t, p, names)
 	}
@@ -120,8 +135,8 @@ func TestCompileExactMatchesGobwas(t *testing.T) {
 // A seeded random walk over pattern pieces and names built from the same pieces.
 func TestCompileExactFuzz(t *testing.T) {
 	rnd := rand.New(rand.NewPCG(645, 2))
-	pieces := []string{"a", "b", "/", "*", "**", "?", "{", "}", ",", "[ab]", "[!a]", "[a-b]", "\\*", "\\{", "x", ".", "**/", "/**"}
-	letters := []string{"a", "b", "/", "x", ".", "*", "{", "c"}
+	pieces := []string{"a", "b", "/", "*", "**", "?", "{", "}", ",", "[ab]", "[!a]", "[a-b]", "\\*", "\\{", "x", ".", "..", "**/", "/**"}
+	letters := []string{"a", "b", "/", "x", ".", "*", "{", "c", "..", "./"}
 	build := func(from []string, max int) string {
 		var b strings.Builder
 		for range 1 + rnd.IntN(max) {

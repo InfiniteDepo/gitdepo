@@ -8,15 +8,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 
 	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
 	issues_model "forgejo.org/models/issues"
 	"forgejo.org/modules/gitrepo"
+	linearglob "forgejo.org/modules/glob"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/structs"
-
-	"github.com/gobwas/glob"
 )
 
 // MergeRequiredContextsCommitStatus returns a commit status state for given required contexts
@@ -26,10 +26,10 @@ func MergeRequiredContextsCommitStatus(commitStatuses []*git_model.CommitStatus,
 	returnedStatus := structs.CommitStatusSuccess
 
 	if len(requiredContexts) > 0 {
-		requiredContextsGlob := make(map[string]glob.Glob, len(requiredContexts))
+		requiredContextsGlob := make(map[string]*regexp.Regexp, len(requiredContexts))
 		for _, ctx := range requiredContexts {
-			if gp, err := glob.Compile(ctx); err != nil {
-				log.Error("glob.Compile %s failed. Error: %v", ctx, err)
+			if gp, err := linearglob.CompileExact(ctx); err != nil {
+				log.Error("compiling %s failed. Error: %v", ctx, err)
 			} else {
 				requiredContextsGlob[ctx] = gp
 			}
@@ -38,7 +38,7 @@ func MergeRequiredContextsCommitStatus(commitStatuses []*git_model.CommitStatus,
 		for _, gp := range requiredContextsGlob {
 			var targetStatus structs.CommitStatusState
 			for _, commitStatus := range commitStatuses {
-				if gp.Match(commitStatus.Context) {
+				if gp.MatchString(commitStatus.Context) {
 					if targetStatus == "" {
 						targetStatus = commitStatus.State
 					} else if commitStatus.State.NoBetterThan(targetStatus) {

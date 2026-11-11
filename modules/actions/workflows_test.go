@@ -6,6 +6,7 @@ package actions
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -403,4 +404,15 @@ jobs:
 	assert.Equal(t, ".github/workflows", source)
 	assert.Equal(t, "build.yaml", workflows[0].Name())
 	assert.Equal(t, "test.yml", workflows[1].Name())
+}
+
+func TestMatchActivityType(t *testing.T) {
+	assert.True(t, matchActivityType("label*", "labeled"))
+	assert.True(t, matchActivityType("{opened,closed}", "closed"))
+	assert.False(t, matchActivityType("[a-", "a"), "an invalid pattern matches nothing")
+
+	// a pattern from the workflow file is matched in linear time
+	start := time.Now()
+	matchActivityType(strings.Repeat("{a,aa}*", 16)+"b", strings.Repeat("ab", 125))
+	assert.Less(t, time.Since(start), 100*time.Millisecond)
 }

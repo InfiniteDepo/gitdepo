@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
@@ -529,4 +530,11 @@ func TestEnvironmentAllowsWorkflow(t *testing.T) {
 	} {
 		assert.Equal(t, want, e.AllowsWorkflow(workflow), workflow)
 	}
+}
+
+func TestEnvironmentPatternIsLinear(t *testing.T) {
+	start := time.Now()
+	matchPattern(strings.Repeat("{a,aa}*", 16)+"b", strings.Repeat("ab", 125))
+	assert.Less(t, time.Since(start), 100*time.Millisecond)
+	assert.False(t, matchPattern("[a-", "a"))
 }

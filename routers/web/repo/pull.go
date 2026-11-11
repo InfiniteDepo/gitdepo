@@ -39,6 +39,7 @@ import (
 	"forgejo.org/modules/emoji"
 	"forgejo.org/modules/git"
 	"forgejo.org/modules/gitrepo"
+	linearglob "forgejo.org/modules/glob"
 	issue_template "forgejo.org/modules/issue/template"
 	"forgejo.org/modules/log"
 	"forgejo.org/modules/markup"
@@ -64,8 +65,6 @@ import (
 	pull_service "forgejo.org/services/pull"
 	repo_service "forgejo.org/services/repository"
 	files_service "forgejo.org/services/repository/files"
-
-	"github.com/gobwas/glob"
 )
 
 const (
@@ -805,12 +804,12 @@ func PrepareViewPullInfo(ctx *context.Context, issue *issues_model.Issue) *git.C
 				if c == context {
 					return true
 				}
-				if gp, err := glob.Compile(c); err != nil {
+				if gp, err := linearglob.CompileExact(c); err != nil {
 					// All newly created status_check_contexts are checked to ensure they are valid glob expressions before being stored in the database.
 					// But some old status_check_context created before glob was introduced may be invalid glob expressions.
 					// So log the error here for debugging.
 					log.Error("compile glob %q: %v", c, err)
-				} else if gp.Match(context) {
+				} else if gp.MatchString(context) {
 					return true
 				}
 			}
@@ -893,9 +892,9 @@ func PrepareViewPullInfo(ctx *context.Context, issue *issues_model.Issue) *git.C
 }
 
 func createRequiredContextMatcher(requiredContext string) func(string) bool {
-	if gp, err := glob.Compile(requiredContext); err == nil {
+	if gp, err := linearglob.CompileExact(requiredContext); err == nil {
 		return func(contextToCheck string) bool {
-			return gp.Match(contextToCheck)
+			return gp.MatchString(contextToCheck)
 		}
 	}
 

@@ -12,9 +12,8 @@ import (
 	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	"forgejo.org/models/organization"
+	linearglob "forgejo.org/modules/glob"
 	"forgejo.org/modules/timeutil"
-
-	"github.com/gobwas/glob"
 )
 
 // ProtectedTag struct
@@ -23,7 +22,7 @@ type ProtectedTag struct {
 	RepoID           int64
 	NamePattern      string
 	RegexPattern     *regexp.Regexp `xorm:"-"`
-	GlobPattern      glob.Glob      `xorm:"-"`
+	GlobPattern      *regexp.Regexp `xorm:"-"`
 	AllowlistUserIDs []int64        `xorm:"JSON TEXT"`
 	AllowlistTeamIDs []int64        `xorm:"JSON TEXT"`
 	// public key IDs of the deploy keys allowed to control the tags
@@ -47,7 +46,7 @@ func (pt *ProtectedTag) EnsureCompiledPattern() error {
 	if len(pt.NamePattern) >= 2 && strings.HasPrefix(pt.NamePattern, "/") && strings.HasSuffix(pt.NamePattern, "/") {
 		pt.RegexPattern, err = regexp.Compile(pt.NamePattern[1 : len(pt.NamePattern)-1])
 	} else {
-		pt.GlobPattern, err = glob.Compile(pt.NamePattern)
+		pt.GlobPattern, err = linearglob.CompileExact(pt.NamePattern)
 	}
 	return err
 }
@@ -56,7 +55,7 @@ func (pt *ProtectedTag) matchString(name string) bool {
 	if pt.RegexPattern != nil {
 		return pt.RegexPattern.MatchString(name)
 	}
-	return pt.GlobPattern.Match(name)
+	return pt.GlobPattern.MatchString(name)
 }
 
 // InsertProtectedTag inserts a protected tag to database

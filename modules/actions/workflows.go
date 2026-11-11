@@ -12,6 +12,7 @@ import (
 
 	actions_model "forgejo.org/models/actions"
 	"forgejo.org/modules/git"
+	linearglob "forgejo.org/modules/glob"
 	"forgejo.org/modules/log"
 	api "forgejo.org/modules/structs"
 	webhook_module "forgejo.org/modules/webhook"
@@ -19,7 +20,6 @@ import (
 	"code.forgejo.org/forgejo/runner/v13/act/jobparser"
 	"code.forgejo.org/forgejo/runner/v13/act/model"
 	"code.forgejo.org/forgejo/runner/v13/act/workflowpattern"
-	"github.com/gobwas/glob"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -435,7 +435,7 @@ func matchIssuesEvent(issuePayload *api.IssuePayload, evt *jobparser.Event) bool
 				action = "unlabeled"
 			}
 			for _, val := range vals {
-				if glob.MustCompile(val, '/').Match(string(action)) {
+				if matchActivityType(val, string(action)) {
 					matchTimes++
 					break
 				}
@@ -478,7 +478,7 @@ func matchPullRequestEvent(gitRepo *git.Repository, commit *git.Commit, prPayloa
 		}
 		log.Trace("matching pull_request %s with %v", action, vals)
 		for _, val := range vals {
-			if glob.MustCompile(val, '/').Match(string(action)) {
+			if matchActivityType(val, string(action)) {
 				activityTypeMatched = true
 				matchTimes++
 				break
@@ -575,7 +575,7 @@ func matchIssueCommentEvent(issueCommentPayload *api.IssueCommentPayload, evt *j
 			// NONE
 
 			for _, val := range vals {
-				if glob.MustCompile(val, '/').Match(string(issueCommentPayload.Action)) {
+				if matchActivityType(val, string(issueCommentPayload.Action)) {
 					matchTimes++
 					break
 				}
@@ -616,7 +616,7 @@ func matchPullRequestReviewEvent(prPayload *api.PullRequestPayload, evt *jobpars
 
 			matched := false
 			for _, val := range vals {
-				if slices.ContainsFunc(actions, glob.MustCompile(val, '/').Match) {
+				if slices.ContainsFunc(actions, func(a string) bool { return matchActivityType(val, a) }) {
 					matched = true
 				}
 				if matched {
@@ -662,7 +662,7 @@ func matchPullRequestReviewCommentEvent(prPayload *api.PullRequestPayload, evt *
 
 			matched := false
 			for _, val := range vals {
-				if slices.ContainsFunc(actions, glob.MustCompile(val, '/').Match) {
+				if slices.ContainsFunc(actions, func(a string) bool { return matchActivityType(val, a) }) {
 					matched = true
 				}
 				if matched {
@@ -703,7 +703,7 @@ func matchReleaseEvent(payload *api.ReleasePayload, evt *jobparser.Event) bool {
 				action = "edited"
 			}
 			for _, val := range vals {
-				if glob.MustCompile(val, '/').Match(string(action)) {
+				if matchActivityType(val, string(action)) {
 					matchTimes++
 					break
 				}
@@ -739,7 +739,7 @@ func matchPackageEvent(payload *api.PackagePayload, evt *jobparser.Event) bool {
 				action = "published"
 			}
 			for _, val := range vals {
-				if glob.MustCompile(val, '/').Match(string(action)) {
+				if matchActivityType(val, string(action)) {
 					matchTimes++
 					break
 				}
@@ -779,4 +779,11 @@ func matchMergeGroupEvent(payload *api.MergeGroupPayload, evt *jobparser.Event) 
 		}
 	}
 	return matchTimes == len(evt.Acts())
+}
+
+// matchActivityType reports whether the activity type matches the glob pattern of a workflow's `types` list. The
+// pattern comes from the workflow file, so it is matched in linear time and an invalid one matches nothing.
+func matchActivityType(pattern, activity string) bool {
+	g, err := linearglob.CompileExact(pattern, '/')
+	return err == nil && g.MatchString(activity)
 }

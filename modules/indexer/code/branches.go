@@ -13,9 +13,8 @@ import (
 	git_model "forgejo.org/models/git"
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unit"
+	"forgejo.org/modules/glob"
 	"forgejo.org/modules/setting"
-
-	"github.com/gobwas/glob"
 )
 
 // BranchInfo is a branch that may be indexed.
@@ -43,16 +42,10 @@ func matchesAny(patterns []string, name string) bool {
 	return false
 }
 
-// matches compiles and matches in one place: gobwas/glob can panic in Match on a pattern that
-// compiles (e.g. "?a{}{,*"), and a panic here would drop whole queue batches, so it counts as no match.
-func matches(pattern, name string) (matched bool) {
-	defer func() {
-		if recover() != nil {
-			matched = false
-		}
-	}()
-	g, err := glob.Compile(pattern, '/')
-	return err == nil && g.Match(name)
+// matches compiles and matches in one place; an invalid pattern counts as no match.
+func matches(pattern, name string) bool {
+	g, err := glob.CompileExact(pattern, '/')
+	return err == nil && g.MatchString(name)
 }
 
 // isIndexedBranchName tells if a branch is, or may be, indexed: it is the default branch or matches a pattern.
@@ -129,7 +122,7 @@ func ParseIndexedBranchPatterns(text string) ([]string, error) {
 		if len(p) > maxBranchPatternLength {
 			return nil, fmt.Errorf("pattern %q is longer than %d characters", p, maxBranchPatternLength)
 		}
-		if _, err := glob.Compile(p, '/'); err != nil {
+		if _, err := glob.CompileExact(p, '/'); err != nil {
 			return nil, fmt.Errorf("pattern %q is invalid: %w", p, err)
 		}
 		patterns = append(patterns, p)
