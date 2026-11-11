@@ -219,8 +219,9 @@ func BranchCleanupPreview(ctx *context.Context) {
 		ctx.Data["AuditLink"] = setting.AppSubURL + "/-/admin/audit?action=repo.branches.cleanup_deleted"
 	}
 
-	// "Turn on cleanup" for these days, with the date it would take effect; not offered when they already are the setting
-	if ctx.Repo.IsAdmin() && !e.Locked && !(e.Setting != nil && e.Setting.Days == days) {
+	// "Turn on cleanup" for these days, with the date it would take effect; only while cleanup is off here (nothing in
+	// force, nothing wanted), otherwise the page shows just the state
+	if ctx.Repo.IsAdmin() && !e.Locked && e.Wanted == 0 && e.Days == 0 {
 		ctx.Data["CanTurnOn"] = true
 		if next := branchworkflow.NextCleanupState(e.State, days, now); next.PendingFrom != 0 && next.Days != days {
 			ctx.Data["TurnOnStart"] = timeutil.TimeStamp(next.PendingFrom)

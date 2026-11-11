@@ -124,7 +124,7 @@ func BranchCleanup(ctx *context.Context) {
 	if ctx.Doer != nil && (ctx.Doer.IsAdmin || ctx.Doer.IsAuditor) {
 		ctx.Data["AuditLink"] = setting.AppSubURL + "/-/admin/audit?action=repo.branches.cleanup_deleted"
 	}
-	if !locked && (c == nil || c.Days != days) {
+	if !locked && (c == nil || c.Days == 0) { // only while cleanup is off for the organization
 		ctx.Data["CanTurnOn"] = true
 		ctx.Data["TurnOnStart"] = timeutil.TimeStamp(branchworkflow.NextCleanupState(nil, days, now).PendingFrom)
 	}

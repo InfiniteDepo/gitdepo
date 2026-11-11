@@ -4,6 +4,7 @@
 package integration
 
 import (
+	"bytes"
 	"net/http"
 	"net/url"
 	"path"
@@ -50,6 +51,7 @@ func bcSubmitTurnOn(t *testing.T, s *TestSession, previewLink string, expected i
 		}
 	})
 	require.Contains(t, values, "cleanup_days")
+	assert.Zero(t, form.Find(`input:not([type="hidden"])`).Length(), "the days are fixed on the preview, not an editable field")
 	s.MakeRequest(t, NewRequestWithValues(t, "POST", form.AttrOr("action", ""), values), expected)
 }
 
@@ -148,6 +150,8 @@ func TestBranchCleanupPreviewAndRun(t *testing.T) {
 		assert.Equal(t, 30, eff.Wanted)
 		resp = s.MakeRequest(t, NewRequest(t, "GET", link), http.StatusOK)
 		assert.NotContains(t, resp.Body.String(), `<button class="ui primary button">`)
+		assert.Zero(t, NewHTMLParser(t, bytes.NewBufferString(resp.Body.String())).Find(`form[action="`+link+`"]`).Length(), "no turn-on form once it is on or pending")
+		assert.NotContains(t, resp.Body.String(), "takes effect at once")
 		assert.Contains(t, resp.Body.String(), "pending until")
 		// a date ahead is written out with its time, never as words
 		pending, err := repo_model.GetBranchCleanupState(t.Context(), repo.ID)
@@ -213,6 +217,25 @@ func TestBranchCleanupPreviewAndRun(t *testing.T) {
 		require.NoError(t, err)
 		s.MakeRequest(t, NewRequestWithURLValues(t, "POST", path.Join("/org3", repo.Name, "branches/restore_selected"), url.Values{"branch_id": {strconv.FormatInt(b.ID, 10)}}), http.StatusSeeOther)
 		assert.Contains(t, dmBranches(t, repo), "m-a")
+
+		// the list of deleted branches says it was the scheduled cleanup, not "Ghost"
+		deletedPage := s.MakeRequest(t, NewRequest(t, "GET", path.Join("/org3", repo.Name, "branches")+"?deleted=1"), http.StatusOK).Body.String()
+		assert.Contains(t, deletedPage, "Deleted by the scheduled cleanup")
+		assert.NotContains(t, deletedPage, "Deleted by Ghost")
+		var marked int64
+		marked, err = db.GetEngine(t.Context()).Where("repo_id = ? AND is_deleted = ? AND deleted_by_cleanup = ?", repo.ID, true, true).Count(new(git_model.Branch))
+		require.NoError(t, err)
+		assert.Positive(t, marked)
+
+		// a skipped repository shows only the skip
+		_, err = db.GetEngine(t.Context()).Exec("UPDATE repository SET is_empty = ? WHERE id = ?", true, repo.ID)
+		require.NoError(t, err)
+		resp = s.MakeRequest(t, NewRequest(t, "GET", link), http.StatusOK)
+		assert.Contains(t, resp.Body.String(), "Skipped")
+		assert.NotContains(t, resp.Body.String(), "Cleanup is on")
+		assert.NotContains(t, resp.Body.String(), "turns on after")
+		_, err = db.GetEngine(t.Context()).Exec("UPDATE repository SET is_empty = ? WHERE id = ?", false, repo.ID)
+		require.NoError(t, err)
 
 		// readers get nothing
 		reader.MakeRequest(t, NewRequest(t, "GET", link), http.StatusNotFound)

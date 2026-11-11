@@ -556,6 +556,11 @@ func DeleteBranch(ctx context.Context, doer *user_model.User, repo *repo_model.R
 		data := map[string]any{"name": branchName, "commit": expected}
 		if via, _ := ctx.Value(deleteViaKey{}).(string); via != "" {
 			data["via"] = via
+			if via == "cleanup" && !notExist {
+				if err := git_model.MarkDeletedByCleanup(ctx, repo.ID, branchName); err != nil {
+					return err
+				}
+			}
 		}
 		if err := repo_model.RecordRepoTarget(ctx, repo, audit_model.Event{
 			Action: "repo.branch.deleted", TargetType: "branch", TargetName: branchName, Data: data,

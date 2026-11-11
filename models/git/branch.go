@@ -132,11 +132,13 @@ type Branch struct {
 	Pusher        *user_model.User `xorm:"-"`
 	IsDeleted     bool             `xorm:"index"`
 	DeletedByID   int64
-	DeletedBy     *user_model.User   `xorm:"-"`
-	DeletedUnix   timeutil.TimeStamp `xorm:"index"`
-	CommitTime    timeutil.TimeStamp // The commit
-	CreatedUnix   timeutil.TimeStamp `xorm:"created"`
-	UpdatedUnix   timeutil.TimeStamp `xorm:"updated"`
+	// DeletedByCleanup marks a deletion by the scheduled cleanup of merged branches (its DeletedByID is the system)
+	DeletedByCleanup bool               `xorm:"NOT NULL DEFAULT false"`
+	DeletedBy        *user_model.User   `xorm:"-"`
+	DeletedUnix      timeutil.TimeStamp `xorm:"index"`
+	CommitTime       timeutil.TimeStamp // The commit
+	CreatedUnix      timeutil.TimeStamp `xorm:"created"`
+	UpdatedUnix      timeutil.TimeStamp `xorm:"updated"`
 }
 
 func (b *Branch) LoadDeletedBy(ctx context.Context) (err error) {
@@ -273,7 +275,7 @@ func AddDeletedBranch(ctx context.Context, repoID int64, branchName string, dele
 	}
 
 	cnt, err := db.GetEngine(ctx).Where("repo_id=? AND name=? AND is_deleted=?", repoID, branchName, false).
-		Cols("is_deleted, deleted_by_id, deleted_unix").
+		Cols("is_deleted, deleted_by_id, deleted_by_cleanup, deleted_unix").
 		Update(&Branch{
 			IsDeleted:   true,
 			DeletedByID: deletedByID,
@@ -285,6 +287,13 @@ func AddDeletedBranch(ctx context.Context, repoID int64, branchName string, dele
 	if cnt == 0 {
 		return fmt.Errorf("branch %s not found or has been deleted", branchName)
 	}
+	return err
+}
+
+// MarkDeletedByCleanup records that the deleted branch was deleted by the scheduled cleanup.
+func MarkDeletedByCleanup(ctx context.Context, repoID int64, branchName string) error {
+	_, err := db.GetEngine(ctx).Where("repo_id = ? AND name = ? AND is_deleted = ?", repoID, branchName, true).
+		Cols("deleted_by_cleanup").Update(&Branch{DeletedByCleanup: true})
 	return err
 }
 

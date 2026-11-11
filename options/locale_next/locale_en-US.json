@@ -4773,6 +4773,7 @@
 	"repo.settings.cleanup.from_pr": "pull request merged",
 	"repo.settings.cleanup.merged_ago": "%d days ago",
 	"repo.settings.cleanup.no_merged": "There are no merged branches.",
+	"repo.branch.deleted_by_cleanup": "Deleted by the scheduled cleanup",
 	"repo.settings.cleanup.n_branches": {
 		"one": "%d branch",
 		"other": "%d branches"

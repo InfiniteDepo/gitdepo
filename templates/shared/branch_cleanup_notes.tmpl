@@ -1,5 +1,5 @@
 {{template "shared/branch_cleanup_notices" .}}
 {{if .CleanupLocked}}<p class="help">{{.CleanupSetBy}}</p>{{end}}
-{{template "shared/branch_cleanup_status" .}}
+{{if not .SkipText}}{{template "shared/branch_cleanup_status" .}}{{end}}
 <p class="help">{{ctx.Locale.Tr "repo.settings.cleanup.as_of_now"}}</p>
 <p class="help">{{ctx.Locale.Tr "repo.settings.cleanup.age_source"}}{{if .RestoreText}} {{.RestoreText}}{{end}}{{if .AuditLink}} <a href="{{.AuditLink}}">{{ctx.Locale.Tr "repo.settings.cleanup.audit_log"}}</a>{{end}}</p>
