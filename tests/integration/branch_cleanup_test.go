@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"path"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,12 +17,15 @@ import (
 	git_model "forgejo.org/models/git"
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unittest"
+	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/setting"
 	"forgejo.org/modules/test"
+	"forgejo.org/services/branchworkflow"
 	"forgejo.org/services/cron"
 	repo_service "forgejo.org/services/repository"
 	"forgejo.org/tests"
 
+	"github.com/PuerkitoBio/goquery"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,6 +33,23 @@ import (
 func bcPost(t *testing.T, s *TestSession, link string, values map[string]string, expected int) {
 	t.Helper()
 	s.MakeRequest(t, NewRequestWithValues(t, "POST", link, values), expected)
+}
+
+// bcSubmitTurnOn submits the "Turn on cleanup" form of a preview page exactly as it is rendered (its action and its
+// fields are read from the page), so a renamed field is caught.
+func bcSubmitTurnOn(t *testing.T, s *TestSession, previewLink string, expected int) {
+	t.Helper()
+	doc := NewHTMLParser(t, s.MakeRequest(t, NewRequest(t, "GET", previewLink), http.StatusOK).Body)
+	form := doc.Find(`form[action="` + strings.SplitN(previewLink, "?", 2)[0] + `"]`).Last()
+	require.Equal(t, 1, form.Length(), "turn-on form")
+	values := map[string]string{}
+	form.Find("input").Each(func(_ int, in *goquery.Selection) {
+		if n, ok := in.Attr("name"); ok {
+			values[n], _ = in.Attr("value")
+		}
+	})
+	require.Contains(t, values, "cleanup_days")
+	s.MakeRequest(t, NewRequestWithValues(t, "POST", form.AttrOr("action", ""), values), expected)
 }
 
 // bcAge makes every branch row of repo older than the given days.
@@ -117,17 +138,25 @@ func TestBranchCleanupPreviewAndRun(t *testing.T) {
 		assert.Contains(t, body, "cleanup-kept")
 		assert.Contains(t, body, "prot-merged")
 		assert.Equal(t, before, dmBranches(t, repo), "GET deletes nothing")
-		assert.Contains(t, body, `value="30"`) // turn-on form
 
-		// turning it on waits 7 days
-		bcPost(t, s, link, map[string]string{"cleanup_days": "30"}, http.StatusSeeOther)
+		// turning it on (with the rendered form) waits 7 days
+		bcSubmitTurnOn(t, s, link+"?days=30", http.StatusSeeOther)
+		own := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: repo.ID})
+		eff, err := branchworkflow.GetEffectiveCleanup(t.Context(), own)
+		require.NoError(t, err)
+		assert.Equal(t, 30, eff.Wanted)
 		resp = s.MakeRequest(t, NewRequest(t, "GET", link), http.StatusOK)
 		assert.NotContains(t, resp.Body.String(), `<button class="ui primary button">`)
+		assert.Contains(t, resp.Body.String(), "pending until")
 
 		// read-only maintenance pauses the run and the page says so
 		test.MockVariableValue(&setting.Maintenance.Mode, "read-only")
 		resp = s.MakeRequest(t, NewRequest(t, "GET", link), http.StatusOK)
 		assert.Contains(t, resp.Body.String(), "paused")
+		// the notice of the settings page is outside the form (Fomantic hides it inside)
+		page := NewHTMLParser(t, s.MakeRequest(t, NewRequest(t, "GET", path.Join("/org3", repo.Name, "settings/branch_workflow")), http.StatusOK).Body)
+		assert.Contains(t, page.Find(".ui.warning.message").Text(), "paused")
+		assert.Zero(t, page.Find("form.ui.form .ui.warning.message").Length())
 		run, err := repo_service.RunBranchCleanup(t.Context(), repo)
 		require.NoError(t, err)
 		assert.Zero(t, run.Deleted)
@@ -185,5 +214,10 @@ func TestBranchCleanupPreviewAndRun(t *testing.T) {
 		// the organization's preview lists the repository
 		resp = s.MakeRequest(t, NewRequest(t, "GET", "/org/org3/settings/branch_workflow/cleanup?days=30"), http.StatusOK)
 		assert.Contains(t, resp.Body.String(), "bc-run")
+		bcSubmitTurnOn(t, s, "/org/org3/settings/branch_workflow/cleanup?days=45", http.StatusSeeOther)
+		c, _, err := branchworkflow.GetOrgCleanup(t.Context(), unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3}))
+		require.NoError(t, err)
+		require.NotNil(t, c)
+		assert.Equal(t, 45, c.Days)
 	})
 }

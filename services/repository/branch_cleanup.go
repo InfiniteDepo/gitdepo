@@ -50,6 +50,7 @@ type CleanupBranch struct {
 	Commit string
 	Into   string
 	At     timeutil.TimeStamp
+	FromPR bool // At is the merge time of the pull request; otherwise the last change of the branch row
 	Reason string
 }
 
@@ -150,8 +151,9 @@ func PlanBranchCleanup(ctx context.Context, repo *repo_model.Repository, days in
 			continue
 		}
 		// the merge time of the pull request, but a later push to the branch restarts the clock
-		at := max(timeutil.TimeStamp(mergedAt[b.Name]), b.UpdatedUnix)
-		cb := CleanupBranch{Name: b.Name, Commit: b.CommitID, Into: into[b.Name], At: at, Reason: kept.Reason(b.Name)}
+		pr := timeutil.TimeStamp(mergedAt[b.Name])
+		at := max(pr, b.UpdatedUnix)
+		cb := CleanupBranch{Name: b.Name, Commit: b.CommitID, Into: into[b.Name], At: at, FromPR: pr != 0 && pr >= b.UpdatedUnix, Reason: kept.Reason(b.Name)}
 		switch {
 		case cb.Reason != "":
 			plan.Kept = append(plan.Kept, cb)
@@ -257,9 +259,13 @@ func RunBranchCleanup(ctx context.Context, repo *repo_model.Repository) (*Cleanu
 	return run, err
 }
 
+// ownCleanupLike matches a Pull requests unit config that holds a BranchCleanup setting: the key is followed by an
+// object, and a quote inside a user's string is escaped in the JSON, so no value can look like it.
+var ownCleanupLike = builder.Like{"config", `"BranchCleanup":{`}
+
 // cleanupCandidates lists the repositories whose cleanup setting may be on: those of an organization that sets it,
-// and those whose own Pull requests unit holds one (the config is JSON, so a LIKE on its key narrows it; the setting
-// in force is read again for each). Trashed repositories are left out.
+// and those whose own Pull requests unit holds one (the config is JSON, so a LIKE on its key and object narrows it; the
+// setting in force is read again for each). Trashed repositories are left out.
 func cleanupCandidates(ctx context.Context) ([]int64, error) {
 	var orgs []int64
 	if err := db.GetEngine(ctx).Table("user_setting").Where("setting_key = ?", "branch_workflow.cleanup").Cols("user_id").Find(&orgs); err != nil {
@@ -272,7 +278,7 @@ func cleanupCandidates(ctx context.Context) ([]int64, error) {
 		}
 	}
 	var own []int64
-	if err := db.GetEngine(ctx).Table("repo_unit").Where(builder.Eq{"type": unit.TypePullRequests}).And(builder.Like{"config", `"BranchCleanup"`}).Cols("repo_id").Find(&own); err != nil {
+	if err := db.GetEngine(ctx).Table("repo_unit").Where(builder.Eq{"type": unit.TypePullRequests}).And(ownCleanupLike).Cols("repo_id").Find(&own); err != nil {
 		return nil, err
 	}
 	ids = append(ids, own...)
@@ -286,9 +292,12 @@ func cleanupCandidates(ctx context.Context) ([]int64, error) {
 	return slices.Compact(ids), nil
 }
 
-// cleanupClaimWindow is how long a repository's scheduled run stays claimed: a second server (or a second start of
-// the task) inside it skips the repository, so there is one run, and one summary, per repository per day.
-const cleanupClaimWindow = 23 * time.Hour
+// startOfDay is midnight of now's calendar day in server time: a repository's scheduled run is claimed per calendar
+// day (a second server, a second start of the task or a manual run from the admin page that day skips it), so there
+// is one run, and one summary, per repository per day, and a later-running night is never skipped.
+func startOfDay(now time.Time) time.Time {
+	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+}
 
 // runClaimedCleanup records the days in force of repo (starting the waiting period of a change that deletes sooner),
 // and when cleanup is on claims the repository's run with a conditional UPDATE and runs it. Whoever loses the claim
@@ -299,7 +308,7 @@ func runClaimedCleanup(ctx context.Context, repo *repo_model.Repository) error {
 		return err
 	}
 	now := timeutil.TimeStampNow().AsTime()
-	claimed, err := repo_model.ClaimBranchCleanupRun(ctx, repo.ID, now.Add(-cleanupClaimWindow).Unix(), now.Unix())
+	claimed, err := repo_model.ClaimBranchCleanupRun(ctx, repo.ID, startOfDay(now).Unix(), now.Unix())
 	if err != nil || !claimed {
 		return err
 	}
@@ -357,7 +366,7 @@ func CountCleanupRepos(ctx context.Context, org *user_model.User, locked bool) (
 	cond := cleanupRepoCond(org)
 	if !locked {
 		cond = cond.And(builder.NotExists(builder.Select("1").From("repo_unit").Where(builder.Expr("repo_unit.repo_id = repository.id").
-			And(builder.Eq{"repo_unit.type": unit.TypePullRequests}).And(builder.Like{"repo_unit.config", `"BranchCleanup"`}))))
+			And(builder.Eq{"repo_unit.type": unit.TypePullRequests}).And(builder.Like{"repo_unit.config", `"BranchCleanup":{`}))))
 	}
 	return db.GetEngine(ctx).Where(cond).Count(&repo_model.Repository{})
 }

@@ -441,11 +441,9 @@ func TestCleanupMergedBranchesClaimsTheRun(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for range 2 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			assert.NoError(t, CleanupMergedBranches(ctx))
-		}()
+		})
 	}
 	wg.Wait()
 	assert.ElementsMatch(t, []string{"master"}, liveBranches(t, f.repo))

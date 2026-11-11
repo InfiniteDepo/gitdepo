@@ -1,0 +1,1 @@
+{{if eq .CleanupState "task_off"}}{{ctx.Locale.Tr "repo.settings.cleanup.state.task_off"}}{{else if eq .CleanupState "paused"}}{{ctx.Locale.Tr "repo.settings.cleanup.state.paused"}}{{else if eq .CleanupState "pending"}}{{ctx.Locale.Tr "repo.settings.cleanup.state.pending" (DateUtils.FullTime .CleanupStart)}}{{end}}

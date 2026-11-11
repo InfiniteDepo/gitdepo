@@ -1,17 +1,14 @@
 {{if .CleanupPending}}
 	{{if .CleanupInForce}}
-		<p class="cleanup-status">{{ctx.Locale.Tr "repo.settings.cleanup.pending_lower" .CleanupPendingDays (DateUtils.AbsoluteShort .CleanupStart) .CleanupInForce}}</p>
+		<p class="cleanup-status">{{ctx.Locale.Tr "repo.settings.cleanup.pending_lower" .CleanupPendingDays (DateUtils.FullTime .CleanupStart) .CleanupInForce}}</p>
 	{{else}}
-		<p class="cleanup-status">{{ctx.Locale.Tr "repo.settings.cleanup.pending_on" .CleanupPendingDays (DateUtils.AbsoluteShort .CleanupStart)}}</p>
+		<p class="cleanup-status">{{ctx.Locale.Tr "repo.settings.cleanup.pending_on" .CleanupPendingDays (DateUtils.FullTime .CleanupStart)}}</p>
 	{{end}}
 {{else if .CleanupInForce}}
 	<p class="cleanup-status">{{ctx.Locale.Tr "repo.settings.cleanup.status_on" .CleanupInForce}}</p>
 {{else}}
 	<p class="cleanup-status">{{ctx.Locale.Tr "repo.settings.cleanup.status_off"}}</p>
 {{end}}
-{{if and .CleanupTaskOff (or .CleanupPending .CleanupInForce)}}
-	<div class="ui warning message">{{ctx.Locale.Tr "repo.settings.cleanup.task_off"}}</div>
-{{end}}
 {{if .CleanupOrgFirst}}
-	<p class="help">{{ctx.Locale.Tr "org.settings.cleanup.waiting" (DateUtils.AbsoluteShort .CleanupOrgFirst)}}</p>
+	<p class="help">{{ctx.Locale.Tr "org.settings.cleanup.waiting" (DateUtils.FullTime .CleanupOrgFirst)}}</p>
 {{end}}

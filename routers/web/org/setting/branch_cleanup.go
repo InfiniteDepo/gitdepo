@@ -108,7 +108,7 @@ func BranchCleanup(ctx *context.Context) {
 		return
 	}
 	now := timeutil.TimeStampNow().AsTime()
-	days := repo_setting.PreviewDays(ctx, c)
+	days := repo_setting.PreviewDays(ctx, 0, c)
 	if locked {
 		days = c.Days
 	}
@@ -120,7 +120,6 @@ func BranchCleanup(ctx *context.Context) {
 	ctx.Data["BackLink"] = ctx.Org.OrgLink + "/settings/branch_workflow#cleanup"
 	ctx.Data["CleanupEnforce"] = locked
 	setOrgCleanupData(ctx, c)
-	ctx.Data["CleanupPaused"] = setting.GetMaintenance(ctx).ReadOnly()
 	ctx.Data["MaxPerRun"] = repo_service.MaxCleanupPerRepo
 	if ctx.Doer != nil && (ctx.Doer.IsAdmin || ctx.Doer.IsAuditor) {
 		ctx.Data["AuditLink"] = setting.AppSubURL + "/-/admin/audit?action=repo.branches.cleanup_deleted"

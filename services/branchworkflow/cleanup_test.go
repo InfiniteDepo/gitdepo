@@ -300,3 +300,43 @@ func TestCleanupWaitingPeriodOnTheDaysInForce(t *testing.T) {
 		assert.Equal(t, sc.start.Add(CleanupDelay).Unix(), e.PendingFrom.Unix())
 	})
 }
+
+// An organization's "off" is recorded at once, so off and on again between two runs still waits.
+func TestCleanupOrgOffOnWaits(t *testing.T) {
+	sc := newCleanupScenario(t)
+	sc.org3(1, false)
+	sc.sync() // the scheduled run records the pending turn-on
+	sc.at(8)
+	assert.Equal(t, 1, sc.sync().Days, "in force after the wait")
+
+	sc.at(30)
+	sc.org3(0, false)
+	e, err := GetEffectiveCleanup(t.Context(), sc.repo())
+	require.NoError(t, err)
+	assert.Zero(t, e.Days)
+	sc.org3(1, false) // on again before the next run
+
+	e = sc.sync()
+	assert.Zero(t, e.Days, "a turn-on from off waits, as at repository level")
+	assert.False(t, e.PendingFrom.IsZero())
+}
+
+// Fewer days of the organization start waiting when saved, more days apply at once.
+func TestCleanupOrgChangeReachesRecords(t *testing.T) {
+	sc := newCleanupScenario(t)
+	sc.org3(30, false)
+	sc.sync()
+	sc.at(8)
+	sc.sync()
+	sc.at(9)
+	sc.org3(10, false)
+	st, err := repo_model.GetBranchCleanupState(t.Context(), 3)
+	require.NoError(t, err)
+	assert.Equal(t, 30, st.Days)
+	assert.Equal(t, 10, st.PendingDays)
+	sc.org3(60, false)
+	st, err = repo_model.GetBranchCleanupState(t.Context(), 3)
+	require.NoError(t, err)
+	assert.Equal(t, 60, st.Days)
+	assert.Zero(t, st.PendingFrom)
+}

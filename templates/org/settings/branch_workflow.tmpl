@@ -31,8 +31,10 @@
 		{{ctx.Locale.Tr "repo.settings.cleanup"}}
 	</h4>
 	<div class="ui attached segment">
+		{{template "shared/branch_cleanup_notices" .}}
 		<form class="ui form" action="{{.CleanupLink}}" method="post">
 			<p>{{ctx.Locale.Tr "repo.settings.cleanup.desc"}}</p>
+			<p class="help">{{ctx.Locale.Tr "repo.settings.cleanup.never"}}</p>
 			<div class="field">
 				<label for="cleanup_days">{{ctx.Locale.Tr "repo.settings.cleanup.days"}}</label>
 				<input id="cleanup_days" name="cleanup_days" type="number" min="0" max="3650" value="{{.CleanupDays}}">

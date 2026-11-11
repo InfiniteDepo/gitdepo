@@ -27,10 +27,12 @@
 			{{ctx.Locale.Tr "repo.settings.cleanup"}}
 		</h4>
 		<div class="ui attached segment">
+			{{template "shared/branch_cleanup_notices" .}}
 			<form class="ui form" action="{{.CleanupLink}}" method="post">
 				<p>{{ctx.Locale.Tr "repo.settings.cleanup.desc"}}</p>
+				<p class="help">{{ctx.Locale.Tr "repo.settings.cleanup.never"}}{{if .RestoreText}} {{.RestoreText}}{{end}}</p>
 				{{if .CleanupLocked}}
-				<p class="help">{{.CleanupSetBy}}{{if .CleanupSettingsLink}} <a href="{{.CleanupSettingsLink}}">{{ctx.Locale.Tr "repo.settings.branching_model.change_in_org"}}</a>{{end}}</p>
+				<p class="help">{{.CleanupSetBy}}{{if .CleanupSettingsLink}} · <a href="{{.CleanupSettingsLink}}">{{ctx.Locale.Tr "repo.settings.branching_model.change_in_org"}}</a>{{end}}</p>
 				{{else if .OwnerIsOrg}}
 				<div class="field">
 					<div class="ui checkbox">

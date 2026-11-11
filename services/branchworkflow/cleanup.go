@@ -6,6 +6,7 @@ package branchworkflow
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	audit_model "forgejo.org/models/audit"
@@ -14,6 +15,7 @@ import (
 	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/json"
+	"forgejo.org/modules/log"
 	"forgejo.org/modules/timeutil"
 
 	"code.forgejo.org/xorm/xorm/convert"
@@ -177,7 +179,7 @@ func SetOrgCleanup(ctx context.Context, org *user_model.User, days int, locked b
 	if days < 0 || days > MaxCleanupDays {
 		return ErrInvalidCleanupDays
 	}
-	return db.WithTx(ctx, func(ctx context.Context) error {
+	if err := db.WithTx(ctx, func(ctx context.Context) error {
 		before, beforeLocked, err := GetOrgCleanup(ctx, org)
 		if err != nil {
 			return err
@@ -211,7 +213,36 @@ func SetOrgCleanup(ctx context.Context, org *user_model.User, days int, locked b
 			return user_model.RecordOrg(ctx, "org.branch_workflow.changed", org, changes)
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	return syncOrgCleanup(ctx, org)
+}
+
+// syncOrgCleanup records at once what a change of the organization's level means for the repositories that have a
+// record (on or waiting), through SyncCleanup like the scheduled run: a less strict level applies, a stricter one
+// starts waiting. Without it an "off" between two runs would never be recorded, and turning cleanup on again would
+// skip the wait. A repository without a record needs nothing: the first sighting starts its wait. It is one pass
+// over the organization's recorded repositories; a failure is logged, the scheduled run does the same later.
+func syncOrgCleanup(ctx context.Context, org *user_model.User) error {
+	var ids []int64
+	if err := db.GetEngine(ctx).Table("branch_cleanup_state").Join("INNER", "repository", "repository.id = branch_cleanup_state.repo_id").
+		Where("repository.owner_id = ? AND (branch_cleanup_state.days > 0 OR branch_cleanup_state.pending_from <> 0)", org.ID).
+		Select("branch_cleanup_state.repo_id").Find(&ids); err != nil {
+		return err
+	}
+	for chunk := range slices.Chunk(ids, 50) {
+		var repos []*repo_model.Repository
+		if err := db.GetEngine(ctx).In("id", chunk).Find(&repos); err != nil {
+			return err
+		}
+		for _, repo := range repos {
+			if _, err := SyncCleanup(ctx, repo); err != nil {
+				log.Error("branch cleanup: sync %-v: %v", repo, err)
+			}
+		}
+	}
+	return nil
 }
 
 // SetRepoCleanup stores the repository's own cleanup of merged branches: days (0 is off), or nil to inherit the

@@ -1,0 +1,25 @@
+/* the tables of the cleanup preview: on a narrow screen every row is a stack of labelled values */
+@media (max-width: 767.98px) {
+  .cleanup-table thead {
+    display: none;
+  }
+
+  .cleanup-table,
+  .cleanup-table tbody,
+  .cleanup-table tr,
+  .cleanup-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .cleanup-table tr {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--color-secondary);
+  }
+
+  .cleanup-table td::before {
+    content: attr(data-label);
+    display: block;
+    font-weight: var(--font-weight-semibold);
+  }
+}

@@ -34,12 +34,23 @@ const maxCleanupRows = 200
 // defaultPreviewDays is what the preview assumes when nothing is set and no number is asked for.
 const defaultPreviewDays = 30
 
-// SetCleanupData sets what the cleanup section of the settings pages shows: the days chosen, the days in force,
-// and the change that waits with when it takes effect (zero when none).
+// SetCleanupData sets what the cleanup section of the settings pages and the previews show: the days chosen, the days
+// in force, and the change that waits with when it takes effect (zero when none). It also works out CleanupState,
+// the one answer to "would a run delete anything now": "task_off" (the cron task is off), "paused" (read-only
+// maintenance), "pending" (nothing is in force yet, the change waits) or "" (a run would act).
 func SetCleanupData(ctx *context.Context, chosen, inForce, pendingDays int, pendingFrom time.Time) {
 	ctx.Data["CleanupDays"] = chosen
 	ctx.Data["CleanupInForce"] = inForce
 	ctx.Data["CleanupTaskOff"] = !cleanupTaskOn()
+	ctx.Data["CleanupPaused"] = setting.GetMaintenance(ctx).ReadOnly()
+	switch {
+	case !cleanupTaskOn():
+		ctx.Data["CleanupState"] = "task_off"
+	case setting.GetMaintenance(ctx).ReadOnly():
+		ctx.Data["CleanupState"] = "paused"
+	case inForce == 0 && !pendingFrom.IsZero():
+		ctx.Data["CleanupState"] = "pending"
+	}
 	if !pendingFrom.IsZero() {
 		ctx.Data["CleanupPending"] = true
 		ctx.Data["CleanupPendingDays"] = pendingDays
@@ -53,10 +64,13 @@ func cleanupTaskOn() bool {
 }
 
 // PreviewDays is the number of days a preview is made for: the one asked for in ?days= when it is valid, else the
-// days that are set (even while they wait), else defaultPreviewDays.
-func PreviewDays(ctx *context.Context, s *repo_model.BranchCleanup) int {
+// days in force, else the days that are set (while they wait), else defaultPreviewDays.
+func PreviewDays(ctx *context.Context, inForce int, s *repo_model.BranchCleanup) int {
 	if n, err := strconv.Atoi(ctx.FormString("days")); err == nil && n >= 1 && n <= branchworkflow.MaxCleanupDays {
 		return n
+	}
+	if inForce > 0 {
+		return inForce
 	}
 	if s != nil && s.Days > 0 {
 		return s.Days
@@ -95,11 +109,12 @@ func prepareCleanup(ctx *context.Context) bool {
 		return false
 	}
 	SetCleanupData(ctx, e.Wanted, e.Days, e.PendingDays, e.PendingFrom)
+	ctx.Data["RestoreText"] = repo.RestoreText(ctx)
 	ctx.Data["CleanupInherit"] = e.Configured == nil
 	ctx.Data["CleanupLocked"] = e.Locked
 	ctx.Data["CleanupLink"] = ctx.Repo.RepoLink + "/settings/branch_workflow/cleanup"
 	if e.Source == branchworkflow.SourceOrg {
-		ctx.Data["CleanupSetBy"] = ctx.Locale.TrString("repo.pulls.delete_after_merge.set_by_org", e.SetBy)
+		ctx.Data["CleanupSetBy"] = ctx.Locale.TrString("repo.settings.cleanup.set_by_org", e.SetBy)
 	}
 	if e.Locked && ctx.Doer != nil {
 		isOwner, err := organization.OrgFromUser(ctx.Repo.Owner).IsActingOwner(ctx, ctx.Doer)
@@ -165,6 +180,8 @@ type cleanupRow struct {
 	Into   string
 	At     timeutil.TimeStamp
 	PR     int64 // 0 unless the viewer can read pull requests
+	Age    int   // whole days since At
+	FromPR bool
 	Reason string
 }
 
@@ -178,9 +195,12 @@ func BranchCleanupPreview(ctx *context.Context) {
 		return
 	}
 	now := timeutil.TimeStampNow().AsTime()
-	days := PreviewDays(ctx, e.Setting)
-	if e.Locked {
-		days = e.Wanted // what the organization enforces, in force or waiting
+	days := PreviewDays(ctx, e.Days, e.Setting)
+	if e.Locked { // what the organization enforces: in force, else the one that waits
+		days = e.Days
+		if days == 0 {
+			days = e.Wanted
+		}
 	}
 	ctx.Data["Title"] = ctx.Tr("repo.settings.cleanup.preview_title")
 	ctx.Data["PageIsSettingsBranchWorkflow"] = true
@@ -190,10 +210,9 @@ func BranchCleanupPreview(ctx *context.Context) {
 	ctx.Data["CleanupLocked"] = e.Locked
 	ctx.Data["CleanupSetBy"] = ""
 	if e.Source == branchworkflow.SourceOrg {
-		ctx.Data["CleanupSetBy"] = ctx.Locale.TrString("repo.pulls.delete_after_merge.set_by_org", e.SetBy)
+		ctx.Data["CleanupSetBy"] = ctx.Locale.TrString("repo.settings.cleanup.set_by_org", e.SetBy)
 	}
 	SetCleanupData(ctx, e.Wanted, e.Days, e.PendingDays, e.PendingFrom)
-	ctx.Data["CleanupPaused"] = setting.GetMaintenance(ctx).ReadOnly()
 	ctx.Data["MaxPerRun"] = repo_service.MaxCleanupPerRepo
 	ctx.Data["RestoreText"] = repo.RestoreText(ctx)
 	if ctx.Doer != nil && (ctx.Doer.IsAdmin || ctx.Doer.IsAuditor) {
@@ -241,7 +260,7 @@ func BranchCleanupPreview(ctx *context.Context) {
 	rows := func(list []repo_service.CleanupBranch) []cleanupRow {
 		out := make([]cleanupRow, 0, len(list))
 		for _, b := range list {
-			out = append(out, cleanupRow{Name: b.Name, Into: b.Into, At: b.At, PR: pulls[b.Name]})
+			out = append(out, cleanupRow{Name: b.Name, Into: b.Into, At: b.At, FromPR: b.FromPR, Age: int(now.Sub(b.At.AsTime()) / (24 * time.Hour)), PR: pulls[b.Name]})
 		}
 		return out
 	}
