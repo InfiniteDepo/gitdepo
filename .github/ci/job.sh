@@ -119,7 +119,13 @@ e2e)
   make frontend
   # without root or sudo, the browser's system libraries must already be installed
   if [ "$(id -u)" = 0 ] || sudo -n true 2> /dev/null; then
-    npx playwright install --with-deps "$browser"
+    # The runner's Ubuntu mirrors are sometimes unreachable for hours. Its image already has
+    # the libraries the browser links against (Playwright refuses to launch without them),
+    # so a failed apt step only costs extra fonts and media codecs: go on with the browser alone.
+    npx playwright install --with-deps "$browser" || {
+      echo "::warning::installing the browser's system packages failed, using the runner's own"
+      npx playwright install "$browser"
+    }
   else
     npx playwright install "$browser"
   fi
