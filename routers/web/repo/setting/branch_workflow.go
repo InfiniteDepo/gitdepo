@@ -136,6 +136,10 @@ func prepareBranchWorkflow(ctx *context.Context) bool {
 	ctx.Data["Locked"] = eff.Locked
 	ctx.Data["OwnerIsOrg"] = ctx.Repo.Owner.IsOrganization()
 
+	if !prepareCleanup(ctx) {
+		return false
+	}
+
 	model, err := branchworkflow.GetEffectiveModel(ctx, ctx.Repo.Repository)
 	if err != nil {
 		ctx.ServerError("GetEffectiveModel", err)

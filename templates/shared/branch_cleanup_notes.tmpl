@@ -1,0 +1,13 @@
+{{if .CleanupPaused}}<div class="ui warning message">{{ctx.Locale.Tr "repo.settings.cleanup.paused"}}</div>{{end}}
+{{if .CleanupTaskOff}}<div class="ui warning message">{{ctx.Locale.Tr "repo.settings.cleanup.task_off"}}</div>{{end}}
+{{if .CleanupLocked}}<p class="help">{{.CleanupSetBy}}</p>{{end}}
+{{template "shared/branch_cleanup_status" .}}
+<p class="help">{{ctx.Locale.Tr "repo.settings.cleanup.as_of_now"}}</p>
+<p class="help">{{ctx.Locale.Tr "repo.settings.cleanup.age_source"}}{{if .RestoreText}} {{.RestoreText}}{{end}}{{if .AuditLink}} <a href="{{.AuditLink}}">{{ctx.Locale.Tr "repo.settings.cleanup.audit_log"}}</a>{{end}}</p>
+{{if .CanTurnOn}}
+<form class="ui form ignore-dirty tw-mt-4" action="{{.CleanupLink}}" method="post">
+	<input type="hidden" name="days" value="{{.PreviewDays}}">
+	{{if .TurnOnStart}}<p>{{ctx.Locale.Tr "repo.settings.cleanup.turn_on_start" (DateUtils.AbsoluteShort .TurnOnStart)}}</p>{{else}}<p>{{ctx.Locale.Tr "repo.settings.cleanup.turn_on_now"}}</p>{{end}}
+	<button class="ui primary button">{{ctx.Locale.Tr "repo.settings.cleanup.turn_on" .PreviewDays}}</button>
+</form>
+{{end}}

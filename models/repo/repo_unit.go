@@ -251,6 +251,15 @@ type PullRequestsConfig struct {
 	DefaultAllowMaintainerEdit    bool
 	CancelAutoMergeOnPush         bool            // a push to the head cancels the pull request's auto merge
 	BranchingModel                *BranchingModel // nil inherits from the organization
+	BranchCleanup                 *BranchCleanup  `json:",omitempty"` // nil inherits from the organization
+}
+
+// BranchCleanup is the setting "Cleanup of merged branches". Days is what was chosen (0 is off). A turn-on or a
+// lowering waits: until EffectiveFrom (unix seconds) the setting in force is PreviousDays (0 was off).
+type BranchCleanup struct {
+	Days          int   `json:",omitempty"`
+	PreviousDays  int   `json:",omitempty"`
+	EffectiveFrom int64 `json:",omitempty"` // 0: nothing waits
 }
 
 // BranchingModel names the development branch and the release branches whose names end in a version.

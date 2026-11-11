@@ -1,0 +1,53 @@
+{{template "repo/settings/layout_head" (dict "ctxData" . "pageClass" "repository settings branch-cleanup")}}
+	<div class="repo-setting-content">
+		<h4 class="ui top attached header">
+			{{ctx.Locale.Tr "repo.settings.cleanup.preview_title"}} · {{ctx.Locale.Tr "repo.settings.cleanup.after_days" .PreviewDays}}
+		</h4>
+		<div class="ui attached segment">
+			{{template "shared/branch_cleanup_notes" .}}
+			{{if .SkipText}}
+				<div class="ui warning message">{{ctx.Locale.Tr "repo.settings.cleanup.skipped" .SkipText}}</div>
+			{{else}}
+				<p class="cleanup-summary">{{ctx.Locale.TrPluralString .DueTotal "repo.settings.cleanup.due_now" .DueTotal}}</p>
+				{{if gt .DueTotal .MaxPerRun}}<p class="help">{{ctx.Locale.Tr "repo.settings.cleanup.cap" .MaxPerRun .DueTotal .DaysNeeded}}</p>{{end}}
+				<h5 class="ui header">{{ctx.Locale.Tr "repo.settings.cleanup.group_due" .DueTotal}}</h5>
+				{{if .Due}}
+				<table class="ui very basic table" id="cleanup-due">
+					<thead><tr><th>{{ctx.Locale.Tr "repo.settings.cleanup.col_branch"}}</th><th>{{ctx.Locale.Tr "repo.settings.cleanup.col_into"}}</th><th>{{ctx.Locale.Tr "repo.settings.cleanup.col_merged"}}</th></tr></thead>
+					<tbody>
+						{{range .Due}}
+						<tr><td class="tw-break-anywhere">{{.Name}}</td><td class="tw-break-anywhere">{{.Into}}</td><td>{{DateUtils.TimeSince .At}}{{if .PR}} (<a href="{{$.RepoLink}}/pulls/{{.PR}}">#{{.PR}}</a>){{end}}</td></tr>
+						{{end}}
+					</tbody>
+				</table>
+				{{if gt .DueTotal (len .Due)}}<p class="help">{{ctx.Locale.Tr "repo.settings.cleanup.more" (len .Due) .DueTotal}}</p>{{end}}
+				{{else}}
+				<p>{{ctx.Locale.Tr "repo.settings.cleanup.none_due" .PreviewDays}}</p>
+				{{end}}
+				{{if .NotDueTotal}}
+				<h5 class="ui header">{{ctx.Locale.Tr "repo.settings.cleanup.group_not_due" .NotDueTotal}}</h5>
+				<table class="ui very basic table" id="cleanup-not-due">
+					<thead><tr><th>{{ctx.Locale.Tr "repo.settings.cleanup.col_branch"}}</th><th>{{ctx.Locale.Tr "repo.settings.cleanup.col_into"}}</th><th>{{ctx.Locale.Tr "repo.settings.cleanup.col_merged"}}</th></tr></thead>
+					<tbody>
+						{{range .NotDue}}
+						<tr><td class="tw-break-anywhere">{{.Name}}</td><td class="tw-break-anywhere">{{.Into}}</td><td>{{DateUtils.TimeSince .At}}{{if .PR}} (<a href="{{$.RepoLink}}/pulls/{{.PR}}">#{{.PR}}</a>){{end}}</td></tr>
+						{{end}}
+					</tbody>
+				</table>
+				{{end}}
+				{{if and .CanSeeKept .KeptTotal}}
+				<h5 class="ui header">{{ctx.Locale.Tr "repo.settings.cleanup.group_kept" .KeptTotal}}</h5>
+				<table class="ui very basic table" id="cleanup-kept">
+					<thead><tr><th>{{ctx.Locale.Tr "repo.settings.cleanup.col_branch"}}</th><th>{{ctx.Locale.Tr "repo.settings.cleanup.col_why"}}</th></tr></thead>
+					<tbody>
+						{{range .Kept}}
+						<tr><td class="tw-break-anywhere">{{.Name}}</td><td>{{.Reason}}</td></tr>
+						{{end}}
+					</tbody>
+				</table>
+				{{end}}
+			{{end}}
+			<div class="tw-mt-4"><a class="ui button" href="{{.BackLink}}">{{ctx.Locale.Tr "repo.settings.delete_merged.back"}}</a></div>
+		</div>
+	</div>
+{{template "repo/settings/layout_footer" .}}

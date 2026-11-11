@@ -136,7 +136,7 @@ func prepareBranchBulk(ctx *context.Context, f repo_service.BranchFilter, q repo
 	texts := map[string]string{}
 	for _, b := range branches {
 		if reason := kept.Reason(b.DBBranch.Name); reason != "" {
-			texts[b.DBBranch.Name] = branchReasonText(ctx.Locale, reason)
+			texts[b.DBBranch.Name] = BranchReasonText(ctx.Locale, reason)
 		}
 	}
 	ctx.Data["KeptTexts"] = texts
@@ -151,8 +151,8 @@ func prepareBranchBulk(ctx *context.Context, f repo_service.BranchFilter, q repo
 	return true
 }
 
-// branchReasonText says in words why a branch was kept or refused. The codes are a closed set.
-func branchReasonText(locale translation.Locale, code string) string {
+// BranchReasonText says in words why a branch was kept or refused. The codes are a closed set.
+func BranchReasonText(locale translation.Locale, code string) string {
 	switch code {
 	case branchworkflow.KeptDefault:
 		return locale.TrString("repo.branch.bulk.reason.default")
@@ -262,7 +262,7 @@ func DeleteSelectedBranchesPost(ctx *context.Context) {
 		if r.Reason == "" {
 			deleted = append(deleted, r.Name)
 		} else {
-			kept = append(kept, html.EscapeString(r.Name)+": "+html.EscapeString(branchReasonText(ctx.Locale, r.Reason)))
+			kept = append(kept, html.EscapeString(r.Name)+": "+html.EscapeString(BranchReasonText(ctx.Locale, r.Reason)))
 		}
 	}
 	if len(deleted) > 0 {

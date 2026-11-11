@@ -1,0 +1,14 @@
+{{if .CleanupPending}}
+	{{if .CleanupInForce}}
+		<p class="cleanup-status">{{ctx.Locale.Tr "repo.settings.cleanup.pending_lower" .CleanupDays (DateUtils.AbsoluteShort .CleanupStart) .CleanupInForce}}</p>
+	{{else}}
+		<p class="cleanup-status">{{ctx.Locale.Tr "repo.settings.cleanup.pending_on" .CleanupDays (DateUtils.AbsoluteShort .CleanupStart)}}</p>
+	{{end}}
+{{else if .CleanupInForce}}
+	<p class="cleanup-status">{{ctx.Locale.Tr "repo.settings.cleanup.status_on" .CleanupInForce}}</p>
+{{else}}
+	<p class="cleanup-status">{{ctx.Locale.Tr "repo.settings.cleanup.status_off"}}</p>
+{{end}}
+{{if and .CleanupTaskOff (or .CleanupPending .CleanupInForce)}}
+	<div class="ui warning message">{{ctx.Locale.Tr "repo.settings.cleanup.task_off"}}</div>
+{{end}}

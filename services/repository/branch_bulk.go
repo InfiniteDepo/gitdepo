@@ -5,6 +5,7 @@ package repository
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"strings"
 
@@ -130,14 +131,14 @@ func (f BranchFilter) Query(ctx context.Context, repo *repo_model.Repository, gi
 }
 
 // rows loads the live branch rows matching the query without the default branch, in the order of the Branches
-// page; only id, name and commit are read. With the merged filter a row stays if it is at the tip git walked.
+// page; only id, name, commit and update time are read. With the merged filter a row stays if it is at the tip git walked.
 func (q BranchQuery) rows(ctx context.Context, repo *repo_model.Repository) ([]*git_model.Branch, error) {
 	opts := git_model.FindBranchOptions{
 		RepoID: repo.ID, IsDeletedBranch: optional.Some(false), Keyword: q.Keyword, Cond: q.Cond,
 		ExcludeBranchNames: []string{repo.DefaultBranch},
 	}
 	var rows []*git_model.Branch
-	if err := db.GetEngine(ctx).Table("branch").Cols("id", "name", "commit_id").Where(opts.ToConds()).OrderBy(opts.ToOrders()).Find(&rows); err != nil {
+	if err := db.GetEngine(ctx).Table("branch").Cols("id", "name", "commit_id", "updated_unix").Where(opts.ToConds()).OrderBy(opts.ToOrders()).Find(&rows); err != nil {
 		return nil, err
 	}
 	if q.Merged != nil {
@@ -251,7 +252,8 @@ type BranchResult struct {
 // maxRefusedAudited is how many refused branches (name and reason) the summary audit entry lists.
 const maxRefusedAudited = 50
 
-type bulkDeleteKey struct{}
+// deleteViaKey carries what started a deletion ("bulk" or "cleanup") to the audit entry of DeleteBranch.
+type deleteViaKey struct{}
 
 // DeleteSelectedBranches deletes the selected branches one by one and reports each. Every branch is decided again
 // right before its own deletion: the kept rule (default, development, production, release, protected, merge queue
@@ -260,6 +262,12 @@ type bulkDeleteKey struct{}
 // it. A refused branch never stops the others. Each deletion is audited by DeleteBranch (marked "bulk") and the run
 // once, with the refused branches and their reasons; every deleted branch can be restored from the deleted branches.
 func DeleteSelectedBranches(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, gitRepo *git.Repository, selected []SelectedBranch) ([]BranchResult, error) {
+	return deleteSelected(ctx, doer, repo, gitRepo, selected, "bulk", nil)
+}
+
+// deleteSelected is DeleteSelectedBranches for what started it: via "bulk" (a person) or "cleanup" (the scheduled
+// cleanup, whose summary entry is its own action and carries extra in its counts).
+func deleteSelected(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, gitRepo *git.Repository, selected []SelectedBranch, via string, extra map[string]any) ([]BranchResult, error) {
 	if repo.IsMirror { // the next mirror sync brings them back
 		return nil, util.NewPermissionDeniedErrorf("branches of a mirror can't be deleted")
 	}
@@ -278,7 +286,7 @@ func DeleteSelectedBranches(ctx context.Context, doer *user_model.User, repo *re
 			reason = "error"
 		}
 		if reason == "" {
-			reason = deleteSelectedBranch(context.WithValue(ctx, bulkDeleteKey{}, true), doer, repo, gitRepo, b)
+			reason = deleteSelectedBranch(context.WithValue(ctx, deleteViaKey{}, via), doer, repo, gitRepo, b)
 		}
 		if reason == "" {
 			deleted++
@@ -295,7 +303,12 @@ func DeleteSelectedBranches(ctx context.Context, doer *user_model.User, repo *re
 			refused = append(refused, r.Name+": "+r.Reason)
 		}
 	}
-	data := map[string]any{"counts": map[string]any{"deleted": deleted, "kept": len(results) - deleted}, "refused": refused}
+	counts := map[string]any{"deleted": deleted, "kept": len(results) - deleted}
+	maps.Copy(counts, extra)
+	data := map[string]any{"counts": counts, "refused": refused}
+	if via == "cleanup" {
+		return results, repo_model.RecordRepo(ctx, "repo.branches.cleanup_deleted", repo, data)
+	}
 	return results, repo_model.RecordRepo(ctx, "repo.branches.bulk_deleted", repo, data)
 }
 

@@ -27,6 +27,32 @@
 			</div>
 		</form>
 	</div>
+	<h4 class="ui top attached header" id="cleanup">
+		{{ctx.Locale.Tr "repo.settings.cleanup"}}
+	</h4>
+	<div class="ui attached segment">
+		<form class="ui form" action="{{.CleanupLink}}" method="post">
+			<p>{{ctx.Locale.Tr "repo.settings.cleanup.desc"}}</p>
+			<div class="field">
+				<label for="cleanup_days">{{ctx.Locale.Tr "repo.settings.cleanup.days"}}</label>
+				<input id="cleanup_days" name="days" type="number" min="0" max="3650" value="{{.CleanupDays}}">
+				<p class="help">{{ctx.Locale.Tr "repo.settings.cleanup.days_help"}}</p>
+			</div>
+			<div class="field">
+				<div class="ui checkbox">
+					<input id="cleanup_enforce" name="enforce" type="checkbox" {{if .CleanupEnforce}}checked{{end}}>
+					<label for="cleanup_enforce">{{ctx.Locale.Tr "org.settings.cleanup.enforce"}}</label>
+					<p class="help">{{ctx.Locale.Tr "org.settings.cleanup.enforce_desc"}}</p>
+				</div>
+			</div>
+			{{template "shared/branch_cleanup_status" .}}
+			{{if .CleanupRepoCount}}<p>{{ctx.Locale.TrPluralString .CleanupRepoCount "org.settings.cleanup.repo_count" .CleanupRepoCount}}</p>{{end}}
+			<div class="field">
+				<button class="ui primary button">{{ctx.Locale.Tr "save"}}</button>
+				<a class="ui button" href="{{.CleanupLink}}">{{ctx.Locale.Tr "repo.settings.cleanup.preview"}}</a>
+			</div>
+		</form>
+	</div>
 	<h4 class="ui top attached header" id="branching-model">
 		{{ctx.Locale.Tr "repo.settings.branching_model"}}
 	</h4>

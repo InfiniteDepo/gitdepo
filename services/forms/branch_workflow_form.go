@@ -87,3 +87,16 @@ func (f *BranchingModelForm) Validate(req *http.Request, errs binding.Errors) bi
 	ctx := context.GetValidateContext(req)
 	return middleware.Validate(errs, ctx.Data, f, ctx.Locale)
 }
+
+// BranchCleanupForm is the cleanup of merged branches section of the organization and repository branch workflow pages.
+type BranchCleanupForm struct {
+	Days    string // a number, read by the handler: a value that is no number must not turn into "off"
+	Inherit bool   // repositories of organizations only
+	Enforce bool   // organizations only
+}
+
+// Validate validates the fields
+func (f *BranchCleanupForm) Validate(req *http.Request, errs binding.Errors) binding.Errors {
+	ctx := context.GetValidateContext(req)
+	return middleware.Validate(errs, ctx.Data, f, ctx.Locale)
+}
