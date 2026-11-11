@@ -472,6 +472,7 @@ func TestActionsOrgEnvironments(t *testing.T) {
 			doc = NewHTMLParser(t, owner.MakeRequest(t, NewRequest(t, "GET", link), http.StatusOK).Body)
 			assert.Equal(t, strconv.FormatInt(repoC.ID, 10), doc.Find(`#environment-repos input[name="repo_ids"]`).AttrOr("value", ""))
 			assert.Equal(t, 1, doc.Find(fmt.Sprintf(`#environment-repos .item[data-value="%d"]`, repoA.ID)).Length())
+			assert.Contains(t, text(doc, "#environment-repos-all-desc"), "can deploy to it and get ID tokens with its environment claim, unless it requires reviewers")
 
 			// a repository it doesn't apply to doesn't list it, can't read it, and a run there is refused
 			body = owner.MakeRequest(t, NewRequest(t, "GET", repoBase), http.StatusOK).Body.String()

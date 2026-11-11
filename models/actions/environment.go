@@ -19,6 +19,7 @@ import (
 	"forgejo.org/modules/timeutil"
 	"forgejo.org/modules/util"
 
+	"code.forgejo.org/xorm/xorm"
 	"github.com/gobwas/glob"
 	"xorm.io/builder"
 )
@@ -67,13 +68,13 @@ var (
 // the organization already have (trashed ones too: a restore would twin), with up to five of them: names never twin.
 type ErrEnvironmentUsedByRepos struct {
 	N     int64
-	Repos []*repo_model.Repository // ID, name, project and trashed_unix only
+	Repos []*repo_model.Repository // ID, name, project (group_id, group_name) and trashed_unix only
 }
 
 func (e ErrEnvironmentUsedByRepos) Error() string {
 	names := make([]string, len(e.Repos))
 	for i, r := range e.Repos {
-		names[i] = r.Name
+		names[i] = r.PathInOwner()
 	}
 	return fmt.Sprintf("the name is used by environments of %d %s of the organization (%s): delete theirs first", e.N,
 		util.Iif(e.N == 1, "repository", "repositories"), strings.Join(names, ", "))
@@ -453,19 +454,31 @@ func lockOwner(ctx context.Context, ownerID int64) error {
 	return err
 }
 
+// lockingRead is a session whose reads see the latest committed rows and lock them (SELECT ... FOR UPDATE): on MySQL a
+// plain read in a transaction that already read (REPEATABLE READ) returns its old snapshot, so a check after a lock
+// would still see the rows from before the change it waited for. SQLite has no FOR UPDATE and needs none: its write
+// lock covers the transaction.
+func lockingRead(ctx context.Context, table string) *xorm.Session {
+	sess := db.GetEngine(ctx).Table(table)
+	if !setting.Database.Type.IsSQLite3() {
+		sess = sess.ForUpdate()
+	}
+	return sess
+}
+
 // refuseTwin refuses a name that would twin with the other level: a repository environment named like one of the
 // organization that owns the repository, whether or not it applies to the repository (ErrEnvironmentTakenByOrg), an
 // organization environment named like one that repositories of the organization have (ErrEnvironmentUsedByRepos,
 // counted in one query). For a repository it locks the repository row first (a transfer changes it) and reads its
-// owner only then, so a transfer and this check run one after the other; then both levels lock the owner. Call it in
-// the transaction of the insert.
+// owner only then, so a transfer and this check run one after the other; then both levels lock the owner. Its reads
+// are locking reads (lockingRead). Call it in the transaction of the insert.
 func refuseTwin(ctx context.Context, e *ActionEnvironment) error {
 	ownerID := e.OwnerID
 	if e.RepoID != 0 {
 		if _, err := db.Exec(ctx, "UPDATE repository SET id = id WHERE id = ?", e.RepoID); err != nil {
 			return err
 		}
-		if _, err := db.GetEngine(ctx).Table("repository").Where("id = ?", e.RepoID).Cols("owner_id").Get(&ownerID); err != nil {
+		if _, err := lockingRead(ctx, "repository").Where("id = ?", e.RepoID).Cols("owner_id").Get(&ownerID); err != nil {
 			return err
 		}
 	}
@@ -473,7 +486,7 @@ func refuseTwin(ctx context.Context, e *ActionEnvironment) error {
 		return err
 	}
 	if e.RepoID != 0 {
-		taken, err := db.GetEngine(ctx).Table("action_environment").Where(scopeCond(ownerID, 0)).And("lower_name = ?", e.LowerName).Exist()
+		taken, err := lockingRead(ctx, "action_environment").Where(scopeCond(ownerID, 0)).And("lower_name = ?", e.LowerName).Exist()
 		if err == nil && taken {
 			err = ErrEnvironmentTakenByOrg
 		}
@@ -486,7 +499,7 @@ func refuseTwin(ctx context.Context, e *ActionEnvironment) error {
 	}
 	refusal := ErrEnvironmentUsedByRepos{N: n}
 	if err := db.GetEngine(ctx).Table("repository").Join("INNER", "action_environment", "repository.id = action_environment.repo_id").
-		Where(used).Cols("repository.id", "repository.name", "repository.group_name", "repository.trashed_unix").
+		Where(used).Cols("repository.id", "repository.name", "repository.group_id", "repository.group_name", "repository.trashed_unix").
 		OrderBy("repository.lower_name").Limit(5).Find(&refusal.Repos); err != nil {
 		return err
 	}
@@ -501,7 +514,7 @@ func RefuseTwinsOnTransfer(ctx context.Context, repoID, newOwnerID int64) error 
 	if err := lockOwner(ctx, newOwnerID); err != nil {
 		return err
 	}
-	twin, err := db.GetEngine(ctx).Table("action_environment").Where(scopeCond(0, repoID)).And(builder.In("lower_name",
+	twin, err := lockingRead(ctx, "action_environment").Where(scopeCond(0, repoID)).And(builder.In("lower_name",
 		builder.Select("lower_name").From("action_environment").Where(scopeCond(newOwnerID, 0)))).Exist()
 	if err == nil && twin {
 		err = ErrEnvironmentTwin

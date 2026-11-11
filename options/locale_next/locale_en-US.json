@@ -4465,6 +4465,7 @@
 	"actions.environments.org.none.desc": "Create one to protect deployments the same way in the repositories you choose, with the same reviewers, rules and secrets.",
 	"actions.environments.org.repos.desc": "A new environment applies to no repository until you select some. Jobs of other repositories that name it are refused, and those repositories can't create their own of the same name.",
 	"actions.environments.org.repos_all": "All repositories",
+	"actions.environments.org.repos_all.desc": "With all repositories, the jobs of every repository of the organization, also ones created later, can deploy to it and get ID tokens with its environment claim, unless it requires reviewers.",
 	"actions.environments.org.repos_1": "%d selected repository",
 	"actions.environments.org.repos_n": "%d selected repositories",
 	"actions.environments.org.used_by_1": "used by %d repository",

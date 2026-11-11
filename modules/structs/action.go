@@ -358,7 +358,7 @@ type ActionEnvironment struct {
 	Inherited bool `json:"inherited"`
 	// of an environment on the organization's routes: "all" repositories of the organization, or the "selected" ones
 	RepositorySelection string `json:"repository_selection,omitempty"`
-	// the names of the selected repositories
+	// the selected repositories by their path in the organization: "project/repo" in a project, else "repo"
 	Repositories []string `json:"repositories,omitempty"`
 	// the newest deployment to the environment
 	LastDeployment *ActionDeployment `json:"last_deployment,omitempty"`
@@ -394,6 +394,7 @@ type CreateOrUpdateEnvironmentOption struct {
 	// the environment has secrets), or the "selected" ones; ignored for a repository
 	// enum: all,selected
 	RepositorySelection string `json:"repository_selection"`
-	// with "selected", the names of the repositories of the organization, at most 1000
+	// with "selected", the repositories of the organization by their path in it ("project/repo" in a project, else
+	// "repo"), at most 1000
 	Repositories []string `json:"repositories"`
 }

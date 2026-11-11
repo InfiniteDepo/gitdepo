@@ -626,10 +626,7 @@ func environmentError(ctx *context.Context, err error) template.HTML {
 	case errors.As(err, &usedBy):
 		names := make([]string, len(usedBy.Repos))
 		for i, r := range usedBy.Repos {
-			names[i] = r.Name
-			if r.GroupName != "" {
-				names[i] = r.GroupName + "/" + r.Name
-			}
+			names[i] = r.PathInOwner()
 			if r.IsTrashed() {
 				names[i] += " " + ctx.Locale.TrString("actions.environments.error.in_trash")
 			}

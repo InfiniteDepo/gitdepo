@@ -215,7 +215,9 @@ func main() {
 		}
 
 		errs := checkLocaleNextContent(localeContent)
-		if localeFile.Name() == "locale_en-US.json" { // translations may word a form without the number
+		// en-US only for now: Sprintf appends "%!(EXTRA ...)" to a translated form that drops an argument too, but some
+		// translations do (e.g. a "one" form without the number); fixing them is pending
+		if localeFile.Name() == "locale_en-US.json" {
 			errs = append(errs, checkPluralVerbs(localeContent)...)
 		}
 		if err := errs; len(err) > 0 {

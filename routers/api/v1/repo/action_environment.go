@@ -56,9 +56,11 @@ func environmentOfRepo(ctx *context.APIContext) *actions_model.ActionEnvironment
 	return env
 }
 
-// orgRepoIDsByName resolves the names of repositories of the organization (not in a project, as the other org routes
-// name them) in one query; a name of no such repository, or more than MaxEnvironmentRepos, is a 422.
-func orgRepoIDsByName(ctx *context.APIContext, orgID int64, names []string) ([]int64, bool) {
+// orgRepoIDsByName resolves the repositories of the organization named by their path within it, "project/repo" or
+// "repo" (Repository.PathInOwner, as the API lists them), with repo_model.GetRepositoryByRef: a root repository never
+// stands in for a repository in a project of the same leaf name. An unknown, foreign or malformed name, or more than
+// MaxEnvironmentRepos, is one plain 422.
+func orgRepoIDsByName(ctx *context.APIContext, names []string) ([]int64, bool) {
 	lower := make([]string, len(names))
 	for i, name := range names {
 		lower[i] = strings.ToLower(name)
@@ -68,17 +70,26 @@ func orgRepoIDsByName(ctx *context.APIContext, orgID int64, names []string) ([]i
 		ctx.Error(http.StatusUnprocessableEntity, "repositories", fmt.Sprintf("at most %d repositories", actions_model.MaxEnvironmentRepos))
 		return nil, false
 	}
-	var ids []int64
-	if len(lower) > 0 {
-		if err := db.GetEngine(ctx).Table("repository").Where("owner_id = ? AND group_id = 0 AND trashed_unix = 0", orgID).
-			In("lower_name", lower).Cols("id").Find(&ids); err != nil {
+	ids := make([]int64, 0, len(lower))
+	for _, name := range lower {
+		parts := strings.Split(name, "/")
+		if len(parts) > 2 || slices.Contains(parts, "") {
+			ctx.Error(http.StatusUnprocessableEntity, "repositories", "a repository is not found in the organization")
+			return nil, false
+		}
+		group := ""
+		if len(parts) == 2 {
+			group = parts[0]
+		}
+		repo, err := repo_model.GetRepositoryByRef(ctx, ctx.Org().Organization.Name, group, parts[len(parts)-1])
+		if repo_model.IsErrRepoNotExist(err) {
+			ctx.Error(http.StatusUnprocessableEntity, "repositories", "a repository is not found in the organization")
+			return nil, false
+		} else if err != nil {
 			ctx.InternalServerError(err)
 			return nil, false
 		}
-	}
-	if len(ids) != len(lower) {
-		ctx.Error(http.StatusUnprocessableEntity, "repositories", "a repository is not found in the organization")
-		return nil, false
+		ids = append(ids, repo.ID)
 	}
 	return ids, true
 }
@@ -152,7 +163,7 @@ func toActionEnvironments(ctx *context.APIContext, envs []*actions_model.ActionE
 			item.RepositorySelection = util.Iif(e.AllRepos, "all", "selected")
 			for _, id := range selected[e.ID] {
 				if r := names[id]; r != nil {
-					item.Repositories = append(item.Repositories, r.Name)
+					item.Repositories = append(item.Repositories, r.PathInOwner())
 				}
 			}
 		}
@@ -350,7 +361,7 @@ func CreateOrUpdateActionEnvironment(ctx *context.APIContext) {
 	env.WaitTimerMinutes, env.PreventSelfReview, env.RunnerLabels, env.AllowedWorkflows = *form.WaitTimer, *form.PreventSelfReview, form.RunnerLabels, form.AllowedWorkflows
 	if env.AllRepos = form.RepositorySelection == "all"; env.RepoID == 0 && !env.AllRepos {
 		var ok bool
-		if env.RepoIDs, ok = orgRepoIDsByName(ctx, env.OwnerID, form.Repositories); !ok {
+		if env.RepoIDs, ok = orgRepoIDsByName(ctx, form.Repositories); !ok {
 			return
 		}
 	}

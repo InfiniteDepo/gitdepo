@@ -20,7 +20,7 @@
 			<div class="default text">{{ctx.Locale.Tr "org.settings.deploy_key_select_repos"}}</div>
 			<div class="menu">
 				{{range .ctxData.Repos}}
-					<div class="item" data-value="{{.ID}}">{{.Name}}</div>
+					<div class="item" data-value="{{.ID}}">{{.PathInOwner}}</div>
 				{{end}}
 			</div>
 		</div>

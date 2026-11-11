@@ -76,6 +76,51 @@ func TestActionsOrgEnvironmentsAttacks(t *testing.T) {
 			return jobs[0], d
 		}
 
+		// A repository in a project is named by its path in the organization, so a GET -> PUT round trip (as any
+		// declarative client does) keeps it, never moving the selection to a root repository of the same leaf name,
+		// which any member who may create repositories can make. The web picker labels it the same way.
+		t.Run("API round trip of a project repository keeps it, never a root twin", func(t *testing.T) {
+			org3 := unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3})
+			group, err := repo_model.CreateRepoGroup(sys, org3, "oenvaproj", "")
+			require.NoError(t, err)
+			projRepo, err := repo_service.CreateRepositoryDirectly(sys, user2, org3, repo_service.CreateRepoOptions{Name: "oenvaapi", GroupID: group.ID})
+			require.NoError(t, err)
+			rootTwin := newOrgRepo("oenvaapi")
+			selection := func(id int64) []int64 {
+				ids, err := actions_model.EnvironmentRepoIDs(ctx, []int64{id})
+				require.NoError(t, err)
+				return ids[id]
+			}
+			MakeRequest(t, NewRequestWithJSON(t, "PUT", apiBase+"/oenva-round", envRules(api.CreateOrUpdateEnvironmentOption{Repositories: []string{"OENVAPROJ/oenvaapi"}})).
+				AddTokenAuth(ownerToken), http.StatusCreated)
+			env, err := actions_model.GetEnvironmentByName(ctx, 3, 0, "oenva-round")
+			require.NoError(t, err)
+			require.Equal(t, []int64{projRepo.ID}, selection(env.ID))
+
+			var got api.ActionEnvironment
+			DecodeJSON(t, MakeRequest(t, NewRequest(t, "GET", apiBase+"/oenva-round").AddTokenAuth(ownerToken), http.StatusOK), &got)
+			assert.Equal(t, []string{"oenvaproj/oenvaapi"}, got.Repositories)
+			MakeRequest(t, NewRequestWithJSON(t, "PUT", apiBase+"/oenva-round", envRules(api.CreateOrUpdateEnvironmentOption{
+				RepositorySelection: got.RepositorySelection, Repositories: got.Repositories,
+			})).AddTokenAuth(ownerToken), http.StatusOK)
+			assert.Equal(t, []int64{projRepo.ID}, selection(env.ID))
+			_, err = actions_model.ResolveEnvironment(ctx, rootTwin.ID, "oenva-round")
+			require.ErrorIs(t, err, actions_model.ErrEnvironmentNotFound)
+
+			// malformed, foreign and unknown paths are one plain 422 and change nothing
+			for _, names := range [][]string{{"oenvaproj/"}, {"/oenvaapi"}, {"a/b/c"}, {"user2/repo1"}, {"repo1"}, {"nope/oenvaapi"}} {
+				resp := MakeRequest(t, NewRequestWithJSON(t, "PUT", apiBase+"/oenva-round", envRules(api.CreateOrUpdateEnvironmentOption{Repositories: names})).
+					AddTokenAuth(ownerToken), http.StatusUnprocessableEntity)
+				assert.Contains(t, resp.Body.String(), "a repository is not found in the organization", names)
+			}
+			assert.Equal(t, []int64{projRepo.ID}, selection(env.ID))
+
+			// the picker tells the two apart
+			doc := NewHTMLParser(t, owner.MakeRequest(t, NewRequest(t, "GET", fmt.Sprintf("/org/org3/settings/actions/environments/%d", env.ID)), http.StatusOK).Body)
+			assert.Equal(t, "oenvaproj/oenvaapi", doc.Find(fmt.Sprintf(`#environment-repos .item[data-value="%d"]`, projRepo.ID)).Text())
+			assert.Equal(t, "oenvaapi", doc.Find(fmt.Sprintf(`#environment-repos .item[data-value="%d"]`, rootTwin.ID)).Text())
+		})
+
 		// An organization environment restricted to protected branches, without reviewers: the organization's owner
 		// relies on branch protection. A repository administrator who is no owner of the organization adds a
 		// catch-all protection rule to the repository and deploys from any branch, getting the organization's secret.

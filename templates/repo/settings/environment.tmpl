@@ -24,6 +24,7 @@
 				<div id="environment-repos">
 					{{template "org/settings/deploy_key_scope" (dict "ctxData" $ "ID" "environment" "All" .Form.AllRepos "RepoIDs" .Form.RepoIDs)}}
 					<p class="help">{{ctx.Locale.Tr "actions.environments.org.repos.desc"}}</p>
+					<p class="help" id="environment-repos-all-desc">{{ctx.Locale.Tr "actions.environments.org.repos_all.desc"}}</p>
 				</div>
 				{{end}}
 				<div class="field">
