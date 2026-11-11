@@ -70,7 +70,7 @@ func TestBranchingModelSettings(t *testing.T) {
 			got := bmRepoAPI(t, ownerCtx, "org3", repo)
 			assert.False(t, got.Inherit)
 			assert.Equal(t, "repo", got.Source)
-			assert.Equal(t, &api.BranchingModel{DevelopmentBranch: "develop", ReleasePrefixes: []string{"release/", "hotfix/"}, ProductionBranch: "master", Types: []api.BranchType{}, MergeForward: true, MergeForwardNeverBypass: true}, got.Own)
+			assert.Equal(t, &api.BranchingModel{DevelopmentBranch: "develop", ReleasePrefixes: []string{"release/", "hotfix/"}, ProductionBranch: "master", Types: []api.BranchType{}, BranchNaming: api.BranchNaming{Exceptions: []string{}, ExemptUsers: []string{}, ExemptTeams: []string{}}, MergeForward: true, MergeForwardNeverBypass: true}, got.Own)
 			assert.True(t, got.Effective.MergeForward)
 			assert.Equal(t, []string{"release/1.9", "hotfix/1.9.1", "release/1.10", "release/2.0"}, got.ReleaseBranches)
 			assert.Equal(t, []string{"release/next"}, got.IgnoredBranches)
@@ -103,7 +103,7 @@ func TestBranchingModelSettings(t *testing.T) {
 			var org api.OrgBranchingModel
 			req = NewRequest(t, "GET", "/api/v1/orgs/org3/branching-model").AddTokenAuth(ownerCtx.Token)
 			DecodeJSON(t, ownerCtx.Session.MakeRequest(t, req, http.StatusOK), &org)
-			assert.Equal(t, api.OrgBranchingModel{ReleasePrefixes: []string{"release/"}, Types: []api.BranchType{}, Enforce: true}, org)
+			assert.Equal(t, api.OrgBranchingModel{ReleasePrefixes: []string{"release/"}, Types: []api.BranchType{}, BranchNaming: api.BranchNaming{Exceptions: []string{}, ExemptUsers: []string{}, ExemptTeams: []string{}}, Enforce: true}, org)
 
 			doc := NewHTMLParser(t, owner.MakeRequest(t, NewRequest(t, "GET", settings), http.StatusOK).Body)
 			assert.True(t, doc.doc.Find(`input[name="release_prefixes"]`).Is("[disabled]"))

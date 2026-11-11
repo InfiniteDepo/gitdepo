@@ -28,3 +28,8 @@
     width: 100%;
   }
 }
+
+/* the base select must show "Development" and "Production" in full */
+#branch-types td select[name="type_base"] {
+  min-width: 11em;
+}

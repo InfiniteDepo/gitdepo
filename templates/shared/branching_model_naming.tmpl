@@ -1,0 +1,39 @@
+{{/* The names of new branches in the branching model form. Needs RequireBranchType, BranchExceptions, ExemptUsers, ExemptTeams (comma-separated names) and their options ExemptUserOptions, ExemptTeamOptions, ExemptTeamsAvailable; ModelLocked disables the fields; ExemptNeedsEnforce (organizations) shows the exemptions only while "Enforce" is ticked. */}}
+<h5 class="ui dividing header" id="branch-naming-heading">{{ctx.Locale.Tr "repo.settings.branching_model.branch_names"}}</h5>
+<div class="field" id="branch-naming-field">
+	<div class="ui checkbox">
+		<input id="require_branch_type" name="require_branch_type" type="checkbox" {{if .RequireBranchType}}checked{{end}} {{if .ModelLocked}}disabled{{end}}>
+		<label for="require_branch_type">{{ctx.Locale.Tr "repo.settings.branching_model.require_type"}}</label>
+		<p class="help">{{ctx.Locale.Tr "repo.settings.branching_model.require_type_desc"}}</p>
+	</div>
+</div>
+<div class="field">
+	<label for="branch_exceptions">{{ctx.Locale.Tr "repo.settings.branching_model.exceptions"}}</label>
+	<textarea id="branch_exceptions" name="branch_exceptions" rows="3" placeholder="renovate/**" {{if .ModelLocked}}disabled{{end}}>{{.BranchExceptions}}</textarea>
+	<p class="help">{{ctx.Locale.Tr "repo.settings.branching_model.exceptions_desc"}}</p>
+</div>
+<div id="branch-exempt-box" {{if and .ExemptNeedsEnforce (not .EnforceModel)}}class="tw-hidden"{{end}}>
+	<div class="field">
+		<label>{{ctx.Locale.Tr "repo.settings.branching_model.exempt_users"}}</label>
+		<div class="ui multiple search selection dropdown {{if .ModelLocked}}disabled{{end}}">
+			<input type="hidden" name="exempt_users" value="{{.ExemptUsers}}">
+			<div class="default text">{{ctx.Locale.Tr "search.user_kind"}}</div>
+			<div class="menu">
+				{{range .ExemptUserOptions}}<div class="item" data-value="{{.}}">{{.}}</div>{{end}}
+			</div>
+		</div>
+	</div>
+	{{if .ExemptTeamsAvailable}}
+	<div class="field">
+		<label>{{ctx.Locale.Tr "repo.settings.branching_model.exempt_teams"}}</label>
+		<div class="ui multiple search selection dropdown {{if .ModelLocked}}disabled{{end}}">
+			<input type="hidden" name="exempt_teams" value="{{.ExemptTeams}}">
+			<div class="default text">{{ctx.Locale.Tr "search.team_kind"}}</div>
+			<div class="menu">
+				{{range .ExemptTeamOptions}}<div class="item" data-value="{{.}}">{{svg "octicon-people"}} {{.}}</div>{{end}}
+			</div>
+		</div>
+	</div>
+	{{end}}
+	<p class="help">{{ctx.Locale.Tr "repo.settings.branching_model.exempt_desc"}}{{if .ExemptNeedsEnforce}} {{ctx.Locale.Tr "repo.settings.branching_model.exempt_org_enforce"}}{{end}}{{if .ModelLocked}} {{ctx.Locale.Tr "repo.settings.branching_model.exempt_org_only"}}{{end}}</p>
+</div>

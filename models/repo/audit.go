@@ -136,7 +136,7 @@ func RecordScoped(ctx context.Context, actions audit_model.LevelActions, ownerID
 }
 
 // RecordPushRefused records a push to repo that the server refused, with its reason ("protected_branch", "force_push",
-// "push_rule", "size_lock", "org_policy", "deploy_key", "read_only_key", "permission", "merge_queue") and the ref, if one was refused. It is activity:
+// "push_rule", "size_lock", "org_policy", "deploy_key", "read_only_key", "permission", "merge_queue", "branch_type") and the ref, if one was refused. It is activity:
 // a failed write is logged and counted.
 func RecordPushRefused(ctx context.Context, repo *Repository, reason, ref string) {
 	data := map[string]any{"reason": reason}

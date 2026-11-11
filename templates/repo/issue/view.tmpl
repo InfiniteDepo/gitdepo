@@ -9,4 +9,5 @@
 		{{template "repo/issue/view_content" .}}
 	</div>
 </div>
+{{if .BranchDialog}}{{template "repo/branch/create_dialog" .}}{{end}}
 {{template "base/footer" .}}

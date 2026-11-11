@@ -246,12 +246,16 @@ func NormalizeBranchingModel(m *repo_model.BranchingModel) (*repo_model.Branchin
 			return nil, ErrInvalidBranchingModel{Value: t.Prefix, Reason: ReasonPrefixIsBranch}
 		}
 	}
+	if err := normalizeNaming(m, out); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
 // isEmpty tells if the model sets nothing that a repository could inherit.
 func isEmpty(m *repo_model.BranchingModel) bool {
-	return len(m.ReleasePrefixes) == 0 && m.ProductionBranch == "" && len(m.Types) == 0 && m.DefaultPRTarget == ""
+	return len(m.ReleasePrefixes) == 0 && m.ProductionBranch == "" && len(m.Types) == 0 && m.DefaultPRTarget == "" &&
+		!m.RequireBranchType && len(m.BranchExceptions) == 0 && len(m.ExemptUserIDs) == 0 && len(m.ExemptTeamIDs) == 0
 }
 
 // parseVersion reads the part of a release branch name after its prefix: numbers separated by dots, optionally after a "v".
@@ -441,6 +445,10 @@ func auditModel(m *repo_model.BranchingModel, locked bool) map[string]any {
 		"merge_forward_never_bypass":    m.MergeForwardNeverBypass,
 		"merge_forward_anyone_may_skip": m.MergeForwardAnyoneMaySkip,
 		"default_pr_target":             m.DefaultPRTarget,
+		"require_branch_type":           m.RequireBranchType,
+		"branch_exceptions":             append([]string{}, m.BranchExceptions...),
+		"exempt_user_ids":               append([]int64{}, m.ExemptUserIDs...),
+		"exempt_team_ids":               append([]int64{}, m.ExemptTeamIDs...),
 		"model_locked":                  locked,
 	}
 }

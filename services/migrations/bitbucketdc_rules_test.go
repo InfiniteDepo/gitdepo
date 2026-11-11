@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	git_model "forgejo.org/models/git"
+	linearglob "forgejo.org/modules/glob"
 	webhook_module "forgejo.org/modules/webhook"
 
 	"github.com/gobwas/glob"
@@ -127,4 +128,25 @@ func TestSameBitbucketRule(t *testing.T) {
 	assert.False(t, sameBitbucketRule(want, have))
 	have.StatusCheckContexts, have.WhitelistUserIDs = nil, []int64{1}
 	assert.False(t, sameBitbucketRule(want, have))
+}
+
+// The rules the import writes are matched by modules/glob (CompileExact), which must decide like gobwas, the matcher
+// the translation was checked with: `{P,**/P}` and `{,**/}` included.
+func TestBitbucketGlobMatchesGobwas(t *testing.T) {
+	names := []string{"a", "x", "a/x", "a/b/x", "x/a", "feature/x", "feature/a/x", "release/1.0", "hotfix/a/b", "a.b", "ab", "docs/a/b.md", "/x", "heads/a"}
+	for _, id := range []string{"x", "a/x", "*", "a/*", "**", "**/x", "a/**", "a/**/x", "feature/**", "release/*", "hotfix/", "a?", "a.b", "docs/**/*.md", "a{b", "a!b", "a,b", "[a]"} {
+		for _, p := range []string{bitbucketGlob(id), "{" + bitbucketGlob(id) + ",**/" + bitbucketGlob(id) + "}"} {
+			want, err := glob.Compile(p, '/')
+			require.NoError(t, err, p)
+			got, err := linearglob.CompileExact(p, '/')
+			require.NoError(t, err, p)
+			for _, n := range names {
+				if p == "{*,**/*}" { // gobwas misses every name of two segments or more here; the glob means any depth
+					assert.True(t, got.MatchString(n), n)
+					continue
+				}
+				assert.Equal(t, want.Match(n), got.MatchString(n), "pattern %q, name %q", p, n)
+			}
+		}
+	}
 }

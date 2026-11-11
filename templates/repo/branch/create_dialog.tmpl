@@ -1,0 +1,42 @@
+{{/* The create branch dialog. Needs BranchDialog (branchworkflow.CreateChoices), BranchDialogBranches, BranchDialogSetBy and RepoLink. */}}
+<dialog class="modal" id="create-branch-modal">
+	<article>
+		<header>{{ctx.Locale.Tr "repo.branch.new_branch"}}</header>
+		<form class="ui form" id="create-branch-form" action="" method="post" data-base-action="{{.RepoLink}}/branches/_new/branch/"
+			data-text-from="{{ctx.Locale.Tr "repo.branch.dialog.created_from"}}" data-text-switched="{{ctx.Locale.Tr "repo.branch.dialog.switched"}}" data-text-changed="{{ctx.Locale.Tr "repo.branch.dialog.base_changed"}}" data-text-missing="{{ctx.Locale.Tr "repo.branch.dialog.base_missing"}}">
+			<div class="content">
+				{{if .BranchDialog.Types}}
+				<fieldset class="field branch-type-picker">
+					<legend>{{ctx.Locale.Tr "repo.branch.dialog.type"}}</legend>
+					<div class="flex-text-block tw-flex-wrap">
+						{{range .BranchDialog.Types}}
+						<label class="ui basic label tw-cursor-pointer"><input type="radio" name="branch_type_choice" class="branch-type-choice" value="{{.Name}}" data-prefix="{{.Prefix}}" data-base="{{.Base}}" data-missing="{{.Missing}}"> {{.Name}}</label>
+						{{end}}
+						{{if not .BranchDialog.Required}}
+						<label class="ui basic label tw-cursor-pointer"><input type="radio" name="branch_type_choice" class="branch-type-choice" value="" data-prefix="" data-base="{{.BranchDialog.Development}}" checked> {{ctx.Locale.Tr "repo.branch.dialog.other"}}</label>
+						{{end}}
+					</div>
+					{{if .BranchDialog.Required}}<p class="help">{{ctx.Locale.Tr "repo.branch.dialog.required"}} {{.BranchDialogSetBy}}</p>{{end}}
+					{{if and .BranchDialog.Exempt (not .BranchDialog.Required)}}<p class="help">{{ctx.Locale.Tr "repo.branch.dialog.exempt"}}</p>{{end}}
+				</fieldset>
+				{{end}}
+				<div class="required field">
+					<label for="branch_name_part">{{ctx.Locale.Tr "repo.branch.name"}}</label>
+					<input id="branch_name_part" maxlength="100" required autocomplete="off">
+					<input type="hidden" name="new_branch_name" id="new_branch_name">
+					<p class="help">{{ctx.Locale.Tr "repo.branch.dialog.name_help"}} <span id="branch-name-preview-label">{{ctx.Locale.Tr "repo.branch.dialog.preview"}}</span> <code id="branch-name-preview" aria-live="polite"></code></p>
+				</div>
+				<div class="field">
+					<label for="branch_base">{{ctx.Locale.Tr "repo.branch.dialog.from"}}</label>
+					<input id="branch_base" list="branch-base-list" autocomplete="off" required>
+					<datalist id="branch-base-list">{{range .BranchDialogBranches}}<option value="{{.}}">{{end}}</datalist>
+					<p class="help" id="branch-base-note"></p>
+				</div>
+				{{if not .BranchDialog.Types}}
+				{{if $.Permission.IsAdmin}}<p class="help">{{ctx.Locale.Tr "repo.branch.dialog.no_types"}}</p>{{end}}
+				{{end}}
+			</div>
+			{{template "base/modal_actions_confirm" (dict "ModalButtonTypes" "confirm")}}
+		</form>
+	</article>
+</dialog>

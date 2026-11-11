@@ -7,12 +7,15 @@ package repo
 import (
 	"errors"
 	"fmt"
+	"html"
 	"html/template"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"forgejo.org/models"
+	"forgejo.org/models/db"
 	git_model "forgejo.org/models/git"
 	repo_model "forgejo.org/models/repo"
 	"forgejo.org/models/unit"
@@ -25,6 +28,7 @@ import (
 	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
 	"forgejo.org/routers/utils"
+	"forgejo.org/services/branchworkflow"
 	"forgejo.org/services/context"
 	"forgejo.org/services/cron"
 	"forgejo.org/services/forms"
@@ -53,7 +57,13 @@ func Branches(ctx *context.Context) {
 
 	kw := ctx.FormString("q")
 
-	defaultBranch, branches, branchesCount, err := repo_service.LoadBranches(ctx, ctx.Doer, ctx.Repo.Repository, ctx.Repo.GitRepo, optional.None[bool](), kw, page, pageSize)
+	model, err := branchworkflow.GetEffectiveModel(ctx, ctx.Repo.Repository)
+	if err != nil {
+		ctx.ServerError("GetEffectiveModel", err)
+		return
+	}
+	typeFilter, untyped := ctx.FormString("type"), ctx.FormBool("untyped")
+	defaultBranch, branches, branchesCount, err := repo_service.LoadBranches(ctx, ctx.Doer, ctx.Repo.Repository, ctx.Repo.GitRepo, optional.None[bool](), kw, branchworkflow.TypeFilter(model.Model, typeFilter, untyped), page, pageSize)
 	if err != nil {
 		ctx.ServerError("LoadBranches", err)
 		return
@@ -77,6 +87,10 @@ func Branches(ctx *context.Context) {
 
 	ctx.Data["Keyword"] = kw
 	ctx.Data["Branches"] = branches
+	prepareBranchGroups(ctx, model.Model, branches, typeFilter, untyped)
+	if ctx.Repo.CanCreateBranch() && !PrepareBranchDialog(ctx, model) {
+		return
+	}
 	ctx.Data["CommitStatus"] = commitStatus
 	ctx.Data["CommitStatuses"] = commitStatuses
 	ctx.Data["DefaultBranchBranch"] = defaultBranch
@@ -85,6 +99,93 @@ func Branches(ctx *context.Context) {
 	ctx.Data["Page"] = pager
 
 	ctx.HTML(http.StatusOK, tplBranch)
+}
+
+// branchRow is a branch of the list with its place in the page, so the flat list can restore the order.
+type branchRow struct {
+	*repo_service.Branch
+	Order int
+}
+
+// branchGroup is the branches of one type; Name is empty when the model has no types and the list is flat.
+type branchGroup struct {
+	Name     string
+	Branches []branchRow
+}
+
+// prepareBranchGroups groups the branches of the page by the type their name matches (the enabled types in the order
+// of the model, then Release, then "No type" as an empty name with Untyped set) and sets the filter chips. The
+// groups are those of the page: the list is paginated by the database order.
+func prepareBranchGroups(ctx *context.Context, m repo_model.BranchingModel, branches []*repo_service.Branch, typeFilter string, untyped bool) {
+	var names []string
+	for _, t := range m.Types {
+		if !t.Off {
+			names = append(names, t.Name)
+		}
+	}
+	if len(m.ReleasePrefixes) > 0 {
+		names = append(names, branchworkflow.ReleaseTypeName)
+	}
+	if len(names) == 0 {
+		rows := make([]branchRow, 0, len(branches))
+		for i, b := range branches {
+			rows = append(rows, branchRow{b, i})
+		}
+		ctx.Data["BranchGroups"] = []branchGroup{{Branches: rows}}
+		return
+	}
+	groups := map[string]*branchGroup{}
+	var ordered []*branchGroup
+	for _, name := range append(slices.Clone(names), "") {
+		groups[name] = &branchGroup{Name: name}
+		ordered = append(ordered, groups[name])
+	}
+	for i, b := range branches {
+		name := ""
+		if t, ok := branchworkflow.MatchType(m, b.DBBranch.Name); ok {
+			name = t.Name
+		}
+		groups[name].Branches = append(groups[name].Branches, branchRow{b, i})
+	}
+	ctx.Data["BranchGroups"] = slices.DeleteFunc(ordered, func(g *branchGroup) bool { return len(g.Branches) == 0 })
+	ctx.Data["HasBranchTypes"] = true
+	ctx.Data["BranchTypeNames"] = names
+	ctx.Data["BranchTypeFilter"] = typeFilter
+	ctx.Data["BranchUntypedFilter"] = untyped
+}
+
+// PrepareBranchDialog sets what the create branch dialog needs for the viewer: the types of the model with the
+// branch each starts from, whether a type is required of this user, and the names of the branches to start from.
+func PrepareBranchDialog(ctx *context.Context, model branchworkflow.EffectiveModel) bool {
+	choices, err := branchworkflow.DialogChoices(ctx, ctx.Repo.Repository, model, ctx.Doer)
+	if err != nil {
+		ctx.ServerError("DialogChoices", err)
+		return false
+	}
+	names, err := git_model.FindBranchNames(ctx, git_model.FindBranchOptions{
+		RepoID: ctx.Repo.Repository.ID, IsDeletedBranch: optional.Some(false), ListOptions: db.ListOptions{Page: 1, PageSize: 100},
+	})
+	if err != nil {
+		ctx.ServerError("FindBranchNames", err)
+		return false
+	}
+	ctx.Data["BranchDialog"] = choices
+	ctx.Data["BranchDialogBranches"] = names
+	if choices.Required {
+		setBy := ctx.Locale.TrString("repo.branch.dialog.set_by_repo")
+		if choices.SetBy != "" {
+			setBy = ctx.Locale.TrString("repo.branch.type_required_set_by", choices.SetBy)
+		}
+		if exc := choices.Model.BranchExceptions; len(exc) > 0 {
+			listed := strings.Join(exc[:min(len(exc), 5)], ", ")
+			if more := len(exc) - 5; more > 0 {
+				listed = ctx.Locale.TrString("repo.branch.type_required_more", listed, more)
+			}
+			setBy += " " + ctx.Locale.TrString("repo.branch.dialog.exceptions", listed)
+		}
+		ctx.Data["BranchDialogSetBy"] = setBy
+	}
+	return true
 }
 
 // DeleteBranchPost responses for delete merged branch
@@ -220,6 +321,16 @@ func CreateBranch(ctx *context.Context) {
 			e := err.(models.ErrTagAlreadyExists)
 			ctx.Flash.Error(ctx.Tr("repo.branch.tag_collision", e.TagName))
 			ctx.Redirect(ctx.Repo.RepoLink + "/src/" + ctx.Repo.BranchNameSubURL())
+			return
+		}
+		if refused, ok := errors.AsType[branchworkflow.ErrBranchTypeRequired](err); ok {
+			ctx.Flash.Error(html.EscapeString(refused.Text(ctx.Locale)))
+			ctx.Redirect(ctx.Repo.RepoLink + "/src/" + ctx.Repo.BranchNameSubURL())
+			return
+		}
+		if git_model.IsErrBranchNotExist(err) {
+			ctx.Flash.Error(ctx.Tr("repo.branch.base_not_exist"))
+			ctx.Redirect(ctx.Repo.RepoLink + "/branches")
 			return
 		}
 		if git_model.IsErrBranchAlreadyExists(err) || git.IsErrPushOutOfDate(err) {

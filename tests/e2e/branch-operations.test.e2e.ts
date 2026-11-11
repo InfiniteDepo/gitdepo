@@ -30,7 +30,7 @@ test('Create branch from branch', async ({page}) => {
   await expect(page.locator('#create-branch-modal')).toBeVisible();
 
   const branchName = dynamic_id();
-  await page.getByRole('textbox').fill(branchName);
+  await page.locator('#branch_name_part').fill(branchName);
   await page.getByRole('button', {name: 'Confirm'}).click();
 
   // Verify branch exists.

@@ -116,6 +116,10 @@ func renderBranchingModel(ctx *context.APIContext) {
 		res.Types = branchworkflow.TypesToAPI(model.Types)
 		res.DefaultPRTarget = model.DefaultPRTarget
 	}
+	if res.BranchNaming, err = branchworkflow.NamingToAPI(ctx, model); err != nil {
+		ctx.ServerError("NamingToAPI", err)
+		return
+	}
 	ctx.JSON(http.StatusOK, res)
 }
 
@@ -182,7 +186,11 @@ func EditBranchingModel(ctx *context.APIContext) {
 	}
 
 	form := web.GetForm(ctx).(*api.OrgBranchingModel)
-	err := branchworkflow.SetOrgModel(ctx, ctx.Org().Organization.AsUser(), &repo_model.BranchingModel{DevelopmentBranch: form.DevelopmentBranch, ReleasePrefixes: form.ReleasePrefixes, ProductionBranch: form.ProductionBranch, Types: branchworkflow.TypesFromAPI(form.Types), DefaultPRTarget: form.DefaultPRTarget, MergeForward: form.MergeForward, MergeForwardNeverBypass: form.MergeForwardNeverBypass, MergeForwardAnyoneMaySkip: form.MergeForwardAnyoneMaySkip}, form.Enforce)
+	model := &repo_model.BranchingModel{DevelopmentBranch: form.DevelopmentBranch, ReleasePrefixes: form.ReleasePrefixes, ProductionBranch: form.ProductionBranch, Types: branchworkflow.TypesFromAPI(form.Types), DefaultPRTarget: form.DefaultPRTarget, MergeForward: form.MergeForward, MergeForwardNeverBypass: form.MergeForwardNeverBypass, MergeForwardAnyoneMaySkip: form.MergeForwardAnyoneMaySkip}
+	err := branchworkflow.ApplyNaming(ctx, ctx.Doer(), ctx.Org().Organization.AsUser(), model, form.BranchNaming)
+	if err == nil {
+		err = branchworkflow.SetOrgModel(ctx, ctx.Org().Organization.AsUser(), model, form.Enforce)
+	}
 	if e, ok := branchworkflow.IsInvalidBranchingModel(err); ok {
 		// the cause code is its own field, the message is for people
 		ctx.JSON(http.StatusUnprocessableEntity, map[string]string{"message": e.Error(), "reason": e.Reason, "url": setting.API.SwaggerURL})

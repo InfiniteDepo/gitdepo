@@ -46,6 +46,18 @@ type BranchType struct {
 	Off bool `json:"off"`
 }
 
+// BranchNaming is what the branching model asks of the names of new branches
+type BranchNaming struct {
+	// RequireBranchType refuses new branches and renames whose name is not a branch type or release prefix followed by a name, the development, production, default or a base branch, or an exception; it needs an enabled type, a release prefix or an exception
+	RequireBranchType bool `json:"require_branch_type"`
+	// Exceptions are glob patterns of branch names that are allowed anyway: case-sensitive, matched against the whole name, at most 20
+	Exceptions []string `json:"exceptions"`
+	// ExemptUsers may create any branch name; every such creation is recorded in the audit log. Deploy keys, tokens, Actions and administrators are exempt only when named here
+	ExemptUsers []string `json:"exempt_users"`
+	// ExemptTeams are teams of the organization whose members are exempt, like ExemptUsers
+	ExemptTeams []string `json:"exempt_teams"`
+}
+
 // BranchingModel names the development branch and the release branch prefixes
 type BranchingModel struct {
 	// DevelopmentBranch is where every chain of release branches ends; empty is the repository's default branch
@@ -58,6 +70,8 @@ type BranchingModel struct {
 	Types []BranchType `json:"types"`
 	// DefaultPRTarget is the branch new pull requests target when their branch has no type and the request names no base; empty is the default branch
 	DefaultPRTarget string `json:"default_pr_target"`
+	// BranchNaming holds the require-a-branch-type setting, its exception patterns and the exempt users and teams
+	BranchNaming BranchNaming `json:"branch_naming"`
 	// MergeForward merges a pull request merged into a release branch into every later release branch and the development branch, and one merged into the production branch into the development branch
 	MergeForward bool `json:"merge_forward"`
 	// MergeForwardNeverBypass makes a step that branch protection refuses open a pull request; otherwise a step counts as an extension of the approved pull request: whoever merged it must be allowed to merge into the target, whose required approvals and status checks are skipped
@@ -78,6 +92,8 @@ type OrgBranchingModel struct {
 	Types []BranchType `json:"types"`
 	// DefaultPRTarget is the branch new pull requests target when their branch has no type and the request names no base; empty is the default branch
 	DefaultPRTarget string `json:"default_pr_target"`
+	// BranchNaming holds the require-a-branch-type setting, its exception patterns and the exempt users and teams
+	BranchNaming BranchNaming `json:"branch_naming"`
 	// MergeForward merges a pull request merged into a release branch into every later release branch and the development branch, and one merged into the production branch into the development branch
 	MergeForward bool `json:"merge_forward"`
 	// MergeForwardNeverBypass makes a step that branch protection refuses open a pull request; otherwise a step counts as an extension of the approved pull request: whoever merged it must be allowed to merge into the target, whose required approvals and status checks are skipped
@@ -119,7 +135,9 @@ type EditRepoBranchingModelOption struct {
 	Types []BranchType `json:"types"`
 	// DefaultPRTarget is the branch new pull requests target when their branch has no type and the request names no base; empty is the default branch
 	DefaultPRTarget string `json:"default_pr_target"`
-	MergeForward    bool   `json:"merge_forward"`
+	// BranchNaming holds the require-a-branch-type setting, its exception patterns and the exempt users and teams
+	BranchNaming BranchNaming `json:"branch_naming"`
+	MergeForward bool         `json:"merge_forward"`
 	// MergeForwardNeverBypass makes a step that branch protection refuses open a pull request; otherwise a step counts as an extension of the approved pull request: whoever merged it must be allowed to merge into the target, whose required approvals and status checks are skipped
 	MergeForwardNeverBypass bool `json:"merge_forward_never_bypass"`
 	// MergeForwardAnyoneMaySkip lets everyone who merges choose not to merge forward; otherwise only those who may change the branching model

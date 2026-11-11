@@ -2377,6 +2377,9 @@ func ViewIssue(ctx *context.Context) {
 	if ctx.Written() {
 		return
 	}
+	if prepareIssueBranches(ctx, issue); ctx.Written() {
+		return
+	}
 
 	tags, err := repo_model.GetTagNamesByRepoID(ctx, ctx.Repo.Repository.ID)
 	if err != nil {

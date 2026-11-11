@@ -510,7 +510,7 @@ func (c *cascade) stop(ctx context.Context, steps []issues_model.MergeForwardSte
 
 // BranchName is the branch the pull request of a stopped step comes from.
 func BranchName(pr *issues_model.PullRequest, target string) string {
-	return fmt.Sprintf("automerge/pr-%d/%s", pr.Index, target)
+	return branchworkflow.MergeForwardBranchName(pr.Index, target)
 }
 
 // openPull opens the pull request of a stopped step, or returns the one already open for it. The lookup and the

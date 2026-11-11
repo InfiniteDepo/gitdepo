@@ -28,6 +28,7 @@ import (
 	repo_module "forgejo.org/modules/repository"
 	"forgejo.org/modules/sync"
 	"forgejo.org/modules/util"
+	"forgejo.org/services/branchworkflow"
 	notify_service "forgejo.org/services/notify"
 
 	"xorm.io/builder"
@@ -212,6 +213,9 @@ func transferOwnership(ctx context.Context, doer *user_model.User, newOwnerName 
 	// rules unless the key still writes to the repository (its own deploy key, or a key of the new owner).
 	if err := db.DeleteBeans(ctx, &asymkey_model.OrgDeployKeyRepo{RepoID: repo.ID}); err != nil {
 		return fmt.Errorf("delete org deploy key selections: %w", err)
+	}
+	if err := branchworkflow.DropExemptTeams(ctx, repo); err != nil {
+		return fmt.Errorf("DropExemptTeams: %w", err)
 	}
 	if err := db.DeleteBeans(ctx, &actions_model.ActionEnvironmentRepo{RepoID: repo.ID}); err != nil {
 		return fmt.Errorf("delete environment selections: %w", err)

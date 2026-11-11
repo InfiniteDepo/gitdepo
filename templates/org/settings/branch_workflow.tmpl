@@ -44,6 +44,7 @@
 				<p class="help">{{ctx.Locale.Tr "repo.settings.branching_model.production_branch_desc"}}</p>
 			</div>
 			{{template "shared/branching_model_types" .}}
+			{{template "shared/branching_model_naming" .}}
 			<div class="field">
 				<div class="ui checkbox">
 					<input id="merge_forward" name="merge_forward" type="checkbox" {{if .MergeForward}}checked{{end}}>

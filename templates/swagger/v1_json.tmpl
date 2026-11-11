@@ -34083,6 +34083,42 @@
       },
       "x-go-package": "forgejo.org/modules/structs"
     },
+    "BranchNaming": {
+      "description": "BranchNaming is what the branching model asks of the names of new branches",
+      "type": "object",
+      "properties": {
+        "exceptions": {
+          "description": "Exceptions are glob patterns of branch names that are allowed anyway: case-sensitive, matched against the whole name, at most 20",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-name": "Exceptions"
+        },
+        "exempt_teams": {
+          "description": "ExemptTeams are teams of the organization whose members are exempt, like ExemptUsers",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-name": "ExemptTeams"
+        },
+        "exempt_users": {
+          "description": "ExemptUsers may create any branch name; every such creation is recorded in the audit log. Deploy keys, tokens, Actions and administrators are exempt only when named here",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-name": "ExemptUsers"
+        },
+        "require_branch_type": {
+          "description": "RequireBranchType refuses new branches and renames whose name is not a branch type or release prefix followed by a name, the development, production, default or a base branch, or an exception; it needs an enabled type, a release prefix or an exception",
+          "type": "boolean",
+          "x-go-name": "RequireBranchType"
+        }
+      },
+      "x-go-package": "forgejo.org/modules/structs"
+    },
     "BranchProtection": {
       "description": "BranchProtection represents a branch protection for a repository",
       "type": "object",
@@ -34388,6 +34424,9 @@
       "description": "BranchingModel names the development branch and the release branch prefixes",
       "type": "object",
       "properties": {
+        "branch_naming": {
+          "$ref": "#/definitions/BranchNaming"
+        },
         "default_pr_target": {
           "description": "DefaultPRTarget is the branch new pull requests target when their branch has no type and the request names no base; empty is the default branch",
           "type": "string",
@@ -38541,6 +38580,9 @@
       "description": "EditRepoBranchingModelOption options to change the branching model of a repository",
       "type": "object",
       "properties": {
+        "branch_naming": {
+          "$ref": "#/definitions/BranchNaming"
+        },
         "default_pr_target": {
           "description": "DefaultPRTarget is the branch new pull requests target when their branch has no type and the request names no base; empty is the default branch",
           "type": "string",
@@ -41568,6 +41610,9 @@
       "description": "OrgBranchingModel represents the branching model of an organization, and the body to change it",
       "type": "object",
       "properties": {
+        "branch_naming": {
+          "$ref": "#/definitions/BranchNaming"
+        },
         "default_pr_target": {
           "description": "DefaultPRTarget is the branch new pull requests target when their branch has no type and the request names no base; empty is the default branch",
           "type": "string",

@@ -21,6 +21,7 @@ import (
 	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
 	"forgejo.org/routers/api/v1/utils"
+	"forgejo.org/services/branchworkflow"
 	"forgejo.org/services/context"
 	"forgejo.org/services/convert"
 	pull_service "forgejo.org/services/pull"
@@ -261,6 +262,8 @@ func CreateBranch(ctx *context.APIContext) {
 			ctx.Error(http.StatusConflict, "", "The branch with the same name already exists.")
 		} else if git_model.IsErrBranchNameReserved(err) {
 			ctx.Error(http.StatusUnprocessableEntity, "", "The branch name is reserved.")
+		} else if refused, ok := errors.AsType[branchworkflow.ErrBranchTypeRequired](err); ok {
+			ctx.Error(http.StatusUnprocessableEntity, "", refused.Text(ctx.Locale))
 		} else {
 			ctx.Error(http.StatusInternalServerError, "CreateNewBranchFromCommit", err)
 		}
@@ -456,6 +459,9 @@ func UpdateBranch(ctx *context.APIContext) {
 		return
 	} else if git_model.IsErrBranchNameReserved(err) {
 		ctx.Error(http.StatusUnprocessableEntity, "", "The branch name is reserved.")
+		return
+	} else if refused, ok := errors.AsType[branchworkflow.ErrBranchTypeRequired](err); ok {
+		ctx.Error(http.StatusUnprocessableEntity, "", refused.Text(ctx.Locale))
 		return
 	} else if err != nil {
 		ctx.Error(http.StatusInternalServerError, "RenameBranch", err)

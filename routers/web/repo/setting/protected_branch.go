@@ -6,6 +6,7 @@ package setting
 import (
 	"errors"
 	"fmt"
+	"html"
 	"html/template"
 	"net/http"
 	"net/url"
@@ -27,6 +28,7 @@ import (
 	"forgejo.org/modules/util"
 	"forgejo.org/modules/web"
 	"forgejo.org/routers/web/repo"
+	"forgejo.org/services/branchworkflow"
 	"forgejo.org/services/context"
 	"forgejo.org/services/convert"
 	"forgejo.org/services/forms"
@@ -435,6 +437,9 @@ func RenameBranchPost(ctx *context.Context) {
 			ctx.Redirect(fmt.Sprintf("%s/branches", ctx.Repo.RepoLink))
 		} else if git_model.IsErrBranchNameReserved(err) {
 			ctx.Flash.Error(ctx.Tr("repo.branch.name_reserved", form.To))
+			ctx.Redirect(fmt.Sprintf("%s/branches", ctx.Repo.RepoLink))
+		} else if refused, ok := errors.AsType[branchworkflow.ErrBranchTypeRequired](err); ok {
+			ctx.Flash.Error(html.EscapeString(refused.Text(ctx.Locale)))
 			ctx.Redirect(fmt.Sprintf("%s/branches", ctx.Repo.RepoLink))
 		} else {
 			ctx.ServerError("RenameBranch", err)

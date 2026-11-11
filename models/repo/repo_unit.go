@@ -270,6 +270,14 @@ type BranchingModel struct {
 	Types []BranchType `json:",omitempty"`
 	// DefaultPRTarget is the branch new pull requests target when their branch has no type; "" is the default branch
 	DefaultPRTarget string `json:",omitempty"`
+	// RequireBranchType refuses new branches (and renames) whose name is neither a type or release prefix, the
+	// development, production, default or a base branch, nor one of BranchExceptions, unless the user is exempt
+	RequireBranchType bool `json:",omitempty"`
+	// BranchExceptions are glob patterns (case-sensitive, matched against the whole branch name) of allowed names
+	BranchExceptions []string `json:",omitempty"`
+	// ExemptUserIDs and ExemptTeamIDs may create any branch name; deploy keys, tokens, Actions and admins never are, unless named
+	ExemptUserIDs []int64 `json:",omitempty"`
+	ExemptTeamIDs []int64 `json:",omitempty"`
 }
 
 // The branch a branch type is created from and its pull requests target.

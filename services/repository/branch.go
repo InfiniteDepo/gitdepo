@@ -64,8 +64,8 @@ type Branch struct {
 	MergeMovedOn      bool
 }
 
-// LoadBranches loads branches from the repository limited by page & pageSize.
-func LoadBranches(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, gitRepo *git.Repository, isDeletedBranch optional.Option[bool], keyword string, page, pageSize int) (*Branch, []*Branch, int64, error) {
+// LoadBranches loads branches from the repository limited by page & pageSize, and by the condition extra on the branch table if it is set.
+func LoadBranches(ctx context.Context, doer *user_model.User, repo *repo_model.Repository, gitRepo *git.Repository, isDeletedBranch optional.Option[bool], keyword string, extra builder.Cond, page, pageSize int) (*Branch, []*Branch, int64, error) {
 	defaultDBBranch, err := git_model.GetBranch(ctx, repo.ID, repo.DefaultBranch)
 	if err != nil {
 		return nil, nil, 0, err
@@ -79,6 +79,7 @@ func LoadBranches(ctx context.Context, doer *user_model.User, repo *repo_model.R
 			PageSize: pageSize,
 		},
 		Keyword:            keyword,
+		Cond:               extra,
 		ExcludeBranchNames: []string{repo.DefaultBranch},
 	}
 
@@ -347,6 +348,11 @@ func CreateNewBranchFromCommit(ctx context.Context, doer *user_model.User, repo 
 		return err
 	}
 
+	// the pre-receive hook checks (and records an exemption) again; this gives the caller the error, not a rejected push
+	if _, err := branchworkflow.CheckNewBranch(ctx, repo, doer.ID, false, branchName); err != nil {
+		return err
+	}
+
 	if err := git.Push(ctx, repo.RepoPath(), git.PushOptions{
 		Remote: repo.RepoPath(),
 		Branch: fmt.Sprintf("%s:%s%s", commitID, git.BranchPrefix, branchName),
@@ -398,9 +404,24 @@ func RenameBranch(ctx context.Context, repo *repo_model.Repository, doer *user_m
 		}
 	}
 
+	// a rename makes a new name, which the model's required branch type applies to (the default branch is exempt, as above)
+	exempt := false
+	if from != repo.DefaultBranch {
+		var err error
+		if exempt, err = branchworkflow.CheckNewBranch(ctx, repo, doer.ID, false, to); err != nil {
+			return "", err
+		}
+	}
+
 	renamedDefault := false
 	if err := git_model.RenameBranch(ctx, repo, from, to, func(ctx context.Context, isDefault bool) error {
 		renamedDefault = isDefault
+		// recorded in the rename's transaction: a rename that fails leaves no entry
+		if exempt {
+			if err := branchworkflow.RecordNamingExempt(ctx, repo, to, "rename"); err != nil {
+				return err
+			}
+		}
 		err2 := gitRepo.RenameBranch(from, to)
 		if err2 != nil {
 			return err2

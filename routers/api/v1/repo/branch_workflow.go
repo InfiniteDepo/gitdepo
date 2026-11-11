@@ -113,6 +113,17 @@ func EditBranchWorkflow(ctx *context.APIContext) {
 	}
 }
 
+// namingFor returns the naming fields of m; the exempt users and teams only to a repository admin, who can edit them
+// (an empty list to everyone else).
+func namingFor(ctx *context.APIContext, m *repo_model.BranchingModel) (api.BranchNaming, error) {
+	if !ctx.Repo().IsAdmin() {
+		c := *m
+		c.ExemptUserIDs, c.ExemptTeamIDs = nil, nil
+		m = &c
+	}
+	return branchworkflow.NamingToAPI(ctx, m)
+}
+
 func renderBranchingModel(ctx *context.APIContext) {
 	repo := ctx.Repo().Repository
 	eff, err := branchworkflow.GetEffectiveModel(ctx, repo)
@@ -125,6 +136,11 @@ func renderBranchingModel(ctx *context.APIContext) {
 		ctx.ServerError("GetChain", err)
 		return
 	}
+	naming, err := namingFor(ctx, &eff.Model)
+	if err != nil {
+		ctx.ServerError("NamingToAPI", err)
+		return
+	}
 	res := &api.RepoBranchingModel{
 		Inherit: eff.Configured == nil,
 		Effective: api.BranchingModel{
@@ -133,6 +149,7 @@ func renderBranchingModel(ctx *context.APIContext) {
 			ProductionBranch:          eff.Model.ProductionBranch,
 			Types:                     branchworkflow.TypesToAPI(eff.Model.Types),
 			DefaultPRTarget:           eff.Model.DefaultPRTarget,
+			BranchNaming:              naming,
 			MergeForward:              eff.Model.MergeForward,
 			MergeForwardNeverBypass:   eff.Model.MergeForwardNeverBypass,
 			MergeForwardAnyoneMaySkip: eff.Model.MergeForwardAnyoneMaySkip,
@@ -143,7 +160,12 @@ func renderBranchingModel(ctx *context.APIContext) {
 		IgnoredBranches: append([]string{}, chain.Ignored...),
 	}
 	if eff.Configured != nil {
-		res.Own = &api.BranchingModel{DevelopmentBranch: eff.Configured.DevelopmentBranch, ReleasePrefixes: append([]string{}, eff.Configured.ReleasePrefixes...), ProductionBranch: eff.Configured.ProductionBranch, Types: branchworkflow.TypesToAPI(eff.Configured.Types), DefaultPRTarget: eff.Configured.DefaultPRTarget, MergeForward: eff.Configured.MergeForward, MergeForwardNeverBypass: eff.Configured.MergeForwardNeverBypass, MergeForwardAnyoneMaySkip: eff.Configured.MergeForwardAnyoneMaySkip}
+		ownNaming, err := namingFor(ctx, eff.Configured)
+		if err != nil {
+			ctx.ServerError("NamingToAPI", err)
+			return
+		}
+		res.Own = &api.BranchingModel{BranchNaming: ownNaming, DevelopmentBranch: eff.Configured.DevelopmentBranch, ReleasePrefixes: append([]string{}, eff.Configured.ReleasePrefixes...), ProductionBranch: eff.Configured.ProductionBranch, Types: branchworkflow.TypesToAPI(eff.Configured.Types), DefaultPRTarget: eff.Configured.DefaultPRTarget, MergeForward: eff.Configured.MergeForward, MergeForwardNeverBypass: eff.Configured.MergeForwardNeverBypass, MergeForwardAnyoneMaySkip: eff.Configured.MergeForwardAnyoneMaySkip}
 	}
 	if eff.Locked {
 		res.LockedBy = eff.SetBy
@@ -218,7 +240,13 @@ func EditBranchingModel(ctx *context.APIContext) {
 	if !form.Inherit {
 		model = &repo_model.BranchingModel{DevelopmentBranch: form.DevelopmentBranch, ReleasePrefixes: form.ReleasePrefixes, ProductionBranch: form.ProductionBranch, Types: branchworkflow.TypesFromAPI(form.Types), DefaultPRTarget: form.DefaultPRTarget, MergeForward: form.MergeForward, MergeForwardNeverBypass: form.MergeForwardNeverBypass, MergeForwardAnyoneMaySkip: form.MergeForwardAnyoneMaySkip}
 	}
-	err := branchworkflow.SetRepoModel(ctx, ctx.Repo().Repository, model)
+	var err error
+	if model != nil {
+		err = branchworkflow.ApplyNaming(ctx, ctx.Doer(), ctx.Repo().Owner, model, form.BranchNaming)
+	}
+	if err == nil {
+		err = branchworkflow.SetRepoModel(ctx, ctx.Repo().Repository, model)
+	}
 	if e, ok := branchworkflow.IsInvalidBranchingModel(err); ok {
 		// the cause code is its own field, the message is for people
 		ctx.JSON(http.StatusUnprocessableEntity, map[string]string{"message": e.Error(), "reason": e.Reason, "url": setting.API.SwaggerURL})
