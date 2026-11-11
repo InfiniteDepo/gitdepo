@@ -184,15 +184,15 @@ func TestEnvironmentLifecycle(t *testing.T) {
 	require.NoError(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 2, Name: "Production"}, nil), "the name is per repository")
 
 	for _, name := range []string{"production", "PRODUCTION", " Production "} {
-		found, err := GetRepoEnvironmentByName(ctx, 1, name)
+		found, err := GetEnvironmentByName(ctx, 0, 1, name)
 		require.NoError(t, err, name)
 		assert.Equal(t, prod.ID, found.ID, name)
 		assert.Equal(t, "Production", found.Name)
 		assert.Equal(t, []EnvironmentRefPattern{{EnvironmentPatternBranch, "main"}}, found.RefPatterns)
 	}
-	_, err := GetRepoEnvironmentByName(ctx, 3, "production")
+	_, err := GetEnvironmentByName(ctx, 0, 3, "production")
 	require.ErrorIs(t, err, ErrEnvironmentNotFound)
-	_, err = GetRepoEnvironmentByID(ctx, 2, prod.ID)
+	_, err = GetEnvironmentByID(ctx, 0, 2, prod.ID)
 	require.ErrorIs(t, err, ErrEnvironmentNotFound, "another repository's environment")
 
 	// auto-create: no rules, and a twin finds the environment that exists
@@ -216,12 +216,12 @@ func TestEnvironmentLifecycle(t *testing.T) {
 	_, err = GetOrCreateRepoEnvironment(ctx, 1, strings.Repeat("a", 256))
 	require.ErrorIs(t, err, util.ErrInvalidArgument)
 
-	envs, count, err := FindRepoEnvironments(ctx, 1, db.ListOptions{})
+	envs, count, err := FindEnvironments(ctx, 0, 1, db.ListOptions{})
 	require.NoError(t, err)
 	require.Len(t, envs, 2)
 	assert.EqualValues(t, 2, count)
 	assert.Equal(t, "Production", envs[0].Name)
-	envs, count, err = FindRepoEnvironments(ctx, 1, db.ListOptions{Page: 2, PageSize: 1})
+	envs, count, err = FindEnvironments(ctx, 0, 1, db.ListOptions{Page: 2, PageSize: 1})
 	require.NoError(t, err)
 	require.Len(t, envs, 1)
 	assert.EqualValues(t, 2, count, "the count is of every page")
@@ -230,7 +230,7 @@ func TestEnvironmentLifecycle(t *testing.T) {
 	// an update changes the rules, not the name's identity
 	prod.RefPolicy, prod.RefPatterns, prod.WaitTimerMinutes, prod.Name = EnvironmentRefProtectedBranches, nil, 10, "PRODUCTION"
 	require.NoError(t, UpdateEnvironment(ctx, prod, nil))
-	stored, err := GetRepoEnvironmentByID(ctx, 1, prod.ID)
+	stored, err := GetEnvironmentByID(ctx, 0, 1, prod.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "PRODUCTION", stored.Name)
 	assert.Equal(t, 10, stored.WaitTimerMinutes)
@@ -241,15 +241,15 @@ func TestEnvironmentLifecycle(t *testing.T) {
 	require.ErrorIs(t, UpdateEnvironment(ctx, &renamed, nil), util.ErrInvalidArgument)
 
 	// secrets and variables of an environment go with it; the deployments stay
-	secret, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 1, prod.ID, "token", "s3cr3t-value")
+	secret, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, 1, prod.ID, "token", "s3cr3t-value")
 	require.NoError(t, err)
-	_, err = InsertEnvironmentVariable(ctx, 1, prod.ID, "color", "blue")
+	_, err = InsertEnvironmentVariable(ctx, 0, 1, prod.ID, "color", "blue")
 	require.NoError(t, err)
-	other, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 1, staging.ID, "token", "other")
+	other, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, 1, staging.ID, "token", "other")
 	require.NoError(t, err)
 	require.NoError(t, db.Insert(ctx, &ActionDeployment{RepoID: 1, EnvironmentID: prod.ID, JobID: 1, Attempt: 1, Status: DeploymentReleased}))
 	require.NoError(t, DeleteEnvironment(ctx, prod, func(context.Context) error { return nil }))
-	_, err = GetRepoEnvironmentByID(ctx, 1, prod.ID)
+	_, err = GetEnvironmentByID(ctx, 0, 1, prod.ID)
 	require.ErrorIs(t, err, ErrEnvironmentNotFound)
 	unittest.AssertNotExistsBean(t, &secret_model.Secret{ID: secret.ID})
 	unittest.AssertExistsAndLoadBean(t, &secret_model.Secret{ID: other.ID})
@@ -319,7 +319,7 @@ func TestEnvironmentConcurrentCreate(t *testing.T) {
 func TestEnvironmentLimit(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	ctx := auditCtx()
-	for i := range MaxEnvironmentsPerRepo {
+	for i := range MaxEnvironments {
 		_, err := GetOrCreateRepoEnvironment(ctx, 1, fmt.Sprint("env-", i))
 		require.NoError(t, err)
 	}
@@ -342,17 +342,17 @@ func TestEnvironmentRowsStayOutOfOtherLists(t *testing.T) {
 
 	_, err = secret_model.InsertEncryptedSecret(ctx, 0, 0, 1, "SHARED", "repo-value")
 	require.NoError(t, err)
-	_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, 1, env.ID, "SHARED", "env-value")
+	_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, 1, env.ID, "SHARED", "env-value")
 	require.NoError(t, err, "the same name in the repository and in its environment")
-	_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, 1, env.ID, "ENV_ONLY", "env-value")
+	_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, 1, env.ID, "ENV_ONLY", "env-value")
 	require.NoError(t, err)
-	_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, 1, env.ID, "ENV_ONLY", "again")
+	_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, 1, env.ID, "ENV_ONLY", "again")
 	require.Error(t, err, "once per environment")
 	_, err = InsertVariable(ctx, 0, 0, 1, "SHARED", "repo-value")
 	require.NoError(t, err)
-	_, err = InsertEnvironmentVariable(ctx, 1, env.ID, "SHARED", "env-value")
+	_, err = InsertEnvironmentVariable(ctx, 0, 1, env.ID, "SHARED", "env-value")
 	require.NoError(t, err)
-	_, err = InsertEnvironmentVariable(ctx, 1, env.ID, "ENV_ONLY", "env-value")
+	_, err = InsertEnvironmentVariable(ctx, 0, 1, env.ID, "ENV_ONLY", "env-value")
 	require.NoError(t, err)
 
 	repoSecrets, err := db.Find[secret_model.Secret](ctx, secret_model.FindSecretsOptions{RepoID: 1})
@@ -371,10 +371,10 @@ func TestEnvironmentRowsStayOutOfOtherLists(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"SHARED": "repo-value"}, vars)
 
-	envSecrets, err := secret_model.FetchEnvironmentSecrets(ctx, 1, env.ID)
+	envSecrets, err := secret_model.FetchEnvironmentSecrets(ctx, 0, 1, env.ID)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"SHARED": "env-value", "ENV_ONLY": "env-value"}, envSecrets)
-	other, err := secret_model.FetchEnvironmentSecrets(ctx, 2, env.ID)
+	other, err := secret_model.FetchEnvironmentSecrets(ctx, 0, 2, env.ID)
 	require.NoError(t, err)
 	assert.Empty(t, other, "an environment's secrets are read with its own repository")
 
@@ -386,9 +386,9 @@ func TestEnvironmentRowsStayOutOfOtherLists(t *testing.T) {
 	require.Len(t, envSecret, 1)
 	_, err = secret_model.GetSecretByID(ctx, 0, 0, 1, envSecret[0].ID)
 	require.Error(t, err, "the repository secret endpoints can't reach an environment secret")
-	_, err = secret_model.GetEnvironmentSecretByID(ctx, 1, env.ID, envSecret[0].ID)
+	_, err = secret_model.GetEnvironmentSecretByID(ctx, 0, 1, env.ID, envSecret[0].ID)
 	require.NoError(t, err)
-	_, err = secret_model.GetEnvironmentSecretByID(ctx, 1, env.ID, repoSecrets[0].ID)
+	_, err = secret_model.GetEnvironmentSecretByID(ctx, 0, 1, env.ID, repoSecrets[0].ID)
 	require.Error(t, err)
 
 	envVar, err := FindVariables(ctx, FindVariablesOpts{RepoID: 1, EnvironmentID: env.ID})
@@ -415,17 +415,17 @@ func TestEnvironmentSecretVariableAudit(t *testing.T) {
 	require.NoError(t, err)
 	since := auditMax(t)
 
-	secret, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 1, env.ID, "token", "first-secret-value")
+	secret, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, 1, env.ID, "token", "first-secret-value")
 	require.NoError(t, err)
 	secret.SetData("second-secret-value")
 	require.NoError(t, secret_model.UpdateSecret(ctx, secret, true))
 	require.NoError(t, secret_model.DeleteSecret(ctx, secret))
-	variable, err := InsertEnvironmentVariable(ctx, 1, env.ID, "color", "first-variable-value")
+	variable, err := InsertEnvironmentVariable(ctx, 0, 1, env.ID, "color", "first-variable-value")
 	require.NoError(t, err)
 	variable.Data = "second-variable-value"
 	_, err = UpdateVariable(ctx, variable)
 	require.NoError(t, err)
-	_, err = DeleteEnvironmentVariable(ctx, variable.ID, 1, env.ID)
+	_, err = DeleteEnvironmentVariable(ctx, variable.ID, 0, 1, env.ID)
 	require.NoError(t, err)
 
 	var actions []string
@@ -452,45 +452,45 @@ func TestEnvironmentSecretVariableLimits(t *testing.T) {
 
 	big := strings.Repeat("x", secret_model.MaxValueSize+1)
 	fits := strings.Repeat("x", secret_model.MaxValueSize)
-	_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, 1, env.ID, "BIG", big)
+	_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, 1, env.ID, "BIG", big)
 	require.ErrorIs(t, err, util.ErrInvalidArgument)
 	_, err = secret_model.InsertEncryptedSecret(ctx, 0, 0, 1, "BIG", big)
 	require.ErrorIs(t, err, util.ErrInvalidArgument, "a repository secret too")
-	_, err = InsertEnvironmentVariable(ctx, 1, env.ID, "BIG", big)
+	_, err = InsertEnvironmentVariable(ctx, 0, 1, env.ID, "BIG", big)
 	require.ErrorIs(t, err, util.ErrInvalidArgument)
 	_, err = InsertVariable(ctx, 2, 0, 0, "BIG", big)
 	require.ErrorIs(t, err, util.ErrInvalidArgument, "an owner variable too")
-	v, err := InsertEnvironmentVariable(ctx, 1, env.ID, "FITS", fits)
+	v, err := InsertEnvironmentVariable(ctx, 0, 1, env.ID, "FITS", fits)
 	require.NoError(t, err)
 	v.Data = big
 	_, err = UpdateVariable(ctx, v)
 	require.ErrorIs(t, err, util.ErrInvalidArgument, "an update too")
 
 	for i := 1; i < secret_model.MaxPerEnvironment; i++ {
-		_, err := InsertEnvironmentVariable(ctx, 1, env.ID, fmt.Sprintf("V%d", i), "x")
+		_, err := InsertEnvironmentVariable(ctx, 0, 1, env.ID, fmt.Sprintf("V%d", i), "x")
 		require.NoError(t, err)
 	}
 	for i := range secret_model.MaxPerEnvironment {
-		_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 1, env.ID, fmt.Sprintf("S%d", i), "x")
+		_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, 1, env.ID, fmt.Sprintf("S%d", i), "x")
 		require.NoError(t, err)
 	}
-	_, err = InsertEnvironmentVariable(ctx, 1, env.ID, "ONE_MORE", "x")
+	_, err = InsertEnvironmentVariable(ctx, 0, 1, env.ID, "ONE_MORE", "x")
 	require.ErrorIs(t, err, util.ErrInvalidArgument)
-	_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, 1, env.ID, "ONE_MORE", "x")
+	_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, 1, env.ID, "ONE_MORE", "x")
 	require.ErrorIs(t, err, util.ErrInvalidArgument)
 	_, err = InsertVariable(ctx, 0, 0, 1, "ONE_MORE", "x")
 	require.NoError(t, err, "the repository level has no count cap")
 
 	t.Run("own act", func(t *testing.T) {
 		bare := t.Context() // no actor: can't be told from a delegated credential
-		_, err := InsertEnvironmentVariable(bare, 1, env.ID, "NOT_OWN", "x")
+		_, err := InsertEnvironmentVariable(bare, 0, 1, env.ID, "NOT_OWN", "x")
 		require.ErrorIs(t, err, audit_model.ErrNotOwnAct)
-		_, err = secret_model.InsertEncryptedEnvironmentSecret(bare, 1, env.ID, "NOT_OWN", "x")
+		_, err = secret_model.InsertEncryptedEnvironmentSecret(bare, 0, 1, env.ID, "NOT_OWN", "x")
 		require.ErrorIs(t, err, audit_model.ErrNotOwnAct)
 		v.Data = "y"
 		_, err = UpdateVariable(bare, v)
 		require.ErrorIs(t, err, audit_model.ErrNotOwnAct)
-		_, err = DeleteEnvironmentVariable(bare, v.ID, 1, env.ID)
+		_, err = DeleteEnvironmentVariable(bare, v.ID, 0, 1, env.ID)
 		require.ErrorIs(t, err, audit_model.ErrNotOwnAct)
 		require.ErrorIs(t, UpdateEnvironment(bare, env, nil), audit_model.ErrNotOwnAct)
 		require.ErrorIs(t, CreateEnvironment(bare, &ActionEnvironment{RepoID: 1, Name: "other"}, nil), audit_model.ErrNotOwnAct)
@@ -505,11 +505,11 @@ func TestEnvironmentNamesAreASCII(t *testing.T) {
 	require.NoError(t, unittest.PrepareTestDatabase())
 	ctx := auditCtx()
 	require.NoError(t, CreateEnvironment(ctx, &ActionEnvironment{RepoID: 1, Name: "Kprod"}, nil))
-	got, err := GetRepoEnvironmentByName(ctx, 1, "  kPROD ")
+	got, err := GetEnvironmentByName(ctx, 0, 1, "  kPROD ")
 	require.NoError(t, err)
 	assert.Equal(t, "Kprod", got.Name)
 	for _, name := range []string{"\u212aprod", "pr\u043ed", "Kprod\u00a0", ""} {
-		_, err := GetRepoEnvironmentByName(ctx, 1, name)
+		_, err := GetEnvironmentByName(ctx, 0, 1, name)
 		require.ErrorIs(t, err, ErrEnvironmentNotFound, name)
 		_, err = GetOrCreateRepoEnvironment(ctx, 1, name)
 		require.ErrorIs(t, err, util.ErrInvalidArgument, name)

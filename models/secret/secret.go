@@ -34,7 +34,8 @@ var (
 //  1. org/user level secret, OwnerID is org/user ID, GroupID and RepoID are 0
 //  2. repo level secret, OwnerID is 0 and RepoID is repo ID
 //  3. project level secret, OwnerID is the org ID, GroupID the project (repo_group) ID and RepoID is 0
-//  4. environment secret, OwnerID and GroupID are 0, RepoID is the repo ID and EnvironmentID the environment
+//  4. environment secret, GroupID is 0 and EnvironmentID the environment, with RepoID the repo ID (OwnerID 0) for an
+//     environment of a repository, OwnerID the org ID (RepoID 0) for an environment of an organization
 //
 // Please note that it's not acceptable to have both OwnerID and RepoID to be non-zero,
 // or it will be complicated to find secrets belonging to a specific owner.
@@ -73,9 +74,10 @@ func InsertEncryptedSecret(ctx context.Context, ownerID, groupID, repoID int64, 
 	return insertEncryptedSecret(ctx, ownerID, groupID, repoID, 0, name, data)
 }
 
-// InsertEncryptedEnvironmentSecret is InsertEncryptedSecret for a secret of an environment of the repository.
-func InsertEncryptedEnvironmentSecret(ctx context.Context, repoID, environmentID int64, name, data string) (*Secret, error) {
-	return insertEncryptedSecret(ctx, 0, 0, repoID, environmentID, name, data)
+// InsertEncryptedEnvironmentSecret is InsertEncryptedSecret for a secret of an environment of the repository (ownerID
+// 0) or of the organization (repoID 0).
+func InsertEncryptedEnvironmentSecret(ctx context.Context, ownerID, repoID, environmentID int64, name, data string) (*Secret, error) {
+	return insertEncryptedSecret(ctx, ownerID, 0, repoID, environmentID, name, data)
 }
 
 func insertEncryptedSecret(ctx context.Context, ownerID, groupID, repoID, environmentID int64, name, data string) (*Secret, error) {
@@ -109,7 +111,7 @@ func insertEncryptedSecret(ctx context.Context, ownerID, groupID, repoID, enviro
 		if err := LockLevel(ctx, secret.OwnerID, secret.GroupID, secret.RepoID, secret.EnvironmentID); err != nil {
 			return err
 		}
-		if err := CheckEnvironmentCount(ctx, "secret", repoID, environmentID); err != nil {
+		if err := CheckEnvironmentCount(ctx, "secret", secret.OwnerID, secret.RepoID, environmentID); err != nil {
 			return err
 		}
 		if err := db.Insert(ctx, secret); err != nil {
@@ -121,7 +123,7 @@ func insertEncryptedSecret(ctx context.Context, ownerID, groupID, repoID, enviro
 			return err
 		}
 		if environmentID != 0 {
-			return recordSecret(ctx, audit_model.LevelActions{Repo: "repo.actions_env_secret.created"}, secret, nil)
+			return recordSecret(ctx, audit_model.LevelActions{Repo: "repo.actions_env_secret.created", Org: "org.actions_env_secret.created"}, secret, nil)
 		}
 		return recordSecret(ctx, audit_model.LevelActions{Repo: "repo.actions_secret.created", Org: "org.actions_secret.created", Account: "account.actions_secret.created"}, secret, nil)
 	})
@@ -134,11 +136,11 @@ var ErrEnvironmentNotFound = util.NewNotExistErrorf("environment does not exist"
 // and returns ErrEnvironmentNotFound if it is gone. It is the one lock of an environment: every write of
 // its secrets, variables, reviewers and rules and its delete take it first, so none can leave rows behind or merge
 // with another. Call it inside a transaction.
-func LockEnvironment(ctx context.Context, repoID, id int64) error {
-	if _, err := db.Exec(ctx, "UPDATE `action_environment` SET repo_id = repo_id WHERE repo_id = ? AND id = ?", repoID, id); err != nil {
+func LockEnvironment(ctx context.Context, ownerID, repoID, id int64) error {
+	if _, err := db.Exec(ctx, "UPDATE `action_environment` SET repo_id = repo_id WHERE owner_id = ? AND repo_id = ? AND id = ?", ownerID, repoID, id); err != nil {
 		return err
 	}
-	if ok, err := db.GetEngine(ctx).Table("action_environment").Where("repo_id = ? AND id = ?", repoID, id).Exist(); err != nil {
+	if ok, err := db.GetEngine(ctx).Table("action_environment").Where("owner_id = ? AND repo_id = ? AND id = ?", ownerID, repoID, id).Exist(); err != nil {
 		return err
 	} else if !ok {
 		return ErrEnvironmentNotFound
@@ -168,7 +170,7 @@ func DeleteSecret(ctx context.Context, s *Secret) error {
 		}
 		actions := audit_model.LevelActions{Repo: "repo.actions_secret.deleted", Org: "org.actions_secret.deleted", Account: "account.actions_secret.deleted"}
 		if s.EnvironmentID != 0 {
-			actions = audit_model.LevelActions{Repo: "repo.actions_env_secret.deleted"}
+			actions = audit_model.LevelActions{Repo: "repo.actions_env_secret.deleted", Org: "org.actions_env_secret.deleted"}
 		}
 		if err := recordSecret(ctx, actions, s, nil); err != nil {
 			return err
@@ -186,7 +188,7 @@ func LockLevel(ctx context.Context, ownerID, groupID, repoID, environmentID int6
 		if err := audit_model.CheckOwnAct(ctx); err != nil {
 			return err
 		}
-		return LockEnvironment(ctx, repoID, environmentID)
+		return LockEnvironment(ctx, ownerID, repoID, environmentID)
 	}
 	return LockGroup(ctx, ownerID, groupID)
 }
@@ -265,9 +267,10 @@ func GetSecretByID(ctx context.Context, ownerID, groupID, repoID, id int64) (*Se
 	return getSecretByID(ctx, ownerID, groupID, repoID, 0, id)
 }
 
-// GetEnvironmentSecretByID returns the secret with that ID of an environment of the repository.
-func GetEnvironmentSecretByID(ctx context.Context, repoID, environmentID, id int64) (*Secret, error) {
-	return getSecretByID(ctx, 0, 0, repoID, environmentID, id)
+// GetEnvironmentSecretByID returns the secret with that ID of an environment of the repository (ownerID 0) or of the
+// organization (repoID 0).
+func GetEnvironmentSecretByID(ctx context.Context, ownerID, repoID, environmentID, id int64) (*Secret, error) {
+	return getSecretByID(ctx, ownerID, 0, repoID, environmentID, id)
 }
 
 func getSecretByID(ctx context.Context, ownerID, groupID, repoID, environmentID, id int64) (*Secret, error) {
@@ -317,7 +320,7 @@ func UpdateSecret(ctx context.Context, secret *Secret, valueChanged bool, column
 			data["value_changed"] = valueChanged
 			actions := audit_model.LevelActions{Repo: "repo.actions_secret.updated", Org: "org.actions_secret.updated", Account: "account.actions_secret.updated"}
 			if secret.EnvironmentID != 0 {
-				actions = audit_model.LevelActions{Repo: "repo.actions_env_secret.updated"}
+				actions = audit_model.LevelActions{Repo: "repo.actions_env_secret.updated", Org: "org.actions_env_secret.updated"}
 			}
 			if err := recordSecret(ctx, actions, secret, data); err != nil {
 				return err
@@ -369,10 +372,10 @@ func FetchActionSecrets(ctx context.Context, ownerID, groupID, repoID int64) (ma
 	return secrets, nil
 }
 
-// FetchEnvironmentSecrets returns the secrets of an environment of the repository. The caller has checked that the
-// job it is for passed the environment's gate.
-func FetchEnvironmentSecrets(ctx context.Context, repoID, environmentID int64) (map[string]string, error) {
-	rows, err := db.Find[Secret](ctx, FindSecretsOptions{RepoID: repoID, EnvironmentID: environmentID})
+// FetchEnvironmentSecrets returns the secrets of an environment of the repository (ownerID 0) or of the organization
+// (repoID 0). The caller has checked that the job it is for passed the environment's gate.
+func FetchEnvironmentSecrets(ctx context.Context, ownerID, repoID, environmentID int64) (map[string]string, error) {
+	rows, err := db.Find[Secret](ctx, FindSecretsOptions{OwnerID: ownerID, RepoID: repoID, EnvironmentID: environmentID})
 	if err != nil {
 		log.Error("find secrets of environment %v: %v", environmentID, err)
 		return nil, err
@@ -414,11 +417,11 @@ func ValidateValue(data string) error {
 
 // CheckEnvironmentCount refuses one more row of table (secret or action_variable) in an environment that holds
 // MaxPerEnvironment; call it under the environment's lock.
-func CheckEnvironmentCount(ctx context.Context, table string, repoID, environmentID int64) error {
+func CheckEnvironmentCount(ctx context.Context, table string, ownerID, repoID, environmentID int64) error {
 	if environmentID == 0 {
 		return nil
 	}
-	if n, err := db.GetEngine(ctx).Table(table).Where("repo_id = ? AND environment_id = ?", repoID, environmentID).Count(); err != nil {
+	if n, err := db.GetEngine(ctx).Table(table).Where("owner_id = ? AND repo_id = ? AND environment_id = ?", ownerID, repoID, environmentID).Count(); err != nil {
 		return err
 	} else if n >= MaxPerEnvironment {
 		return ErrEnvironmentFull

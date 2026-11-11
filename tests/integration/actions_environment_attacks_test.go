@@ -266,7 +266,7 @@ func TestActionsEnvironmentReviewAttacks(t *testing.T) {
 		// ---- D. Environment secrets stay out of a job that reads secrets dynamically, even after approval. ----
 		t.Run("D dynamic secret access gets no environment secrets", func(t *testing.T) {
 			e := newEnv("dyn", []int64{user4.ID}, nil)
-			_, err := secret_model.InsertEncryptedEnvironmentSecret(sctx, repo.ID, e.ID, "ENV_KEY", "top-secret")
+			_, err := secret_model.InsertEncryptedEnvironmentSecret(sctx, 0, repo.ID, e.ID, "ENV_KEY", "top-secret")
 			require.NoError(t, err)
 			run, job := pushOneJob("rv-f", "dyn", "echo ${{ toJSON(secrets) }}")
 			require.Equal(t, actions_model.DeploymentWaitingReview, getDeployment(job, 1).Status)

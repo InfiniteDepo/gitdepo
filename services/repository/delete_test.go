@@ -47,9 +47,9 @@ func TestDeleteRepository(t *testing.T) {
 		otherEnv := &actions_model.ActionEnvironment{RepoID: other.ID, Name: "prod"}
 		require.NoError(t, actions_model.CreateEnvironment(ctx, otherEnv, nil))
 		for _, e := range []*actions_model.ActionEnvironment{env, otherEnv} {
-			_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, e.RepoID, e.ID, "TOKEN", "s3cr3t")
+			_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, e.RepoID, e.ID, "TOKEN", "s3cr3t")
 			require.NoError(t, err)
-			_, err = actions_model.InsertEnvironmentVariable(ctx, e.RepoID, e.ID, "COLOR", "blue")
+			_, err = actions_model.InsertEnvironmentVariable(ctx, 0, e.RepoID, e.ID, "COLOR", "blue")
 			require.NoError(t, err)
 			require.NoError(t, db.Insert(ctx, &actions_model.ActionDeployment{RepoID: e.RepoID, EnvironmentID: e.ID, JobID: e.RepoID, Attempt: 1}))
 		}

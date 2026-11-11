@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"forgejo.org/models"
+	actions_model "forgejo.org/models/actions"
 	"forgejo.org/models/organization"
 	"forgejo.org/models/perm"
 	access_model "forgejo.org/models/perm/access"
@@ -131,7 +132,7 @@ func Transfer(ctx *context.APIContext) {
 			return
 		}
 
-		if repo_model.IsErrRepoAlreadyExist(err) {
+		if repo_model.IsErrRepoAlreadyExist(err) || errors.Is(err, actions_model.ErrEnvironmentTwin) {
 			ctx.Error(http.StatusUnprocessableEntity, "StartRepositoryTransfer", err)
 			return
 		}
@@ -188,6 +189,10 @@ func AcceptTransfer(ctx *context.APIContext) {
 	}
 	if organization.IsErrOrgArchived(err) || errors.As(err, &repo_module.ErrPersonalRepoPolicy{}) || errors.Is(err, util.ErrPermissionDenied) {
 		ctx.Error(http.StatusForbidden, "acceptOrRejectRepoTransfer", err)
+		return
+	}
+	if errors.Is(err, actions_model.ErrEnvironmentTwin) {
+		ctx.Error(http.StatusUnprocessableEntity, "acceptOrRejectRepoTransfer", err)
 		return
 	}
 	if err != nil {

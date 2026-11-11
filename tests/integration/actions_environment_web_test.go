@@ -87,7 +87,7 @@ func TestActionsEnvironmentsWeb(t *testing.T) {
 			return s.MakeRequest(t, NewRequestWithURLValues(t, "POST", link, values), status)
 		}
 		envByName := func(repoID int64, name string) *actions_model.ActionEnvironment {
-			env, err := actions_model.GetRepoEnvironmentByName(t.Context(), repoID, name)
+			env, err := actions_model.GetEnvironmentByName(t.Context(), 0, repoID, name)
 			require.NoError(t, err)
 			return env
 		}
@@ -290,7 +290,7 @@ func TestActionsEnvironmentsWeb(t *testing.T) {
 			vid := strconv.FormatInt(variables[0].ID, 10)
 			post(owner, link+"/secrets/"+sid+"/edit", url.Values{"name": {"DEPLOY_TOKEN"}, "data": {"new-value-123"}}, http.StatusOK)
 			post(owner, link+"/variables/"+vid+"/edit", url.Values{"name": {"REGION"}, "data": {"eu-central-1"}}, http.StatusOK)
-			s, err := secret_model.GetEnvironmentSecretByID(t.Context(), repo.ID, production.ID, secrets[0].ID)
+			s, err := secret_model.GetEnvironmentSecretByID(t.Context(), 0, repo.ID, production.ID, secrets[0].ID)
 			require.NoError(t, err)
 			value, err = s.GetDecryptedData()
 			require.NoError(t, err)
@@ -498,7 +498,7 @@ func TestActionsEnvironmentsWeb(t *testing.T) {
 		t.Run("a workflow-created environment says so", func(t *testing.T) {
 			pushJob(".gitea/workflows/web-preview.yml", "preview")
 			require.Eventually(t, func() bool {
-				_, err := actions_model.GetRepoEnvironmentByName(db.DefaultContext, repo.ID, "preview")
+				_, err := actions_model.GetEnvironmentByName(db.DefaultContext, 0, repo.ID, "preview")
 				return err == nil
 			}, 10*time.Second, 100*time.Millisecond)
 			body := owner.MakeRequest(t, NewRequest(t, "GET", base), http.StatusOK).Body.String()
@@ -625,7 +625,7 @@ func TestActionsEnvironmentsWebQueries(t *testing.T) {
 				"name": fmt.Sprintf("env-%d", i), "reviewers": fmt.Sprintf("team:%d", team.ID), "ref_policy": "0",
 			}), http.StatusSeeOther)
 		}
-		env, err := actions_model.GetRepoEnvironmentByName(ctx, repo.ID, "env-0")
+		env, err := actions_model.GetEnvironmentByName(ctx, 0, repo.ID, "env-0")
 		require.NoError(t, err)
 		var counts []int64
 		for _, l := range []string{base, base + "/new", fmt.Sprintf("%s/%d", base, env.ID)} {
@@ -694,7 +694,7 @@ func TestActionsEnvironmentsWebOutsiders(t *testing.T) {
 
 		// listed before (as a site administrator may): the edit page tells the same
 		require.Equal(t, http.StatusSeeOther, owner.MakeRequest(t, NewRequestWithValues(t, "POST", base+"/new", form("name", "probe")), NoExpectedStatus).Code)
-		probe, err := actions_model.GetRepoEnvironmentByName(ctx, priv.ID, "probe")
+		probe, err := actions_model.GetEnvironmentByName(ctx, 0, priv.ID, "probe")
 		require.NoError(t, err)
 		for _, uid := range []int64{9, 37, 11} {
 			require.NoError(t, db.Insert(ctx, &actions_model.ActionEnvironmentReviewer{EnvironmentID: probe.ID, UserID: uid}))
@@ -728,7 +728,7 @@ func TestActionsEnvironmentsWebOutsiders(t *testing.T) {
 			keys[i] = "user:" + strconv.Itoa(100000+i)
 		}
 		require.Equal(t, http.StatusSeeOther, owner.MakeRequest(t, NewRequestWithValues(t, "POST", base+"/new", form("name", "alpha")), NoExpectedStatus).Code)
-		alpha, err := actions_model.GetRepoEnvironmentByName(ctx, priv.ID, "alpha")
+		alpha, err := actions_model.GetEnvironmentByName(ctx, 0, priv.ID, "alpha")
 		require.NoError(t, err)
 		for _, link := range []string{base + "/new", fmt.Sprintf("%s/%d", base, alpha.ID)} {
 			body := owner.MakeRequest(t, NewRequestWithValues(t, "POST", link, form("name", "huge", "reviewers", strings.Join(keys, ","))), http.StatusOK).Body.String()
@@ -738,7 +738,7 @@ func TestActionsEnvironmentsWebOutsiders(t *testing.T) {
 	})
 
 	t.Run("the delete confirmation is the exact name", func(t *testing.T) {
-		alpha, err := actions_model.GetRepoEnvironmentByName(ctx, priv.ID, "alpha")
+		alpha, err := actions_model.GetEnvironmentByName(ctx, 0, priv.ID, "alpha")
 		require.NoError(t, err)
 		link := fmt.Sprintf("%s/%d/delete", base, alpha.ID)
 		for _, typed := range []string{"alpha\r", " alpha", "alpha\n", "ALPHA"} {

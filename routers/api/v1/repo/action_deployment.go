@@ -55,7 +55,7 @@ func toActionDeployment(ctx *context.APIContext, data *actions_service.Deploymen
 		run.Repo = repo
 		item.RunURL = run.HTMLURL()
 	}
-	if env, ok := data.Envs[d.EnvironmentID]; ok && env.RepoID == repo.ID { // missing for a deleted environment
+	if env, ok := data.Envs[d.EnvironmentID]; ok { // only those that apply to the repository are loaded; missing for a deleted environment
 		item.Environment = env.Name
 	}
 	if d.ReleaseAfterUnix > 0 {

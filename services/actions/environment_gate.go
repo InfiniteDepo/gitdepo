@@ -104,10 +104,10 @@ func evaluateEnvironmentText(ctx context.Context, job *actions_model.ActionRunJo
 
 // findOrCreateEnvironment is GetOrCreateRepoEnvironment, except for a fork pull request (not pull_request_target): its
 // author may be no writer of the repository and its job gets no environment secrets anyway, so it can only name an
-// environment that exists.
+// environment that exists (ResolveEnvironment).
 func findOrCreateEnvironment(ctx context.Context, run *actions_model.ActionRun, name string) (*actions_model.ActionEnvironment, error) {
 	if isForkRun(run) {
-		return actions_model.GetRepoEnvironmentByName(ctx, run.RepoID, name)
+		return actions_model.ResolveEnvironment(ctx, run.RepoID, name)
 	}
 	return actions_model.GetOrCreateRepoEnvironment(ctx, run.RepoID, name)
 }
@@ -118,7 +118,9 @@ func isForkRun(run *actions_model.ActionRun) bool {
 }
 
 // refAllowed tells if the environment accepts a deployment of the run's ref. The ref is the one the server set on the
-// run, never a value of the workflow.
+// run, never a value of the workflow. For an organization environment only the organization's and its projects' branch
+// rules count: a repository administrator writes the repository's, and must not meet the organization owner's policy
+// with a rule of their own.
 func refAllowed(ctx context.Context, repoID int64, env *actions_model.ActionEnvironment, ref string) (bool, error) {
 	if env.RefPolicy != actions_model.EnvironmentRefProtectedBranches {
 		return env.AllowsRef(ref), nil
@@ -128,7 +130,7 @@ func refAllowed(ctx context.Context, repoID int64, env *actions_model.ActionEnvi
 		return false, nil
 	}
 	rules, err := git_model.GetMatchedProtectedBranchRules(ctx, repoID, name)
-	return len(rules) > 0, err
+	return slices.ContainsFunc(rules, func(r *git_model.ProtectedBranch) bool { return env.RepoID != 0 || r.OrgID != 0 }), err
 }
 
 // resolveNewEnvironment evaluates the name of the environment of a job that has no deployment yet and finds or creates
@@ -158,6 +160,8 @@ func resolveNewEnvironment(ctx context.Context, job *actions_model.ActionRunJob,
 		return env, actions_model.DeploymentReasonNotFound, nil
 	case errors.Is(err, actions_model.ErrEnvironmentLimit):
 		return env, actions_model.DeploymentReasonEnvironmentLimit, nil
+	case errors.Is(err, actions_model.ErrEnvironmentNotAvailable):
+		return env, actions_model.DeploymentReasonNotAvailable, nil
 	case errors.Is(err, util.ErrInvalidArgument):
 		return env, actions_model.DeploymentReasonInvalidName, nil
 	case err != nil:
@@ -289,8 +293,14 @@ func gateEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (beha
 			// decided by ReviewDeployments or the expiry, which ran the emitter so that the job fails here
 			return behaviourFailJob, nil
 		}
-		if env, err = actions_model.GetRepoEnvironmentByID(ctx, d.RepoID, d.EnvironmentID); errors.Is(err, actions_model.ErrEnvironmentNotFound) {
+		if env, err = actions_model.GetEnvironmentOfRepo(ctx, d.RepoID, d.EnvironmentID); errors.Is(err, actions_model.ErrEnvironmentNotFound) {
+			// an organization environment the repository left (selection, transfer) still exists
 			reason = actions_model.DeploymentReasonEnvironmentDeleted
+			if exists, err := db.GetEngine(ctx).Table("action_environment").ID(d.EnvironmentID).Exist(); err != nil {
+				return behaviourError, err
+			} else if exists {
+				reason = actions_model.DeploymentReasonNotAvailable
+			}
 		} else if err != nil {
 			return behaviourError, err
 		}
@@ -432,7 +442,7 @@ func jobOfTask(task *actions_model.ActionTask) *actions_model.ActionRunJob {
 }
 
 // releasedEnvironment returns the environment that released this attempt of the job. Without a released deployment of
-// an environment that still exists in the job's repository there is none: a job that names an environment never runs
+// an environment that still applies to the job's repository (GetEnvironmentOfRepo) there is none: a job that names an environment never runs
 // without its gate.
 func releasedEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (*actions_model.ActionEnvironment, error) {
 	// the secrets, the variables and the context of one pick all ask: the request's cache context answers the later ones
@@ -444,7 +454,7 @@ func releasedEnvironment(ctx context.Context, job *actions_model.ActionRunJob) (
 		if d == nil || d.Status != actions_model.DeploymentReleased || d.RepoID != job.RepoID {
 			return nil, errEnvironmentNotReleased
 		}
-		env, err := actions_model.GetRepoEnvironmentByID(ctx, job.RepoID, d.EnvironmentID)
+		env, err := actions_model.GetEnvironmentOfRepo(ctx, job.RepoID, d.EnvironmentID)
 		if errors.Is(err, actions_model.ErrEnvironmentNotFound) {
 			return nil, errEnvironmentNotReleased
 		}
@@ -470,7 +480,7 @@ func getEnvironmentSecrets(ctx context.Context, job *actions_model.ActionRunJob)
 	if err != nil {
 		return nil, err
 	}
-	secrets, err := secret_model.FetchEnvironmentSecrets(ctx, env.RepoID, env.ID)
+	secrets, err := secret_model.FetchEnvironmentSecrets(ctx, env.OwnerID, env.RepoID, env.ID)
 	if err != nil {
 		// no details, as for the other secrets: FetchEnvironmentSecrets logs them. Not errEnvironmentNotReleased: a
 		// failure of the database or of decryption fails the request and the job stays queued.
@@ -496,7 +506,7 @@ func getVariablesOfJob(ctx context.Context, job *actions_model.ActionRunJob) (ma
 	if isForkRun(job.Run) {
 		return vars, nil
 	}
-	envVars, err := actions_model.FindVariables(ctx, actions_model.FindVariablesOpts{RepoID: env.RepoID, EnvironmentID: env.ID})
+	envVars, err := actions_model.FindVariables(ctx, actions_model.FindVariablesOpts{OwnerID: env.OwnerID, RepoID: env.RepoID, EnvironmentID: env.ID})
 	if err != nil {
 		return nil, fmt.Errorf("failure to fetch environment variables: %w", err)
 	}

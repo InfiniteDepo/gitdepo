@@ -1,7 +1,7 @@
-{{template "repo/settings/layout_head" (dict "ctxData" . "pageClass" "repository settings actions environments")}}
-	<div class="repo-setting-content">
-		{{$archived := .Repository.IsArchived}}
-		{{if $archived}}
+{{if .Repository}}{{template "repo/settings/layout_head" (dict "ctxData" . "pageClass" "repository settings actions environments")}}{{else}}{{template "org/settings/layout_head" (dict "ctxData" . "pageClass" "organization settings actions environments")}}{{end}}
+	<div class="{{if .Repository}}repo{{else}}org{{end}}-setting-content">
+		{{$archived := .EnvironmentsArchived}}
+		{{if and $archived .Repository}}
 			<div class="ui warning message" id="environment-archived">{{ctx.Locale.Tr "actions.environments.archived"}}</div>
 		{{end}}
 		<h4 class="ui top attached header">
@@ -11,50 +11,39 @@
 				{{else if lt (len .Environments) .MaxEnvironments}}
 					<a class="ui primary tiny button" href="{{.EnvironmentsLink}}/new">{{ctx.Locale.Tr "actions.environments.new"}}</a>
 				{{else}}
-					<span data-tooltip-content="{{ctx.Locale.Tr "actions.environments.error.limit" .MaxEnvironments}}"><button class="ui primary tiny button" disabled>{{ctx.Locale.Tr "actions.environments.new"}}</button></span>
+					<span data-tooltip-content="{{if .Repository}}{{ctx.Locale.Tr "actions.environments.error.limit" .MaxEnvironments}}{{else}}{{ctx.Locale.Tr "actions.environments.error.org_limit" .MaxEnvironments}}{{end}}"><button class="ui primary tiny button" disabled>{{ctx.Locale.Tr "actions.environments.new"}}</button></span>
 				{{end}}
 			</div>
 		</h4>
 		<div class="ui attached segment">
 			<p>{{ctx.Locale.Tr "actions.environments.desc" (HTMLFormat "<code>%s</code>" "environment: production")}}</p>
+			{{if not .Repository}}<div class="ui info message" id="environment-org-note">{{ctx.Locale.Tr "actions.environments.org.desc" .EnvironmentOwner.Name}} {{ctx.Locale.Tr "actions.environments.org.never_auto"}}</div>{{end}}
 			{{if .Environments}}
 				<div class="flex-list" id="environment-list">
-					{{range .Environments}}
-						<div class="flex-item tw-items-center">
-							<div class="flex-item-leading">{{svg "octicon-rocket"}}</div>
-							<div class="flex-item-main">
-								<div class="flex-item-title">
-									<a class="environment-name" href="{{$.EnvironmentsLink}}/{{.ID}}">{{.Name}}</a>
-									{{if not .HasRules}}<span class="ui tiny yellow label">{{ctx.Locale.Tr "actions.environments.no_protection"}}</span>{{end}}
-								</div>
-								<div class="flex-item-body">
-									{{if and .CreatedByWorkflow (not .HasRules)}}
-										<span>{{ctx.Locale.Tr "actions.environments.created_by_workflow"}} <a href="{{$.EnvironmentsLink}}/{{.ID}}">{{ctx.Locale.Tr "actions.environments.add_rules"}}</a> ·</span>
-									{{else if .HasRules}}
-										<span>{{svg "octicon-shield"}} {{.Summary}} ·</span>
-									{{end}}
-									<span>{{ctx.Locale.TrN .Secrets "actions.environments.secrets_count_1" "actions.environments.secrets_count_n" .Secrets}} · {{ctx.Locale.TrN .Variables "actions.environments.variables_count_1" "actions.environments.variables_count_n" .Variables}}</span>
-								</div>
-								{{if .NoReviewer}}
-									<div class="ui warning message tw-mt-2 tw-mb-0 environment-no-reviewer">{{svg "octicon-alert"}} {{ctx.Locale.Tr "actions.environments.no_eligible_reviewer"}}</div>
-								{{end}}
-							</div>
-							<div class="flex-item-trailing">
-								{{template "repo/settings/environment_deployment" .Last}}
-								<a class="btn interact-bg tw-p-2" href="{{$.EnvironmentsLink}}/{{.ID}}" data-tooltip-content="{{ctx.Locale.Tr "actions.environments.edit"}}" aria-label="{{ctx.Locale.Tr "actions.environments.edit"}}">{{svg "octicon-pencil"}}</a>
-							</div>
-						</div>
-					{{end}}
+					{{range .Environments}}{{template "repo/settings/environment_row" (dict "Row" . "ctxData" $)}}{{end}}
 				</div>
-				<p class="tw-mt-4">{{ctx.Locale.Tr "actions.environments.count" (len .Environments) .MaxEnvironments}}</p>
 			{{else}}
 				<div class="tw-text-center tw-py-8">
 					{{svg "octicon-rocket" 32}}
-					<p class="tw-mt-2"><strong>{{ctx.Locale.Tr "actions.environments.none"}}</strong></p>
-					<p>{{ctx.Locale.Tr "actions.environments.none.desc"}}</p>
+					{{if .Repository}}
+						<p class="tw-mt-2"><strong>{{ctx.Locale.Tr "actions.environments.none"}}</strong></p>
+						<p>{{ctx.Locale.Tr "actions.environments.none.desc"}}</p>
+					{{else}}
+						<p class="tw-mt-2"><strong>{{ctx.Locale.Tr "actions.environments.org.none"}}</strong></p>
+						<p>{{ctx.Locale.Tr "actions.environments.org.none.desc"}}</p>
+					{{end}}
 					{{if not $archived}}<a class="ui primary button" href="{{.EnvironmentsLink}}/new">{{ctx.Locale.Tr "actions.environments.new"}}</a>{{end}}
 				</div>
 			{{end}}
+			{{if .InheritedEnvironments}}
+				<div class="divider"></div>
+				<h5 class="ui small header">{{ctx.Locale.Tr "actions.environments.inherited" .EnvironmentOwner.Name}}</h5>
+				<p class="help">{{ctx.Locale.Tr "actions.environments.inherited.desc" .EnvironmentOwner.Name}}</p>
+				<div class="flex-list" id="environment-inherited-list">
+					{{range .InheritedEnvironments}}{{template "repo/settings/environment_row" (dict "Row" . "ctxData" $ "Inherited" true)}}{{end}}
+				</div>
+			{{end}}
+			{{if .Environments}}<p class="tw-mt-4" id="environment-count">{{ctx.Locale.Tr "actions.environments.count" (len .Environments) .MaxEnvironments}}</p>{{end}}
 		</div>
 	</div>
-{{template "repo/settings/layout_footer" .}}
+{{if .Repository}}{{template "repo/settings/layout_footer" .}}{{else}}{{template "org/settings/layout_footer" .}}{{end}}

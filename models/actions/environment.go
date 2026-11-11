@@ -6,6 +6,7 @@ package actions
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -18,7 +19,9 @@ import (
 	"forgejo.org/modules/timeutil"
 	"forgejo.org/modules/util"
 
+	"code.forgejo.org/xorm/xorm"
 	"github.com/gobwas/glob"
+	"xorm.io/builder"
 )
 
 // Values of ActionEnvironment.RefPolicy
@@ -29,12 +32,13 @@ const (
 )
 
 const (
-	MaxEnvironmentsPerRepo = 100
-	MaxEnvironmentName     = 255
-	MaxRefPatterns         = 50
-	MaxRunnerLabels        = 20
-	MaxAllowedWorkflows    = 20
-	MaxWaitTimerMinutes    = 43200 // 30 days
+	MaxEnvironments     = 100 // of a repository, or of an organization
+	MaxEnvironmentRepos = 1000
+	MaxEnvironmentName  = 255
+	MaxRefPatterns      = 50
+	MaxRunnerLabels     = 20
+	MaxAllowedWorkflows = 20
+	MaxWaitTimerMinutes = 43200 // 30 days
 )
 
 // Types of EnvironmentRefPattern
@@ -46,8 +50,36 @@ const (
 var (
 	ErrEnvironmentNotFound = secret_model.ErrEnvironmentNotFound
 	ErrEnvironmentExists   = util.NewAlreadyExistErrorf("environment already exists")
-	ErrEnvironmentLimit    = util.NewInvalidArgumentErrorf("too many environments in the repository")
+	ErrEnvironmentLimit    = util.NewInvalidArgumentErrorf("too many environments")
+	// ErrEnvironmentTakenByOrg refuses a repository environment named like (ignoring case) an environment of the
+	// organization that owns the repository, which the repository inherits: names never twin.
+	ErrEnvironmentTakenByOrg = util.NewInvalidArgumentErrorf("the name is taken by an inherited organization environment")
+	// ErrEnvironmentTwin refuses to transfer a repository with an environment named like one of the new owner's.
+	ErrEnvironmentTwin = util.NewInvalidArgumentErrorf("the repository has an environment named like one of the new owner: delete it first")
+	// ErrEnvironmentNotAvailable is a name of an organization environment that doesn't apply to the repository (not
+	// selected): a job of the repository can't deploy there, and the repository never gets an environment of that name.
+	ErrEnvironmentNotAvailable = errors.New("the organization environment is not available to this repository")
+	// ErrEnvironmentAllNeedsReviewers refuses an organization environment of every repository without required
+	// reviewers: any repository, also one created later, could deploy to it.
+	ErrEnvironmentAllNeedsReviewers = util.NewInvalidArgumentErrorf("an environment of every repository of the organization needs required reviewers")
 )
+
+// ErrEnvironmentUsedByRepos refuses an organization environment named like an environment that N repositories of
+// the organization already have (trashed ones too: a restore would twin), with up to five of them: names never twin.
+type ErrEnvironmentUsedByRepos struct {
+	N     int64
+	Repos []*repo_model.Repository // ID, name, project (group_id, group_name) and trashed_unix only
+}
+
+func (e ErrEnvironmentUsedByRepos) Error() string {
+	names := make([]string, len(e.Repos))
+	for i, r := range e.Repos {
+		names[i] = r.PathInOwner()
+	}
+	return fmt.Sprintf("the name is used by environments of %d %s of the organization (%s): delete theirs first", e.N,
+		util.Iif(e.N == 1, "repository", "repositories"), strings.Join(names, ", "))
+}
+func (e ErrEnvironmentUsedByRepos) Unwrap() error { return util.ErrInvalidArgument }
 
 // EnvironmentRefPattern is one entry of the ref patterns of an environment: Pattern is matched against the name of
 // the branch (not "refs/heads/..."), or of the tag, by the glob where "*" doesn't cross "/" and "**" does.
@@ -57,8 +89,10 @@ type EnvironmentRefPattern struct {
 }
 
 // ActionEnvironment is a deployment target that jobs name with `environment:`. A repository environment has
-// RepoID set and OwnerID 0; an organization environment (later) has OwnerID set and RepoID 0. The name is unique per
-// owner and repository ignoring case (LowerName), so "Production" and "production" are one environment.
+// RepoID set and OwnerID 0; an organization environment has OwnerID set and RepoID 0, and the repositories of the
+// organization it applies to (AllRepos, else the selected ones) inherit it (EnvironmentsOfRepoCond). The name is unique per owner and repository ignoring case
+// (LowerName), so "Production" and "production" are one environment, and a repository's and its organization's
+// names never twin.
 type ActionEnvironment struct {
 	ID                int64
 	OwnerID           int64                   `xorm:"INDEX UNIQUE(owner_repo_name) NOT NULL DEFAULT 0"`
@@ -74,14 +108,26 @@ type ActionEnvironment struct {
 	// ReviewsRequired is the rule that a deployment needs a reviewer's approval. Only an edit of the reviewers sets or
 	// clears it, never the deletion of a listed user or team: an environment whose reviewers all vanished that way
 	// keeps holding its deployments (nobody can approve) until someone edits its rules, which is audited.
-	ReviewsRequired   bool               `xorm:"NOT NULL DEFAULT false"`
-	CreatedByWorkflow bool               `xorm:"NOT NULL DEFAULT false"` // a job named it before it existed
-	Created           timeutil.TimeStamp `xorm:"created"`
-	Updated           timeutil.TimeStamp `xorm:"updated"`
+	ReviewsRequired   bool `xorm:"NOT NULL DEFAULT false"`
+	CreatedByWorkflow bool `xorm:"NOT NULL DEFAULT false"` // a job named it before it existed
+	// AllRepos makes an organization environment apply to every repository of the organization, those created later
+	// included; without it only to RepoIDs (action_environment_repo), none by default.
+	AllRepos bool               `xorm:"NOT NULL DEFAULT false"`
+	RepoIDs  []int64            `xorm:"-"` // the selected repositories, as the writers take them (EnvironmentRepoIDs)
+	Created  timeutil.TimeStamp `xorm:"created"`
+	Updated  timeutil.TimeStamp `xorm:"updated"`
+}
+
+// ActionEnvironmentRepo selects a repository of the organization for an organization environment without AllRepos.
+type ActionEnvironmentRepo struct {
+	ID            int64
+	EnvironmentID int64 `xorm:"UNIQUE(environment_repo) NOT NULL"`
+	RepoID        int64 `xorm:"UNIQUE(environment_repo) INDEX NOT NULL"`
 }
 
 func init() {
 	db.RegisterModel(new(ActionEnvironment))
+	db.RegisterModel(new(ActionEnvironmentRepo))
 }
 
 // isPrintableASCII tells if s holds only the printable ASCII characters 0x20 to 0x7E. Names, ref patterns and runner
@@ -191,6 +237,12 @@ func (e *ActionEnvironment) Normalize() error {
 	if e.RunnerLabels == nil {
 		e.RunnerLabels = []string{}
 	}
+	if e.RepoID != 0 || e.AllRepos { // only an organization environment selects repositories
+		e.AllRepos, e.RepoIDs = e.AllRepos && e.RepoID == 0, nil
+	}
+	if e.RepoIDs = slices.Compact(slices.Sorted(slices.Values(e.RepoIDs))); len(e.RepoIDs) > MaxEnvironmentRepos {
+		return ruleError("repositories", "", "too many repositories")
+	}
 	return nil
 }
 
@@ -239,11 +291,15 @@ func (e *ActionEnvironment) auditData() map[string]any {
 	for i, p := range e.RefPatterns {
 		patterns[i] = p.Type + ":" + p.Pattern
 	}
-	return map[string]any{
+	data := map[string]any{
 		"name": e.Name, "ref_policy": e.RefPolicy, "ref_patterns": patterns, "wait_timer_minutes": e.WaitTimerMinutes,
 		"prevent_self_review": e.PreventSelfReview, "runner_labels": e.RunnerLabels, "allowed_workflows": e.AllowedWorkflows,
 		"reviews_required": e.ReviewsRequired,
 	}
+	if e.RepoID == 0 {
+		data["all_repos"], data["repo_ids"] = e.AllRepos, e.RepoIDs
+	}
+	return data
 }
 
 func recordEnvironment(ctx context.Context, actions audit_model.LevelActions, e *ActionEnvironment, data map[string]any) error {
@@ -275,9 +331,9 @@ func insertEnvironmentIfAbsent(ctx context.Context, e *ActionEnvironment) (bool,
 	if setting.Database.Type.IsMySQL() {
 		verb, suffix = "INSERT IGNORE INTO", ""
 	}
-	insert := verb + " action_environment (owner_id, repo_id, name, lower_name, ref_policy, ref_patterns, wait_timer_minutes, prevent_self_review, runner_labels, allowed_workflows, reviews_required, created_by_workflow, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)" + suffix
+	insert := verb + " action_environment (owner_id, repo_id, name, lower_name, ref_policy, ref_patterns, wait_timer_minutes, prevent_self_review, runner_labels, allowed_workflows, reviews_required, created_by_workflow, all_repos, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)" + suffix
 	now := timeutil.TimeStampNow()
-	res, err := db.GetEngine(ctx).Exec(insert, e.OwnerID, e.RepoID, e.Name, e.LowerName, e.RefPolicy, string(patterns), e.WaitTimerMinutes, e.PreventSelfReview, string(labels), string(workflows), e.ReviewsRequired, e.CreatedByWorkflow, now, now)
+	res, err := db.GetEngine(ctx).Exec(insert, e.OwnerID, e.RepoID, e.Name, e.LowerName, e.RefPolicy, string(patterns), e.WaitTimerMinutes, e.PreventSelfReview, string(labels), string(workflows), e.ReviewsRequired, e.CreatedByWorkflow, e.AllRepos, now, now)
 	if err != nil {
 		return false, err
 	}
@@ -285,9 +341,10 @@ func insertEnvironmentIfAbsent(ctx context.Context, e *ActionEnvironment) (bool,
 	return n == 1, err
 }
 
-// CreateEnvironment validates and inserts a repository environment with its reviewers (see UpdateEnvironment) and
-// records its creation. It returns ErrEnvironmentExists when the name (ignoring case) is taken and ErrEnvironmentLimit
-// past MaxEnvironmentsPerRepo.
+// CreateEnvironment validates and inserts an environment of a repository (RepoID set) or of an organization (OwnerID
+// set) with its reviewers (see UpdateEnvironment) and records its creation. It returns ErrEnvironmentExists when the
+// name (ignoring case) is taken, ErrEnvironmentTakenByOrg or ErrEnvironmentUsedByRepos when it would twin with the
+// other level, and ErrEnvironmentLimit past MaxEnvironments (of the repository or the organization).
 func CreateEnvironment(ctx context.Context, e *ActionEnvironment, reviewers []ActionEnvironmentReviewer) error {
 	if err := audit_model.CheckOwnAct(ctx); err != nil {
 		return err
@@ -295,11 +352,202 @@ func CreateEnvironment(ctx context.Context, e *ActionEnvironment, reviewers []Ac
 	return createEnvironment(ctx, e, false, reviewers)
 }
 
-// createEnvironment inserts e; with auto, an environment that already exists is no error and e.ID stays 0.
+// scopeCond binds both the owner and the repository of an environment (xorm leaves zero fields out of a bean): a
+// repository's has owner_id 0, an organization's repo_id 0.
+func scopeCond(ownerID, repoID int64) builder.Cond {
+	return builder.Eq{"owner_id": ownerID, "repo_id": repoID}
+}
+
+// EnvironmentsOfRepoCond selects the environments the jobs of the repository can name: its own and the organization
+// environments that cover it (EnvironmentCoversCond). It is the one rule of which environment applies to a
+// repository: ResolveEnvironment, GetEnvironmentOfRepo and FindEnvironmentsOfRepo use it.
+func EnvironmentsOfRepoCond(repoID int64) builder.Cond {
+	return builder.Or(builder.Eq{"action_environment.owner_id": 0, "action_environment.repo_id": repoID}, EnvironmentCoversCond(repoID))
+}
+
+// EnvironmentCoversCond matches the organization environments that apply to the repository repoID, or, with repoID 0,
+// to the joined repository row: one of the organization that owns it now (read when the query runs, so a transfer
+// needs no sync, and not in the trash) that has AllRepos or selects it. The owner condition is part of it, so a selection can never reach
+// a repository of another owner.
+func EnvironmentCoversCond(repoID int64) builder.Cond {
+	owner, selected := builder.Expr("action_environment.owner_id = repository.owner_id"), builder.Expr("action_environment_repo.repo_id = repository.id")
+	if repoID != 0 {
+		owner = builder.Expr("action_environment.owner_id = (SELECT owner_id FROM repository WHERE repository.id = ? AND repository.trashed_unix = 0)", repoID)
+		selected = builder.Eq{"action_environment_repo.repo_id": repoID}
+	}
+	cond := builder.Eq{"action_environment.repo_id": 0}.And(owner, builder.Or(
+		builder.Eq{"action_environment.all_repos": true},
+		builder.In("action_environment.id", builder.Select("action_environment_repo.environment_id").From("action_environment_repo").Where(selected)),
+	))
+	if repoID == 0 { // the joined form; the bound form checks the trash in its owner subquery
+		cond = cond.And(builder.Eq{"repository.trashed_unix": 0})
+	}
+	return cond
+}
+
+// EnvironmentRepo is an organization environment and a repository it applies to.
+type EnvironmentRepo struct {
+	EnvironmentID, RepoID int64
+}
+
+// FindEnvironmentRepos returns the repositories, not in the trash, each of the organization environments applies to,
+// by the rule of EnvironmentCoversCond in its joined form, in one query.
+func FindEnvironmentRepos(ctx context.Context, envIDs []int64) ([]EnvironmentRepo, error) {
+	var rows []EnvironmentRepo
+	if len(envIDs) == 0 {
+		return rows, nil
+	}
+	return rows, db.GetEngine(ctx).Table("action_environment").Select("action_environment.id AS environment_id, repository.id AS repo_id").
+		Join("INNER", "repository", EnvironmentCoversCond(0)).In("action_environment.id", envIDs).
+		OrderBy("action_environment.id, repository.id").Find(&rows)
+}
+
+// EnvironmentRepoIDs returns the selected repositories of each of the environments.
+func EnvironmentRepoIDs(ctx context.Context, envIDs []int64) (map[int64][]int64, error) {
+	var rows []*ActionEnvironmentRepo
+	out := map[int64][]int64{}
+	if len(envIDs) == 0 {
+		return out, nil
+	}
+	err := db.GetEngine(ctx).In("environment_id", envIDs).OrderBy("repo_id").Find(&rows)
+	for _, r := range rows {
+		out[r.EnvironmentID] = append(out[r.EnvironmentID], r.RepoID)
+	}
+	return out, err
+}
+
+// setEnvironmentRepos makes e.RepoIDs the selection of the organization environment e (none with AllRepos): every
+// one it doesn't select yet must be a repository of the organization, not in the trash (a stored one stays, also when
+// it has been trashed since, like a stored reviewer). Call it in the transaction of the write, after the lock of the
+// environment.
+func setEnvironmentRepos(ctx context.Context, e *ActionEnvironment) error {
+	if e.RepoID != 0 {
+		return nil
+	}
+	stored, err := EnvironmentRepoIDs(ctx, []int64{e.ID})
+	if err != nil {
+		return err
+	}
+	var added []int64
+	for _, id := range e.RepoIDs {
+		if !slices.Contains(stored[e.ID], id) {
+			added = append(added, id)
+		}
+	}
+	if len(added) > 0 {
+		n, err := db.GetEngine(ctx).Table("repository").In("id", added).And("owner_id = ? AND trashed_unix = 0", e.OwnerID).Count()
+		if err != nil {
+			return err
+		} else if n != int64(len(added)) {
+			return ruleError("repositories", "", "a selected repository is not a repository of the organization")
+		}
+	}
+	if _, err := db.GetEngine(ctx).Where("environment_id = ?", e.ID).Delete(new(ActionEnvironmentRepo)); err != nil {
+		return err
+	}
+	if len(e.RepoIDs) == 0 {
+		return nil
+	}
+	rows := make([]*ActionEnvironmentRepo, len(e.RepoIDs))
+	for i, id := range e.RepoIDs {
+		rows[i] = &ActionEnvironmentRepo{EnvironmentID: e.ID, RepoID: id}
+	}
+	return db.Insert(ctx, rows)
+}
+
+// lockOwner takes the row lock of the user or organization (a no-op UPDATE), which both levels of environments take
+// before a twin check, so two creations can't pass it together.
+func lockOwner(ctx context.Context, ownerID int64) error {
+	_, err := db.Exec(ctx, "UPDATE `user` SET id = id WHERE id = ?", ownerID)
+	return err
+}
+
+// lockingRead is a session whose reads see the latest committed rows and lock them (SELECT ... FOR UPDATE): on MySQL a
+// plain read in a transaction that already read (REPEATABLE READ) returns its old snapshot, so a check after a lock
+// would still see the rows from before the change it waited for. SQLite has no FOR UPDATE and needs none: its write
+// lock covers the transaction.
+func lockingRead(ctx context.Context, table string) *xorm.Session {
+	sess := db.GetEngine(ctx).Table(table)
+	if !setting.Database.Type.IsSQLite3() {
+		sess = sess.ForUpdate()
+	}
+	return sess
+}
+
+// lockedExist reports whether a lockingRead of action_environment finds a row. xorm's Exist drops ForUpdate, so it
+// reads one ID with Get, which keeps it.
+func lockedExist(sess *xorm.Session) (bool, error) {
+	var id int64
+	return sess.Cols("action_environment.id").Limit(1).Get(&id)
+}
+
+// refuseTwin refuses a name that would twin with the other level: a repository environment named like one of the
+// organization that owns the repository, whether or not it applies to the repository (ErrEnvironmentTakenByOrg), an
+// organization environment named like one that repositories of the organization have (ErrEnvironmentUsedByRepos,
+// counted in one query). For a repository it locks the repository row first (a transfer changes it) and reads its
+// owner only then, so a transfer and this check run one after the other; then both levels lock the owner. Its reads
+// are locking reads (lockingRead). Call it in the transaction of the insert.
+func refuseTwin(ctx context.Context, e *ActionEnvironment) error {
+	ownerID := e.OwnerID
+	if e.RepoID != 0 {
+		if _, err := db.Exec(ctx, "UPDATE repository SET id = id WHERE id = ?", e.RepoID); err != nil {
+			return err
+		}
+		if _, err := lockingRead(ctx, "repository").Where("id = ?", e.RepoID).Cols("owner_id").Get(&ownerID); err != nil {
+			return err
+		}
+	}
+	if err := lockOwner(ctx, ownerID); err != nil {
+		return err
+	}
+	if e.RepoID != 0 {
+		taken, err := lockedExist(lockingRead(ctx, "action_environment").Where(scopeCond(ownerID, 0)).And("lower_name = ?", e.LowerName))
+		if err == nil && taken {
+			err = ErrEnvironmentTakenByOrg
+		}
+		return err
+	}
+	used := builder.Eq{"action_environment.owner_id": 0, "action_environment.lower_name": e.LowerName, "repository.owner_id": e.OwnerID}
+	var ids []int64 // a locking read; Count would drop ForUpdate (and PostgreSQL refuses FOR UPDATE with an aggregate)
+	if err := lockingRead(ctx, "action_environment").Join("INNER", "repository", "repository.id = action_environment.repo_id").
+		Where(used).Cols("action_environment.id").Find(&ids); err != nil || len(ids) == 0 {
+		return err
+	}
+	refusal := ErrEnvironmentUsedByRepos{N: int64(len(ids))}
+	if err := db.GetEngine(ctx).Table("repository").Join("INNER", "action_environment", "repository.id = action_environment.repo_id").
+		Where(used).Cols("repository.id", "repository.name", "repository.group_id", "repository.group_name", "repository.trashed_unix").
+		OrderBy("repository.lower_name").Limit(5).Find(&refusal.Repos); err != nil {
+		return err
+	}
+	return refusal
+}
+
+// RefuseTwinsOnTransfer returns ErrEnvironmentTwin if the repository has an environment named like one of the
+// organization newOwnerID, whether or not that one would apply to it: names never twin, so no repository environment
+// can shadow an organization's. Like refuseTwin it locks the organization first; call it in the transaction of the
+// transfer (or before a pending transfer is created, to refuse it early).
+func RefuseTwinsOnTransfer(ctx context.Context, repoID, newOwnerID int64) error {
+	if err := lockOwner(ctx, newOwnerID); err != nil {
+		return err
+	}
+	twin, err := hasTwinOnTransfer(ctx, repoID, newOwnerID)
+	if err == nil && twin {
+		err = ErrEnvironmentTwin
+	}
+	return err
+}
+
+// hasTwinOnTransfer is one locking self-join: a subquery for the organization's names would be a snapshot read on MySQL.
+func hasTwinOnTransfer(ctx context.Context, repoID, newOwnerID int64) (bool, error) {
+	return lockedExist(lockingRead(ctx, "action_environment").Join("INNER", "action_environment AS org_env", "org_env.lower_name = action_environment.lower_name").
+		Where(builder.Eq{"action_environment.owner_id": 0, "action_environment.repo_id": repoID, "org_env.owner_id": newOwnerID, "org_env.repo_id": 0}))
+}
+
+// createEnvironment inserts e; with auto, an environment that already exists, or a name the organization has, is no
+// error and e.ID stays 0.
 func createEnvironment(ctx context.Context, e *ActionEnvironment, auto bool, reviewers []ActionEnvironmentReviewer) error {
-	e.OwnerID = 0 // repository environments only, for now
-	if e.RepoID == 0 {
-		return util.NewInvalidArgumentErrorf("an environment belongs to a repository")
+	if (e.OwnerID == 0) == (e.RepoID == 0) {
+		return util.NewInvalidArgumentErrorf("an environment belongs to a repository or an organization")
 	}
 	if err := e.Normalize(); err != nil {
 		return err
@@ -309,47 +557,67 @@ func createEnvironment(ctx context.Context, e *ActionEnvironment, auto bool, rev
 		return err
 	}
 	e.ReviewsRequired, e.CreatedByWorkflow = len(keys) > 0, auto
-	// The cap is checked before the insert, so concurrent creations can pass it together by a few. The refusal is
-	// returned outside the transaction below: an error from a nested transaction rolls the caller's back.
-	if n, err := db.GetEngine(ctx).Where("owner_id = 0 AND repo_id = ?", e.RepoID).Count(new(ActionEnvironment)); err != nil {
+	if err := refuseAllWithoutReviewers(e); err != nil {
 		return err
-	} else if n >= MaxEnvironmentsPerRepo {
+	}
+	// The cap is checked before the insert, so concurrent creations can pass it together by a few. The refusals are
+	// returned outside the transaction below: an error from a nested transaction rolls the caller's back.
+	if n, err := db.GetEngine(ctx).Where(scopeCond(e.OwnerID, e.RepoID)).Count(new(ActionEnvironment)); err != nil {
+		return err
+	} else if n >= MaxEnvironments {
 		return ErrEnvironmentLimit
 	}
 	created := false
+	var twin error
 	err = db.WithTx(ctx, func(ctx context.Context) error {
+		if twin = refuseTwin(ctx, e); twin != nil {
+			if errors.Is(twin, util.ErrInvalidArgument) {
+				return nil
+			}
+			return twin
+		}
 		var err error
 		if created, err = insertEnvironmentIfAbsent(ctx, e); err != nil || !created {
 			return err
 		}
-		stored, err := GetRepoEnvironmentByName(ctx, e.RepoID, e.Name)
+		stored, err := GetEnvironmentByName(ctx, e.OwnerID, e.RepoID, e.Name)
 		if err != nil {
 			return err
 		}
+		stored.RepoIDs = e.RepoIDs
 		*e = *stored
-		if err := insertReviewers(ctx, e.RepoID, e.ID, reviewers); err != nil {
+		if err := setEnvironmentRepos(ctx, e); err != nil {
+			return err
+		}
+		if err := insertReviewers(ctx, e, reviewers); err != nil {
 			return err
 		}
 		data := e.auditData()
 		data["auto"] = auto
 		data["reviewers"] = keys
-		return recordEnvironment(ctx, audit_model.LevelActions{Repo: "repo.actions_env.created"}, e, data)
+		return recordEnvironment(ctx, audit_model.LevelActions{Repo: "repo.actions_env.created", Org: "org.actions_env.created"}, e, data)
 	})
-	if err != nil {
+	switch {
+	case err != nil:
 		return err
-	}
-	if !created && !auto {
+	case auto:
+		return nil
+	case twin != nil:
+		return twin
+	case !created:
 		return ErrEnvironmentExists
 	}
 	return nil
 }
 
-// GetOrCreateRepoEnvironment returns the environment of the repository with that name (ignoring case); a name that
-// doesn't exist is created without any rule. Concurrent first uses of a name don't fail on SQLite and PostgreSQL; on
-// MySQL, inside a transaction that already read (REPEATABLE READ), the one that lost the race may not see the row of
-// the winner and fails once, and the emitter, which calls this, runs its pass again.
+// GetOrCreateRepoEnvironment returns the environment the repository's jobs name (ResolveEnvironment); a name that
+// doesn't exist is created in the repository without any rule, never as a twin of an organization environment: the
+// name of one that doesn't apply to the repository is ErrEnvironmentNotAvailable.
+// Concurrent first uses of a name don't fail on SQLite and PostgreSQL; on MySQL, inside a transaction that already read
+// (REPEATABLE READ), the one that lost the race may not see the row of the winner and fails once, and the emitter,
+// which calls this, runs its pass again.
 func GetOrCreateRepoEnvironment(ctx context.Context, repoID int64, name string) (*ActionEnvironment, error) {
-	if env, err := GetRepoEnvironmentByName(ctx, repoID, name); !errors.Is(err, ErrEnvironmentNotFound) {
+	if env, err := ResolveEnvironment(ctx, repoID, name); !errors.Is(err, ErrEnvironmentNotFound) {
 		return env, err
 	}
 	e := &ActionEnvironment{RepoID: repoID, Name: name}
@@ -359,41 +627,72 @@ func GetOrCreateRepoEnvironment(ctx context.Context, repoID int64, name string) 
 	if e.ID != 0 {
 		return e, nil
 	}
-	return GetRepoEnvironmentByName(ctx, repoID, name) // another call created it first
+	env, err := ResolveEnvironment(ctx, repoID, name) // another call created it first, or the organization has it
+	if errors.Is(err, ErrEnvironmentNotFound) {
+		return nil, ErrEnvironmentNotAvailable
+	}
+	return env, err
 }
 
-// GetRepoEnvironmentByName finds the environment of the repository by name, ignoring case.
-func GetRepoEnvironmentByName(ctx context.Context, repoID int64, name string) (*ActionEnvironment, error) {
+// getEnvironment returns the environment the conditions select, ErrEnvironmentNotFound if none.
+func getEnvironment(ctx context.Context, cond builder.Cond, order string) (*ActionEnvironment, error) {
+	e := new(ActionEnvironment)
+	has, err := db.GetEngine(ctx).Where(cond).OrderBy(order).Get(e)
+	if err != nil {
+		return nil, err
+	} else if !has {
+		return nil, ErrEnvironmentNotFound
+	}
+	return e, nil
+}
+
+// GetEnvironmentByName finds the environment of the repository (ownerID 0) or of the organization (repoID 0) by
+// name, ignoring case.
+func GetEnvironmentByName(ctx context.Context, ownerID, repoID int64, name string) (*ActionEnvironment, error) {
 	lower, ok := lowerName(name)
 	if !ok {
 		return nil, ErrEnvironmentNotFound
 	}
-	e := new(ActionEnvironment)
-	has, err := db.GetEngine(ctx).Where("owner_id = 0 AND repo_id = ? AND lower_name = ?", repoID, lower).Get(e)
-	if err != nil {
-		return nil, err
-	} else if !has {
-		return nil, ErrEnvironmentNotFound
-	}
-	return e, nil
+	return getEnvironment(ctx, scopeCond(ownerID, repoID).And(builder.Eq{"lower_name": lower}), "id")
 }
 
-// GetRepoEnvironmentByID finds the environment with that ID if it belongs to the repository.
-func GetRepoEnvironmentByID(ctx context.Context, repoID, id int64) (*ActionEnvironment, error) {
-	e := new(ActionEnvironment)
-	has, err := db.GetEngine(ctx).Where("id = ? AND owner_id = 0 AND repo_id = ?", id, repoID).Get(e)
-	if err != nil {
-		return nil, err
-	} else if !has {
-		return nil, ErrEnvironmentNotFound
-	}
-	return e, nil
+// GetEnvironmentByID finds the environment with that ID if it belongs to the repository (ownerID 0) or to the
+// organization (repoID 0).
+func GetEnvironmentByID(ctx context.Context, ownerID, repoID, id int64) (*ActionEnvironment, error) {
+	return getEnvironment(ctx, scopeCond(ownerID, repoID).And(builder.Eq{"id": id}), "id")
 }
 
-// FindRepoEnvironments lists a page of the environments of the repository by name, and how many it has.
-func FindRepoEnvironments(ctx context.Context, repoID int64, opts db.ListOptions) ([]*ActionEnvironment, int64, error) {
+// ResolveEnvironment finds the environment a job of the repository names, ignoring case: the repository's own if it
+// has one, else the one of the organization that owns it (EnvironmentsOfRepoCond).
+func ResolveEnvironment(ctx context.Context, repoID int64, name string) (*ActionEnvironment, error) {
+	lower, ok := lowerName(name)
+	if !ok {
+		return nil, ErrEnvironmentNotFound
+	}
+	return getEnvironment(ctx, builder.And(EnvironmentsOfRepoCond(repoID), builder.Eq{"lower_name": lower}), "repo_id DESC")
+}
+
+// GetEnvironmentOfRepo finds the environment with that ID if it applies to the repository: its own, or one of the
+// organization that owns it now (EnvironmentsOfRepoCond).
+func GetEnvironmentOfRepo(ctx context.Context, repoID, id int64) (*ActionEnvironment, error) {
+	return getEnvironment(ctx, builder.And(EnvironmentsOfRepoCond(repoID), builder.Eq{"id": id}), "id")
+}
+
+// FindEnvironments lists a page of the environments of the repository (ownerID 0) or of the organization (repoID 0)
+// by name, and how many it has.
+func FindEnvironments(ctx context.Context, ownerID, repoID int64, opts db.ListOptions) ([]*ActionEnvironment, int64, error) {
+	return findEnvironments(ctx, scopeCond(ownerID, repoID), opts)
+}
+
+// FindEnvironmentsOfRepo is FindEnvironments for every environment that applies to the repository, its organization's
+// included (EnvironmentsOfRepoCond), in one query.
+func FindEnvironmentsOfRepo(ctx context.Context, repoID int64, opts db.ListOptions) ([]*ActionEnvironment, int64, error) {
+	return findEnvironments(ctx, EnvironmentsOfRepoCond(repoID), opts)
+}
+
+func findEnvironments(ctx context.Context, cond builder.Cond, opts db.ListOptions) ([]*ActionEnvironment, int64, error) {
 	var envs []*ActionEnvironment
-	sess := db.GetEngine(ctx).Where("owner_id = 0 AND repo_id = ?", repoID).OrderBy("lower_name")
+	sess := db.GetEngine(ctx).Where(cond).OrderBy("lower_name, repo_id DESC")
 	if opts.PageSize > 0 {
 		sess = db.SetSessionPagination(sess, &opts)
 	}
@@ -405,7 +704,7 @@ func FindRepoEnvironments(ctx context.Context, repoID int64, opts db.ListOptions
 // list of reviewers, and records one entry with what changed (none without a change). The environment requires reviews
 // when the list is not empty: editing the list is how that rule changes, also to none at all. Only the shape of the list
 // is checked here (at most MaxEnvironmentReviewers, each a user or a team, none twice); the caller checks that they
-// exist and that a team belongs to the owner of the repository.
+// exist and that a team belongs to the organization (of the repository).
 func UpdateEnvironment(ctx context.Context, e *ActionEnvironment, reviewers []ActionEnvironmentReviewer) error {
 	if err := audit_model.CheckOwnAct(ctx); err != nil {
 		return err
@@ -419,10 +718,10 @@ func UpdateEnvironment(ctx context.Context, e *ActionEnvironment, reviewers []Ac
 	}
 	e.ReviewsRequired = len(keys) > 0
 	return db.WithTx(ctx, func(ctx context.Context) error {
-		if err := LockEnvironment(ctx, e.RepoID, e.ID); err != nil {
+		if err := LockEnvironment(ctx, e.OwnerID, e.RepoID, e.ID); err != nil {
 			return err
 		}
-		stored, err := GetRepoEnvironmentByID(ctx, e.RepoID, e.ID)
+		stored, err := GetEnvironmentByID(ctx, e.OwnerID, e.RepoID, e.ID)
 		if err != nil {
 			return err
 		}
@@ -434,17 +733,30 @@ func UpdateEnvironment(ctx context.Context, e *ActionEnvironment, reviewers []Ac
 		if err != nil {
 			return err
 		}
+		repoIDs, err := EnvironmentRepoIDs(ctx, []int64{stored.ID})
+		if err != nil {
+			return err
+		}
+		stored.RepoIDs = repoIDs[stored.ID]
+		if err := refuseAllWithoutReviewers(e); err != nil {
+			return err
+		}
 		old, now := stored.auditData(), e.auditData()
 		old["reviewers"], now["reviewers"] = reviewerKeys(before), keys
 		changes := audit_model.Changes(old, now)
 		if changes == nil {
 			return nil
 		}
-		if err := recordEnvironment(ctx, audit_model.LevelActions{Repo: "repo.actions_env.updated"}, e, changes); err != nil {
+		if err := recordEnvironment(ctx, audit_model.LevelActions{Repo: "repo.actions_env.updated", Org: "org.actions_env.updated"}, e, changes); err != nil {
 			return err
 		}
-		if _, err := db.GetEngine(ctx).ID(e.ID).Cols("name", "ref_policy", "ref_patterns", "wait_timer_minutes", "prevent_self_review", "runner_labels", "allowed_workflows", "reviews_required").Update(e); err != nil {
+		if _, err := db.GetEngine(ctx).ID(e.ID).Cols("name", "ref_policy", "ref_patterns", "wait_timer_minutes", "prevent_self_review", "runner_labels", "allowed_workflows", "reviews_required", "all_repos").Update(e); err != nil {
 			return err
+		}
+		if !slices.Equal(stored.RepoIDs, e.RepoIDs) || e.AllRepos != stored.AllRepos {
+			if err := setEnvironmentRepos(ctx, e); err != nil {
+				return err
+			}
 		}
 		if slices.Equal(reviewerKeys(before), keys) {
 			return nil
@@ -452,15 +764,24 @@ func UpdateEnvironment(ctx context.Context, e *ActionEnvironment, reviewers []Ac
 		if _, err := db.GetEngine(ctx).Where("environment_id = ?", e.ID).Delete(new(ActionEnvironmentReviewer)); err != nil {
 			return err
 		}
-		return insertReviewers(ctx, e.RepoID, e.ID, reviewers)
+		return insertReviewers(ctx, e, reviewers)
 	})
+}
+
+// refuseAllWithoutReviewers refuses rules that make an organization environment apply to every repository without
+// required reviewers (ErrEnvironmentAllNeedsReviewers). UpdateEnvironment calls it after the lock of the environment.
+func refuseAllWithoutReviewers(e *ActionEnvironment) error {
+	if e.AllRepos && !e.ReviewsRequired {
+		return ErrEnvironmentAllNeedsReviewers
+	}
+	return nil
 }
 
 // LockEnvironment takes the row lock of the environment (a no-op UPDATE: a write lock on SQLite, a row lock elsewhere)
 // and returns ErrEnvironmentNotFound if it is gone. Every insert of a secret or variable of an environment and its delete
 // take it first, so a concurrent delete can't leave rows of a deleted environment behind. Call it inside a transaction.
-func LockEnvironment(ctx context.Context, repoID, id int64) error {
-	return secret_model.LockEnvironment(ctx, repoID, id)
+func LockEnvironment(ctx context.Context, ownerID, repoID, id int64) error {
+	return secret_model.LockEnvironment(ctx, ownerID, repoID, id)
 }
 
 // DeleteEnvironment deletes the environment with its secrets and variables and records it. Its deployments stay as
@@ -474,13 +795,13 @@ func DeleteEnvironment(ctx context.Context, e *ActionEnvironment, failUnpickedJo
 		return err
 	}
 	return db.WithTx(ctx, func(ctx context.Context) error {
-		if err := LockEnvironment(ctx, e.RepoID, e.ID); err != nil {
+		if err := LockEnvironment(ctx, e.OwnerID, e.RepoID, e.ID); err != nil {
 			return err
 		}
 		if err := failUnpickedJobs(ctx); err != nil {
 			return err
 		}
-		stored, err := GetRepoEnvironmentByID(ctx, e.RepoID, e.ID)
+		stored, err := GetEnvironmentByID(ctx, e.OwnerID, e.RepoID, e.ID)
 		if err != nil {
 			return err
 		}
@@ -492,11 +813,14 @@ func DeleteEnvironment(ctx context.Context, e *ActionEnvironment, failUnpickedJo
 		if _, err := eng.Where("environment_id = ?", stored.ID).Delete(new(ActionEnvironmentReviewer)); err != nil {
 			return err
 		}
-		secrets, err := eng.Table("secret").Where("repo_id = ? AND environment_id = ?", stored.RepoID, stored.ID).Delete()
+		if _, err := eng.Where("environment_id = ?", stored.ID).Delete(new(ActionEnvironmentRepo)); err != nil {
+			return err
+		}
+		secrets, err := eng.Table("secret").Where(scopeCond(stored.OwnerID, stored.RepoID)).And("environment_id = ?", stored.ID).Delete()
 		if err != nil {
 			return err
 		}
-		variables, err := eng.Table("action_variable").Where("repo_id = ? AND environment_id = ?", stored.RepoID, stored.ID).Delete()
+		variables, err := eng.Table("action_variable").Where(scopeCond(stored.OwnerID, stored.RepoID)).And("environment_id = ?", stored.ID).Delete()
 		if err != nil {
 			return err
 		}
@@ -504,7 +828,7 @@ func DeleteEnvironment(ctx context.Context, e *ActionEnvironment, failUnpickedJo
 		data := stored.auditData()
 		data["reviewers"] = reviewerKeys(reviewers)
 		data["counts"] = map[string]int64{"secrets": secrets, "variables": variables}
-		if err := recordEnvironment(ctx, audit_model.LevelActions{Repo: "repo.actions_env.deleted"}, stored, data); err != nil {
+		if err := recordEnvironment(ctx, audit_model.LevelActions{Repo: "repo.actions_env.deleted", Org: "org.actions_env.deleted"}, stored, data); err != nil {
 			return err
 		}
 		_, err = db.DeleteByID[ActionEnvironment](ctx, stored.ID)
@@ -512,15 +836,16 @@ func DeleteEnvironment(ctx context.Context, e *ActionEnvironment, failUnpickedJo
 	})
 }
 
-// countByEnvironment counts the rows of table (secret or action_variable) of each of the environments of the
-// repository, in one query.
-func countByEnvironment(ctx context.Context, table string, repoID int64, ids []int64) (map[int64]int64, error) {
+// countByEnvironment counts the rows of table (secret or action_variable) of each of the environments, in one query.
+// The rows of an environment have its owner and repository, so the IDs of environments the caller found at its level
+// count only theirs.
+func countByEnvironment(ctx context.Context, table string, ids []int64) (map[int64]int64, error) {
 	var rows []struct {
 		EnvironmentID int64
 		N             int64
 	}
 	err := db.GetEngine(ctx).Table(table).Select("environment_id, COUNT(*) AS n").
-		Where("repo_id = ?", repoID).In("environment_id", ids).GroupBy("environment_id").Find(&rows)
+		In("environment_id", ids).GroupBy("environment_id").Find(&rows)
 	out := make(map[int64]int64, len(rows))
 	for _, r := range rows {
 		out[r.EnvironmentID] = r.N
@@ -528,12 +853,12 @@ func countByEnvironment(ctx context.Context, table string, repoID int64, ids []i
 	return out, err
 }
 
-// CountEnvironmentSecretsAndVariables counts the secrets and the variables of each of the environments of the
-// repository, with one query each.
-func CountEnvironmentSecretsAndVariables(ctx context.Context, repoID int64, ids []int64) (secrets, variables map[int64]int64, err error) {
-	if secrets, err = countByEnvironment(ctx, "secret", repoID, ids); err != nil {
+// CountEnvironmentSecretsAndVariables counts the secrets and the variables of each of the environments, with one query
+// each.
+func CountEnvironmentSecretsAndVariables(ctx context.Context, ids []int64) (secrets, variables map[int64]int64, err error) {
+	if secrets, err = countByEnvironment(ctx, "secret", ids); err != nil {
 		return nil, nil, err
 	}
-	variables, err = countByEnvironment(ctx, "action_variable", repoID, ids)
+	variables, err = countByEnvironment(ctx, "action_variable", ids)
 	return secrets, variables, err
 }

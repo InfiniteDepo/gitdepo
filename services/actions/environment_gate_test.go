@@ -161,7 +161,7 @@ func TestGateEnvironment(t *testing.T) {
 			b, err := gateEnvironment(t.Context(), job)
 			require.NoError(t, err)
 			assert.Equal(t, behaviourExecuteJob, b, name)
-			env, err := actions_model.GetRepoEnvironmentByID(t.Context(), 63, deploymentOf(t, job).EnvironmentID)
+			env, err := actions_model.GetEnvironmentByID(t.Context(), 0, 63, deploymentOf(t, job).EnvironmentID)
 			require.NoError(t, err)
 			assert.Equal(t, want, env.Name)
 			_, err = db.GetEngine(t.Context()).Exec("DELETE FROM action_deployment")
@@ -180,7 +180,7 @@ func TestGateEnvironment(t *testing.T) {
 			b, err := gateEnvironment(t.Context(), job)
 			require.NoError(t, err)
 			assert.Equal(t, behaviourExecuteJob, b)
-			env, err := actions_model.GetRepoEnvironmentByID(t.Context(), 63, deploymentOf(t, job).EnvironmentID)
+			env, err := actions_model.GetEnvironmentByID(t.Context(), 0, 63, deploymentOf(t, job).EnvironmentID)
 			require.NoError(t, err)
 			names = append(names, env.Name)
 			_, err = db.GetEngine(t.Context()).Exec("DELETE FROM action_deployment")
@@ -214,7 +214,7 @@ func TestGateEnvironment(t *testing.T) {
 			d := deploymentOf(t, job)
 			if known {
 				assert.Equal(t, behaviourExecuteJob, b)
-				env, err := actions_model.GetRepoEnvironmentByID(t.Context(), 63, d.EnvironmentID)
+				env, err := actions_model.GetEnvironmentByID(t.Context(), 0, 63, d.EnvironmentID)
 				require.NoError(t, err)
 				assert.Equal(t, "from-call", env.Name)
 			} else {
@@ -256,7 +256,7 @@ func TestGateEnvironment(t *testing.T) {
 
 	t.Run("the environment limit", func(t *testing.T) {
 		require.NoError(t, unittest.PrepareTestDatabase())
-		for i := range actions_model.MaxEnvironmentsPerRepo {
+		for i := range actions_model.MaxEnvironments {
 			_, err := actions_model.GetOrCreateRepoEnvironment(audit_model.WithSystem(t.Context(), "test"), 63, fmt.Sprint("e", i))
 			require.NoError(t, err)
 		}
@@ -265,7 +265,7 @@ func TestGateEnvironment(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, behaviourFailJob, b)
 		assert.Equal(t, actions_model.DeploymentReasonEnvironmentLimit, deploymentOf(t, job).Reason)
-		assert.Equal(t, actions_model.MaxEnvironmentsPerRepo, unittest.GetCount(t, &actions_model.ActionEnvironment{}))
+		assert.Equal(t, actions_model.MaxEnvironments, unittest.GetCount(t, &actions_model.ActionEnvironment{}))
 		_, err = db.GetEngine(t.Context()).Exec("DELETE FROM action_deployment")
 		require.NoError(t, err)
 		job = gateJob(t, envWorkflow("    environment: E3\n"), "refs/heads/main")
@@ -354,6 +354,43 @@ func TestGateEnvironment(t *testing.T) {
 		assert.Equal(t, behaviourExecuteJob, run("refs/heads/release/1"), "a rule of the repository")
 	})
 
+	t.Run("protected branches of an organization environment: a rule of the repository doesn't count", func(t *testing.T) {
+		require.NoError(t, unittest.PrepareTestDatabase())
+		ctx := t.Context()
+		_, err := db.GetEngine(ctx).Exec("UPDATE repository SET owner_id = 3 WHERE id = 63")
+		require.NoError(t, err)
+		require.NoError(t, actions_model.CreateEnvironment(audit_model.WithSystem(ctx, "test"), &actions_model.ActionEnvironment{
+			OwnerID: 3, Name: "prod", RefPolicy: actions_model.EnvironmentRefProtectedBranches, RepoIDs: []int64{63},
+		}, nil))
+		run := func(ref string) behaviour {
+			_, err := db.GetEngine(ctx).Exec("DELETE FROM action_deployment")
+			require.NoError(t, err)
+			b, err := gateEnvironment(ctx, gateJob(t, envWorkflow("    environment: prod\n"), ref))
+			require.NoError(t, err)
+			return b
+		}
+		// a repository administrator writes the repository's rules, never the organization owner's policy
+		require.NoError(t, db.Insert(ctx, &git_model.ProtectedBranch{RepoID: 63, RuleName: "*"}))
+		assert.Equal(t, behaviourFailJob, run("refs/heads/attacker"))
+		require.NoError(t, db.Insert(ctx, &git_model.ProtectedBranch{OrgID: 3, RuleName: "main"}))
+		assert.Equal(t, behaviourExecuteJob, run("refs/heads/main"), "a rule of the organization")
+		assert.Equal(t, behaviourFailJob, run("refs/heads/attacker"))
+	})
+
+	t.Run("an organization environment not selected for the repository", func(t *testing.T) {
+		require.NoError(t, unittest.PrepareTestDatabase())
+		ctx := t.Context()
+		_, err := db.GetEngine(ctx).Exec("UPDATE repository SET owner_id = 3 WHERE id = 63")
+		require.NoError(t, err)
+		require.NoError(t, actions_model.CreateEnvironment(audit_model.WithSystem(ctx, "test"), &actions_model.ActionEnvironment{OwnerID: 3, Name: "prod", RepoIDs: []int64{3}}, nil))
+		job := gateJob(t, envWorkflow("    environment: prod\n"), "refs/heads/main")
+		b, err := gateEnvironment(ctx, job)
+		require.NoError(t, err)
+		assert.Equal(t, behaviourFailJob, b)
+		assert.Equal(t, actions_model.DeploymentReasonNotAvailable, deploymentOf(t, job).Reason)
+		unittest.AssertNotExistsBean(t, &actions_model.ActionEnvironment{RepoID: 63, LowerName: "prod"})
+	})
+
 	t.Run("the wait timer", func(t *testing.T) {
 		require.NoError(t, unittest.PrepareTestDatabase())
 		start := time.Now().Truncate(time.Second)
@@ -395,7 +432,7 @@ func TestGateEnvironment(t *testing.T) {
 		// pass sets the timer to minutes, moves the clock to start+at and runs the gate
 		pass := func(t *testing.T, minutes int, at time.Duration) (behaviour, *actions_model.ActionDeployment) {
 			t.Helper()
-			env, err := actions_model.GetRepoEnvironmentByName(t.Context(), 63, "slow")
+			env, err := actions_model.GetEnvironmentByName(t.Context(), 0, 63, "slow")
 			require.NoError(t, err)
 			if env.WaitTimerMinutes != minutes {
 				env.WaitTimerMinutes = minutes
@@ -478,6 +515,28 @@ func TestGateEnvironment(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, behaviourFailJob, b)
 		assert.Equal(t, actions_model.DeploymentReasonEnvironmentDeleted, deploymentOf(t, job).Reason)
+	})
+
+	t.Run("a repository that left the selection of an organization environment is refused as not available", func(t *testing.T) {
+		require.NoError(t, unittest.PrepareTestDatabase())
+		_, err := db.GetEngine(t.Context()).Exec("UPDATE repository SET owner_id = 3 WHERE id = 63")
+		require.NoError(t, err)
+		repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 63})
+		other := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: 3, OwnerID: 3})
+		env := &actions_model.ActionEnvironment{OwnerID: repo.OwnerID, Name: "slow", WaitTimerMinutes: 5, RepoIDs: []int64{repo.ID}}
+		require.NoError(t, actions_model.CreateEnvironment(audit_model.WithSystem(t.Context(), "test"), env, nil))
+		job := gateJob(t, envWorkflow("    environment: slow\n"), "refs/heads/main")
+		b, err := gateEnvironment(t.Context(), job)
+		require.NoError(t, err)
+		require.Equal(t, behaviourHoldJob, b)
+		env.RepoIDs = []int64{other.ID}
+		require.NoError(t, actions_model.UpdateEnvironment(audit_model.WithSystem(t.Context(), "test"), env, nil))
+		timeutil.MockSet(time.Now().Add(time.Hour))
+		defer timeutil.MockUnset()
+		b, err = gateEnvironment(t.Context(), job)
+		require.NoError(t, err)
+		assert.Equal(t, behaviourFailJob, b)
+		assert.Equal(t, actions_model.DeploymentReasonNotAvailable, deploymentOf(t, job).Reason)
 	})
 
 	t.Run("a cancelled deployment keeps the job blocked", func(t *testing.T) {
@@ -634,7 +693,7 @@ func TestEnvironmentSecretsAndVariables(t *testing.T) {
 		{0, 0, 63, staging.ID, "STAGING_ONLY", "staging"},
 	} {
 		if s.env != 0 {
-			_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, s.repo, s.env, s.name, s.value)
+			_, err = secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, s.repo, s.env, s.name, s.value)
 		} else {
 			_, err = secret_model.InsertEncryptedSecret(ctx, s.owner, s.group, s.repo, s.name, s.value)
 		}
@@ -644,11 +703,11 @@ func TestEnvironmentSecretsAndVariables(t *testing.T) {
 	require.NoError(t, err)
 	_, err = actions_model.InsertVariable(ctx, 0, 0, 63, "REPO_ONLY", "repo")
 	require.NoError(t, err)
-	_, err = actions_model.InsertEnvironmentVariable(ctx, 63, prod.ID, "LEVEL", "prod")
+	_, err = actions_model.InsertEnvironmentVariable(ctx, 0, 63, prod.ID, "LEVEL", "prod")
 	require.NoError(t, err)
-	_, err = actions_model.InsertEnvironmentVariable(ctx, 63, prod.ID, "PROD_ONLY", "prod")
+	_, err = actions_model.InsertEnvironmentVariable(ctx, 0, 63, prod.ID, "PROD_ONLY", "prod")
 	require.NoError(t, err)
-	_, err = actions_model.InsertEnvironmentVariable(ctx, 63, staging.ID, "STAGING_ONLY", "staging")
+	_, err = actions_model.InsertEnvironmentVariable(ctx, 0, 63, staging.ID, "STAGING_ONLY", "staging")
 	require.NoError(t, err)
 
 	secretsOf := func(job *actions_model.ActionRunJob) (map[string]string, error) { return getSecretsOfJob(ctx, job) }
@@ -923,7 +982,7 @@ func TestGateAllowedWorkflows(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			require.NoError(t, unittest.PrepareTestDatabase())
 			env := newEnvironment(t, &actions_model.ActionEnvironment{Name: "prod", AllowedWorkflows: tc.allowed})
-			_, err := secret_model.InsertEncryptedEnvironmentSecret(audit_model.WithSystem(t.Context(), "test"), 63, env.ID, "ENV_SECRET", "x")
+			_, err := secret_model.InsertEncryptedEnvironmentSecret(audit_model.WithSystem(t.Context(), "test"), 0, 63, env.ID, "ENV_SECRET", "x")
 			require.NoError(t, err)
 			job := gateJob(t, envWorkflow("    environment: prod\n"), "refs/heads/main")
 			setWorkflow(t, tc.workflow)
@@ -1001,7 +1060,7 @@ func TestEnvironmentSecretsReferencedByName(t *testing.T) {
 	ctx := audit_model.WithSystem(t.Context(), "test")
 	prod := newEnvironment(t, &actions_model.ActionEnvironment{Name: "prod"})
 	for name, value := range map[string]string{"DEPLOY_KEY": "env-key", "OTHER": "env-other", "SHARED": "env-shared"} {
-		_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 63, prod.ID, name, value)
+		_, err := secret_model.InsertEncryptedEnvironmentSecret(ctx, 0, 63, prod.ID, name, value)
 		require.NoError(t, err)
 	}
 	_, err := secret_model.InsertEncryptedSecret(ctx, 0, 0, 63, "SHARED", "repo-shared")

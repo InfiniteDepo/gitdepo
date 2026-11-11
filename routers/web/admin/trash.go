@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"net/http"
 
+	actions_model "forgejo.org/models/actions"
 	audit_model "forgejo.org/models/audit"
 	"forgejo.org/models/db"
 	repo_model "forgejo.org/models/repo"
@@ -85,6 +86,8 @@ func trashDone(ctx *context.Context, err error, success template.HTML) {
 		ctx.Flash.Error(ctx.Tr("settings.credential_not_own_act"))
 	case trash_service.IsBadTarget(err):
 		ctx.Flash.Error(ctx.Tr("admin.trash.bad_target", err.Error()))
+	case errors.Is(err, actions_model.ErrEnvironmentTwin):
+		ctx.Flash.Error(ctx.Tr("actions.environments.error.transfer_twin"))
 	case err != nil:
 		ctx.ServerError("trash", err)
 		return
