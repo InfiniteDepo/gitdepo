@@ -506,6 +506,6 @@ func TestMergeStylesQueueStyleSwap(t *testing.T) {
 		require.NoError(t, err)
 		t.Logf("merged=%v tip=%s parents=%d build=%s", pr.HasMerged, tip.ID, tip.ParentCount(), e.TempCommitID)
 		assert.False(t, pr.HasMerged || tip.ParentCount() == 2,
-			fmt.Sprintf("a merge commit (%s) landed in main whose rules allow only squash", tip.ID))
+			"a merge commit (%s) landed in main whose rules allow only squash", tip.ID)
 	})
 }
