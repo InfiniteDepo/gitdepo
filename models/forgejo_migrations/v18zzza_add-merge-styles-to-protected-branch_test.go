@@ -12,18 +12,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type v18zzyOldProtectedBranch struct {
+type v18zzzaOldProtectedBranch struct {
 	ID         int64 `xorm:"pk autoincr"`
 	RepoID     int64
 	BranchName string
 }
 
-func (v18zzyOldProtectedBranch) TableName() string {
+func (v18zzzaOldProtectedBranch) TableName() string {
 	return "protected_branch"
 }
 
 func Test_addMergeStylesToProtectedBranch(t *testing.T) {
-	x, deferable := migration_tests.PrepareTestEnv(t, 0, new(v18zzyOldProtectedBranch))
+	x, deferable := migration_tests.PrepareTestEnv(t, 0, new(v18zzzaOldProtectedBranch))
 	defer deferable()
 	require.NotNil(t, x)
 	_, err := x.Exec("INSERT INTO protected_branch (repo_id, branch_name) VALUES (1, 'main')")

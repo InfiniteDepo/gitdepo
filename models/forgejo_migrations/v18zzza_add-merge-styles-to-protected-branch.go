@@ -12,16 +12,16 @@ func init() {
 	})
 }
 
-type v18zzyProtectedBranch struct {
+type v18zzzaProtectedBranch struct {
 	AllowedMergeStyles []string `xorm:"JSON TEXT"`
 	DefaultMergeStyle  string   `xorm:"VARCHAR(30) NOT NULL DEFAULT ''"`
 }
 
-func (v18zzyProtectedBranch) TableName() string {
+func (v18zzzaProtectedBranch) TableName() string {
 	return "protected_branch"
 }
 
 func addMergeStylesToProtectedBranch(x *xorm.Engine) error {
-	_, err := x.SyncWithOptions(xorm.SyncOptions{IgnoreDropIndices: true}, new(v18zzyProtectedBranch))
+	_, err := x.SyncWithOptions(xorm.SyncOptions{IgnoreDropIndices: true}, new(v18zzzaProtectedBranch))
 	return err
 }
