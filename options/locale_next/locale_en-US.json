@@ -440,7 +440,7 @@
 	"repo.pulls.auto_merge.reason.wip": "The pull request is marked as work in progress.",
 	"repo.pulls.invalid_merge_style_rules": "This merge style is not allowed by the branch rules: %s.",
 	"repo.pulls.merge_styles_limited": "Branch rules limit the merge styles: %s.",
-	"repo.pulls.merge_style_only": "Only %[1]s is allowed into %[2]s (%[3]s).",
+	"repo.pulls.merge_style_only": "Branch rules allow one merge style into %[2]s: %[1]s (%[3]s).",
 	"repo.pulls.no_merge_styles_rules": "This pull request cannot be merged: the branch rules allow no merge style in common (%s).",
 	"repo.settings.merge_styles.invalid": "The allowed merge styles are unknown, or the default style is not one of them.",
 	"repo.settings.merge_styles.title": "Merge styles",

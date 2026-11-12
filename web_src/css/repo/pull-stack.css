@@ -97,5 +97,5 @@
 }
 
 .field:has(> .ui.checkbox input:not(:checked)) > .merge-style-repo-off {
-  display: none;
+  display: none !important; /* form.css shows every fieldset .help with !important */
 }

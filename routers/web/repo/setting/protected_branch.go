@@ -255,14 +255,11 @@ func SetMergeStyleData(ctx *context.Context, cfg *repo_model.PullRequestsConfig)
 		Name, Label string
 		Style       repo_model.MergeStyle
 	}
-	ctx.Data["MergeStyleChoices"] = []choice{
-		{string(repo_model.MergeStyleMerge), ctx.Locale.TrString("repo.pulls.merge_pull_request"), repo_model.MergeStyleMerge},
-		{string(repo_model.MergeStyleRebase), ctx.Locale.TrString("repo.pulls.rebase_merge_pull_request"), repo_model.MergeStyleRebase},
-		{string(repo_model.MergeStyleRebaseMerge), ctx.Locale.TrString("repo.pulls.rebase_merge_commit_pull_request"), repo_model.MergeStyleRebaseMerge},
-		{string(repo_model.MergeStyleSquash), ctx.Locale.TrString("repo.pulls.squash_merge_pull_request"), repo_model.MergeStyleSquash},
-		{string(repo_model.MergeStyleFastForwardOnly), ctx.Locale.TrString("repo.pulls.fast_forward_only_merge_pull_request"), repo_model.MergeStyleFastForwardOnly},
-		{string(repo_model.MergeStyleManuallyMerged), ctx.Locale.TrString("repo.pulls.merge_manually"), repo_model.MergeStyleManuallyMerged},
+	var choices []choice
+	for _, style := range git_model.RuleMergeStyles {
+		choices = append(choices, choice{string(style), repo.MergeStyleLabel(ctx, style), style})
 	}
+	ctx.Data["MergeStyleChoices"] = choices
 	ctx.Data["MergeStyleRepoConfig"] = cfg
 }
 

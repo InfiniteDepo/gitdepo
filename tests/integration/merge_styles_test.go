@@ -181,7 +181,7 @@ func TestMergeStyles(t *testing.T) {
 			pr := newPull(t)
 			t.Run("Merge box offers only the effective set", func(t *testing.T) {
 				body := page(pr)
-				assert.Contains(t, body, "Only squash is allowed into main")
+				assert.Contains(t, body, "Branch rules allow one merge style into main: Create squash commit")
 				assert.Regexp(t, `'name': 'merge',\s+'allowed':\s+false`, body)
 				assert.Regexp(t, `'name': 'squash',\s+'allowed':\s+true`, body)
 				assert.True(t, bwFlag(body, "canMergeNow", true))

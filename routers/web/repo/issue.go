@@ -1963,7 +1963,7 @@ func ViewIssue(ctx *context.Context) {
 		ctx.Data["MergeStyleAny"] = len(stylePolicy.Allowed) > 0
 		ctx.Data["MergeStyleRules"] = stylePolicy.RulesText()
 		if len(stylePolicy.Rules) > 0 && len(stylePolicy.Allowed) == 1 {
-			ctx.Data["MergeStyleOnly"] = string(stylePolicy.Allowed[0])
+			ctx.Data["MergeStyleOnly"] = MergeStyleLabel(ctx, stylePolicy.Allowed[0])
 		}
 
 		// a style named in the request (ctx.Data["MergeStyle"]) counts if it is allowed, else the default
@@ -4196,4 +4196,23 @@ func getIssueParticipants(ctx *context.Context, issue *issues_model.Issue) []*us
 	}
 
 	return participants
+}
+
+// MergeStyleLabel is the merge box's button label of a merge style.
+func MergeStyleLabel(ctx *context.Context, style repo_model.MergeStyle) string {
+	switch style {
+	case repo_model.MergeStyleMerge:
+		return ctx.Locale.TrString("repo.pulls.merge_pull_request")
+	case repo_model.MergeStyleRebase:
+		return ctx.Locale.TrString("repo.pulls.rebase_merge_pull_request")
+	case repo_model.MergeStyleRebaseMerge:
+		return ctx.Locale.TrString("repo.pulls.rebase_merge_commit_pull_request")
+	case repo_model.MergeStyleSquash:
+		return ctx.Locale.TrString("repo.pulls.squash_merge_pull_request")
+	case repo_model.MergeStyleFastForwardOnly:
+		return ctx.Locale.TrString("repo.pulls.fast_forward_only_merge_pull_request")
+	case repo_model.MergeStyleManuallyMerged:
+		return ctx.Locale.TrString("repo.pulls.merge_manually")
+	}
+	return string(style)
 }
