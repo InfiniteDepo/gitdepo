@@ -10,8 +10,8 @@
 			<div class="ui checkbox">
 				<input id="allowed_merge_style_{{$s.Name}}" name="allowed_merge_styles" type="checkbox" value="{{$s.Name}}" {{if SliceUtils.Contains $rule.AllowedMergeStyles $s.Name}}checked{{end}}>
 				<label for="allowed_merge_style_{{$s.Name}}">{{$s.Label}}</label>
-				{{if and $cfg (not ($cfg.IsMergeStyleAllowed $s.Style))}}<p class="help">{{ctx.Locale.Tr "repo.settings.merge_styles.repo_off" $s.Label}}</p>{{end}}
 			</div>
+			{{if and $cfg (not ($cfg.IsMergeStyleAllowed $s.Style))}}<p class="help merge-style-repo-off">{{ctx.Locale.Tr "repo.settings.merge_styles.repo_off" $s.Label}}</p>{{end}}
 		</div>
 		{{end}}
 		<div class="field">

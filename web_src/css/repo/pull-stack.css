@@ -90,3 +90,12 @@
   margin: 0 0 1em;
   padding: 0;
 }
+
+/* the help of a merge style the repository setting has off: under its checkbox, only while it is checked */
+.merge-style-repo-off {
+  margin: 0 0 0 1.85714em;
+}
+
+.field:has(> .ui.checkbox input:not(:checked)) > .merge-style-repo-off {
+  display: none;
+}

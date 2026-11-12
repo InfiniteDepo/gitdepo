@@ -42,6 +42,7 @@ type MergeQueueEntry struct {
 	Position      int64                 `xorm:"NOT NULL"`
 	Status        MergeQueueStatus      `xorm:"NOT NULL DEFAULT 0"`
 	MergeStyle    repo_model.MergeStyle `xorm:"VARCHAR(30) NOT NULL"`
+	BuildStyle    repo_model.MergeStyle `xorm:"VARCHAR(30) NOT NULL DEFAULT ''"` // the style the build was made with ("" = not built)
 	DeleteBranch  bool                  `xorm:"NOT NULL DEFAULT false"`
 	SkipForward   bool                  `xorm:"NOT NULL DEFAULT false"` // not merged forward (services/mergeforward)
 	Forced        bool                  `xorm:"NOT NULL DEFAULT false"` // an admin added it skipping the branch protections exempt for admins
@@ -151,9 +152,9 @@ func DeleteMergeQueueEntry(ctx context.Context, id int64) (bool, error) {
 }
 
 // StartMergeQueueBuild records the build of a waiting entry; false if the entry is no longer waiting.
-func StartMergeQueueBuild(ctx context.Context, id int64, baseCommitID, tempCommitID string) (bool, error) {
-	n, err := db.GetEngine(ctx).Exec("UPDATE merge_queue_entry SET status = ?, base_commit_id = ?, temp_commit_id = ?, started_unix = ?, build_failures = 0 WHERE id = ? AND status = ?",
-		MergeQueueBuilding, baseCommitID, tempCommitID, timeutil.TimeStampNow(), id, MergeQueueWaiting)
+func StartMergeQueueBuild(ctx context.Context, id int64, baseCommitID, tempCommitID string, style repo_model.MergeStyle) (bool, error) {
+	n, err := db.GetEngine(ctx).Exec("UPDATE merge_queue_entry SET status = ?, base_commit_id = ?, temp_commit_id = ?, build_style = ?, started_unix = ?, build_failures = 0 WHERE id = ? AND status = ?",
+		MergeQueueBuilding, baseCommitID, tempCommitID, string(style), timeutil.TimeStampNow(), id, MergeQueueWaiting)
 	if err != nil {
 		return false, err
 	}
@@ -176,7 +177,7 @@ func ResetMergeQueueBuilds(ctx context.Context, ids []int64) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	_, err := db.GetEngine(ctx).Where(builder.In("id", ids)).Cols("status", "base_commit_id", "temp_commit_id", "started_unix", "merging_unix").
+	_, err := db.GetEngine(ctx).Where(builder.In("id", ids)).Cols("status", "base_commit_id", "temp_commit_id", "build_style", "started_unix", "merging_unix").
 		Update(&MergeQueueEntry{Status: MergeQueueWaiting})
 	return err
 }

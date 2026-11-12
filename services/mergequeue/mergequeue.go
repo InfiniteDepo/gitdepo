@@ -184,6 +184,12 @@ func queueStyle(rule *git_model.ProtectedBranch, style repo_model.MergeStyle) re
 	return style
 }
 
+// styleChanged reports whether the queue style is no longer the one the build of it was made with: that build must
+// not be merged, as the rules may forbid its style
+func styleChanged(it *item, now repo_model.MergeStyle) bool {
+	return it.Status == pull_model.MergeQueueBuilding && it.BuildStyle != now
+}
+
 // AddOptions are the choices of a merge that adds a pull request to the merge queue
 type AddOptions struct {
 	Style        repo_model.MergeStyle
@@ -557,7 +563,11 @@ func (p *pass) ineligible(it *item) (string, error) {
 		return ReasonBlocked, nil
 	}
 	// rules can change while queued: the style is decided again at every pass, never switched
-	if err := pull_service.CheckMergeStyleWithRules(p.ctx, pr, p.rules, queueStyle(git_model.MergeQueueRule(p.rules), it.MergeStyle)); err != nil {
+	style := queueStyle(git_model.MergeQueueRule(p.rules), it.MergeStyle)
+	if styleChanged(it, style) {
+		return ReasonMergeStyle, nil
+	}
+	if err := pull_service.CheckMergeStyleWithRules(p.ctx, pr, p.rules, style); err != nil {
 		if models.IsErrInvalidMergeStyle(err) {
 			return ReasonMergeStyle, nil
 		}
@@ -704,7 +714,11 @@ func (p *pass) styleNow(it *item) (string, error) {
 	if rule == nil {
 		return ReasonDisabled, nil
 	}
-	if err := pull_service.CheckMergeStyleWithRules(p.ctx, it.pr, rules, queueStyle(rule, it.MergeStyle)); err != nil {
+	style := queueStyle(rule, it.MergeStyle)
+	if styleChanged(it, style) {
+		return ReasonMergeStyle, nil
+	}
+	if err := pull_service.CheckMergeStyleWithRules(p.ctx, it.pr, rules, style); err != nil {
 		if models.IsErrInvalidMergeStyle(err) {
 			return ReasonMergeStyle, nil
 		}
@@ -849,8 +863,9 @@ func (p *pass) build(live []*item, tip string) error {
 		rule := git_model.MergeQueueRule(p.rules)
 		// the build is claimed before it is pushed, so another server building the same entry never pushes over it
 		started := false
-		sha, err := pull_service.BuildMergeQueueCommit(p.ctx, it.pr, it.doer, queueStyle(rule, it.MergeStyle), it.HeadCommitID, prev, it.TempBranch(), func(sha string) (ok bool, err error) {
-			started, err = pull_model.StartMergeQueueBuild(p.ctx, it.ID, prev, sha)
+		style := queueStyle(rule, it.MergeStyle)
+		sha, err := pull_service.BuildMergeQueueCommit(p.ctx, it.pr, it.doer, style, it.HeadCommitID, prev, it.TempBranch(), func(sha string) (ok bool, err error) {
+			started, err = pull_model.StartMergeQueueBuild(p.ctx, it.ID, prev, sha, style)
 			return started, err
 		})
 		if err != nil {
@@ -892,7 +907,7 @@ func (p *pass) build(live []*item, tip string) error {
 		if sha == "" {
 			return nil // another server builds it
 		}
-		it.Status, it.BaseCommitID, it.TempCommitID, it.StartedUnix = pull_model.MergeQueueBuilding, prev, sha, timeutil.TimeStampNow()
+		it.Status, it.BaseCommitID, it.TempCommitID, it.BuildStyle, it.StartedUnix = pull_model.MergeQueueBuilding, prev, sha, style, timeutil.TimeStampNow()
 		log.Trace("Merge queue of %s in %-v: built %-v at %s", p.branch, p.repo, it.pr, sha)
 		notify_service.MergeGroupChecksRequested(p.ctx, it.doer, p.repo, it.MergeQueueEntry)
 		p.again = true // a build without required checks passes at once

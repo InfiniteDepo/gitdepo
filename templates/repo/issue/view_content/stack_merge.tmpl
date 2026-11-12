@@ -15,6 +15,7 @@
 		{{range $stack.Warnings}}
 			<div class="text yellow">{{svg "octicon-alert" 16}} {{.}}</div>
 		{{end}}
+		{{if $stack.StyleRules}}<div class="text grey" id="merge-stack-style-rules">{{svg "octicon-info" 16}} {{ctx.Locale.Tr "repo.pulls.merge_styles_limited" $stack.StyleRules}}</div>{{end}}
 		<div class="pull-stack-actions">
 			<button type="button" class="ui primary button" command="show-modal" commandfor="merge-stack" {{if or $stack.Blocked $stack.TooLong}}disabled aria-describedby="merge-stack-blocked"{{end}}>
 				{{ctx.Locale.TrPluralString $count "repo.pulls.stack.merge_button" $count $stack.Base}}

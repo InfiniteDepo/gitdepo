@@ -231,7 +231,7 @@
 							{{svg "octicon-dot-fill"}}
 							{{if .MergeQueueRule}}{{ctx.Locale.Tr "repo.pulls.merge_queue.admin_force"}}{{else}}{{ctx.Locale.Tr "repo.pulls.required_status_check_administrator"}}{{end}}
 						</div>
-					{{else}}
+					{{else if .MergeStyleAny}}
 						<div class="item">
 							{{svg "octicon-check"}}
 							{{ctx.Locale.Tr "repo.pulls.can_auto_merge_desc"}}
@@ -410,7 +410,8 @@
 						</script>
 
 						{{$showGeneralMergeForm = true}}
-						{{if .MergeStyleRules}}<div class="ui small message" id="merge-style-rules">{{ctx.Locale.Tr "repo.pulls.merge_styles_limited" .MergeStyleRules}}</div>{{end}}
+						{{if .MergeStyleOnly}}<div class="ui small message" id="merge-style-rules">{{ctx.Locale.Tr "repo.pulls.merge_style_only" .MergeStyleOnly .Issue.PullRequest.BaseBranch .MergeStyleRules}}</div>
+						{{else if .MergeStyleRules}}<div class="ui small message" id="merge-style-rules">{{ctx.Locale.Tr "repo.pulls.merge_styles_limited" .MergeStyleRules}}</div>{{end}}
 						<div id="pull-request-merge-form"></div>
 					{{else}}
 						{{/* no merge style was set in repo setting: not or ($prConfig.AllowMerge ...) */}}

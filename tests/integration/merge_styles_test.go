@@ -181,7 +181,7 @@ func TestMergeStyles(t *testing.T) {
 			pr := newPull(t)
 			t.Run("Merge box offers only the effective set", func(t *testing.T) {
 				body := page(pr)
-				assert.Contains(t, body, "Branch rules limit the merge styles")
+				assert.Contains(t, body, "Only squash is allowed into main")
 				assert.Regexp(t, `'name': 'merge',\s+'allowed':\s+false`, body)
 				assert.Regexp(t, `'name': 'squash',\s+'allowed':\s+true`, body)
 				assert.True(t, bwFlag(body, "canMergeNow", true))
@@ -446,5 +446,66 @@ func TestMergeStylesShadowingAndProject(t *testing.T) {
 		assert.Contains(t, bwFlash(owner), "share none with the organization rule")
 		post("/org/org3/settings/branches/edit", url.Values{"rule_name": {"m*"}, "allowed_merge_styles": {"rebase"}})
 		assert.Contains(t, bwFlash(owner), `"master" is used and the merge styles of "m*" are ignored`)
+	})
+}
+
+// A build is merged only in the style it was made with: when a rule change forbids that style (and moves the queue
+// style), the entry leaves the queue instead of pushing the old build.
+func TestMergeStylesQueueStyleSwap(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		writer := forgery.CreateUser(t, nil)
+		repo := forgery.CreateRepository(t, nil, &forgery.CreateRepositoryOptions{
+			Files:         forgery.FilesInit{},
+			Collaborators: map[*user_model.User]perm.AccessMode{writer: perm.AccessModeWrite},
+		})
+		forgery.EnableRepoUnits(t, repo, unit_model.TypeCode, unit_model.TypePullRequests)
+		owner := repo.Owner
+		session := loginUser(t, owner.Name)
+		token := getTokenForLoggedInUser(t, session, auth_model.AccessTokenScopeWriteRepository)
+		statusCtx := APITestContext{Session: session, Token: token, Username: owner.Name, Reponame: repo.Name}
+		gitRepo, err := gitrepo.OpenRepository(t.Context(), repo)
+		require.NoError(t, err)
+		defer gitRepo.Close()
+
+		fields := url.Values{
+			"enable_status_check": {"true"}, "status_check_contexts": {"ci"},
+			"require_merge_queue": {"true"}, "allowed_merge_styles": {"merge"}, "merge_queue_merge_style": {"merge"},
+		}
+		msRule(t, session, repo, http.StatusSeeOther, fields)
+
+		testNewFileToNewBranch(t, session, owner.Name, repo.Name, "main", "rt-1", "rt-1.txt", "rt")
+		testPullCreate(t, session, owner.Name, repo.Name, true, "main", "rt-1", "rt-1")
+		pr := unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{BaseRepoID: repo.ID, HeadBranch: "rt-1"})
+		head, err := gitRepo.GetRefCommitID(pr.GetGitRefName())
+		require.NoError(t, err)
+		setStatus(t, statusCtx, head, api.CommitStatusSuccess)
+
+		writerSession := loginUser(t, writer.Name)
+		testPullMergeForm(t, writerSession, http.StatusOK, owner.Name, repo.Name, strconv.FormatInt(pr.Index, 10), optionsPullMerge{"do": "merge"})
+		settleMergeQueues(t)
+		e := queueEntry(t, pr)
+		require.NotNil(t, e)
+		require.Equal(t, pull_model.MergeQueueBuilding, e.Status)
+		build, err := gitRepo.GetCommit(e.TempCommitID)
+		require.NoError(t, err)
+		require.Equal(t, 2, build.ParentCount(), "the build is a merge commit")
+
+		// the admin forbids merge commits: only squash, and the queue squashes from now on
+		fields["allowed_merge_styles"] = []string{"squash"}
+		fields["merge_queue_merge_style"] = []string{"squash"}
+		msRule(t, session, repo, http.StatusSeeOther, fields)
+		settleMergeQueues(t)
+
+		// the build's checks pass
+		setStatus(t, statusCtx, e.TempCommitID, api.CommitStatusSuccess)
+		settleMergeQueues(t)
+
+		assert.Nil(t, queueEntry(t, pr), "the build made with a style the rules no longer allow leaves the queue")
+		pr = unittest.AssertExistsAndLoadBean(t, &issues_model.PullRequest{ID: pr.ID})
+		tip, err := gitRepo.GetBranchCommit("main")
+		require.NoError(t, err)
+		t.Logf("merged=%v tip=%s parents=%d build=%s", pr.HasMerged, tip.ID, tip.ParentCount(), e.TempCommitID)
+		assert.False(t, pr.HasMerged || tip.ParentCount() == 2,
+			fmt.Sprintf("a merge commit (%s) landed in main whose rules allow only squash", tip.ID))
 	})
 }

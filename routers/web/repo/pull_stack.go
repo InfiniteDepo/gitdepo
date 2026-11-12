@@ -79,6 +79,7 @@ type stackView struct {
 	ChildrenCount int
 	Styles        []stackStyle
 	DefaultStyle  string
+	StyleRules    string // the branch rules that limit the styles, "" if none does
 	DeleteDefault bool
 	DeleteForced  bool
 	Deletable     int // the branches of the merged pull requests that are deleted after the merge
@@ -240,6 +241,7 @@ func prepareStack(ctx *context.Context, pull *issues_model.PullRequest, allowMer
 		}
 	}
 	view.DefaultStyle = string(policy.Default)
+	view.StyleRules = policy.RulesText()
 	view.DeleteDefault, _ = ctx.Data["DefaultDeleteBranchAfterMerge"].(bool)
 	view.DeleteForced, _ = ctx.Data["DeleteBranchForced"].(bool)
 	// the same decision as after the merge: only branches that DeleteBranchAfterMerge would delete are counted

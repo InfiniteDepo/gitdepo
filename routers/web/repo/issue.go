@@ -1962,6 +1962,9 @@ func ViewIssue(ctx *context.Context) {
 		ctx.Data["MergeStyleAllowed"] = styleAllowed
 		ctx.Data["MergeStyleAny"] = len(stylePolicy.Allowed) > 0
 		ctx.Data["MergeStyleRules"] = stylePolicy.RulesText()
+		if len(stylePolicy.Rules) > 0 && len(stylePolicy.Allowed) == 1 {
+			ctx.Data["MergeStyleOnly"] = string(stylePolicy.Allowed[0])
+		}
 
 		// a style named in the request (ctx.Data["MergeStyle"]) counts if it is allowed, else the default
 		mergeStyle := stylePolicy.Default
