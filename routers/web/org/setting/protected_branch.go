@@ -83,6 +83,7 @@ func SettingsProtectedBranch(ctx *context.Context) {
 	}
 	ctx.Data["IsOrgRule"] = true
 	ctx.Data["Owner"] = org.AsUser()
+	repo_setting.SetMergeStyleData(ctx, nil)
 
 	users, _, err := org.GetMembers(ctx, ctx.Doer)
 	if err != nil {
@@ -213,6 +214,12 @@ func SettingsProtectedBranchPost(ctx *context.Context) {
 		return
 	}
 
+	others, err := git_model.FindOtherLevelRules(ctx, org.ID, groupID)
+	if err != nil {
+		ctx.ServerError("FindOtherLevelRules", err)
+		return
+	}
+	repo_setting.MergeStyleWarning(ctx, rule, others)
 	ctx.Flash.Success(ctx.Tr("repo.settings.update_protect_branch_success", rule.RuleName))
 	ctx.Redirect(listLink)
 }

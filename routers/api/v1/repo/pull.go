@@ -933,6 +933,14 @@ func IsPullRequestMerged(ctx *context.APIContext) {
 	ctx.NotFound()
 }
 
+// mergeStyleError says why style is refused: the branch rules limit it (naming them), or the repository's setting
+func mergeStyleError(err error, style repo_model.MergeStyle) error {
+	if e, ok := errors.AsType[models.ErrInvalidMergeStyle](err); ok && e.Rules != "" {
+		return fmt.Errorf("%s is not an allowed merge style: the branch rules allow only what all of them allow: %s", style, e.Rules)
+	}
+	return fmt.Errorf("%s is not an allowed merge style for this repository", style)
+}
+
 // MergePullRequest merges a PR given an index
 func MergePullRequest(ctx *context.APIContext) {
 	// swagger:operation POST /repos/{owner}/{repo}/pulls/{index}/merge repository repoMergePullRequest
@@ -1049,6 +1057,8 @@ func MergePullRequest(ctx *context.APIContext) {
 			ctx.Error(http.StatusMethodNotAllowed, "PR already merged", "")
 		} else if errors.Is(err, pull_service.ErrIsWorkInProgress) {
 			ctx.Error(http.StatusMethodNotAllowed, "PR is a work in progress", "Work in progress PRs cannot be merged")
+		} else if models.IsErrInvalidMergeStyle(err) {
+			ctx.Error(http.StatusUnprocessableEntity, "Invalid merge style", mergeStyleError(err, repo_model.MergeStyle(form.Do)))
 		} else if message, ok := issue_service.PRTitleRuleMessage(ctx.Locale, err); ok {
 			ctx.Error(http.StatusMethodNotAllowed, "PRTitleRule", message)
 		} else if errors.Is(err, pull_service.ErrNotMergeableState) {
@@ -1067,7 +1077,7 @@ func MergePullRequest(ctx *context.APIContext) {
 	if manuallyMerged {
 		if err := pull_service.MergedManually(ctx, pr, ctx.Doer(), ctx.Repo().GitRepo, form.MergeCommitID); err != nil {
 			if models.IsErrInvalidMergeStyle(err) {
-				ctx.Error(http.StatusMethodNotAllowed, "Invalid merge style", fmt.Errorf("%s is not an allowed merge style for this repository", repo_model.MergeStyle(form.Do)))
+				ctx.Error(http.StatusUnprocessableEntity, "Invalid merge style", mergeStyleError(err, repo_model.MergeStyle(form.Do)))
 				return
 			}
 			if strings.Contains(err.Error(), "Wrong commit ID") {
@@ -1134,7 +1144,7 @@ func MergePullRequest(ctx *context.APIContext) {
 
 	if err := pull_service.Merge(mergeCtx, pr, ctx.Doer(), ctx.Repo().GitRepo, repo_model.MergeStyle(form.Do), form.HeadCommitID, message, false); err != nil {
 		if models.IsErrInvalidMergeStyle(err) {
-			ctx.Error(http.StatusMethodNotAllowed, "Invalid merge style", fmt.Errorf("%s is not an allowed merge style for this repository", repo_model.MergeStyle(form.Do)))
+			ctx.Error(http.StatusUnprocessableEntity, "Invalid merge style", mergeStyleError(err, repo_model.MergeStyle(form.Do)))
 		} else if models.IsErrMergeConflicts(err) {
 			conflictError := err.(models.ErrMergeConflicts)
 			ctx.JSON(http.StatusConflict, conflictError)

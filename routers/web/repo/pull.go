@@ -1467,6 +1467,8 @@ func mergeCheckMessage(ctx *context.Context, issue *issues_model.Issue, err erro
 	case git_model.IsErrPRTitleRule(err):
 		message, _ := issue_service.PRTitleRuleMessage(ctx.Locale, err)
 		return message, true
+	case models.IsErrInvalidMergeStyle(err):
+		return mergeStyleMessage(ctx, err), true
 	case errors.Is(err, pull_service.ErrNotMergeableState):
 		return ctx.Tr("repo.pulls.no_merge_not_ready"), true
 	case models.IsErrDisallowedToMerge(err):
@@ -1600,7 +1602,7 @@ func MergePullRequest(ctx *context.Context) {
 		if err := pull_service.MergedManually(ctx, pr, ctx.Doer, ctx.Repo.GitRepo, form.MergeCommitID); err != nil {
 			switch {
 			case models.IsErrInvalidMergeStyle(err):
-				ctx.JSONError(ctx.Tr("repo.pulls.invalid_merge_option"))
+				ctx.JSONError(mergeStyleMessage(ctx, err))
 			case strings.Contains(err.Error(), "Wrong commit ID"):
 				ctx.JSONError(ctx.Tr("repo.pulls.wrong_commit_id"))
 			default:
@@ -1688,7 +1690,7 @@ func MergePullRequest(ctx *context.Context) {
 
 	if err := pull_service.Merge(workCtx, pr, ctx.Doer, ctx.Repo.GitRepo, repo_model.MergeStyle(form.Do), form.HeadCommitID, message, false); err != nil {
 		if models.IsErrInvalidMergeStyle(err) {
-			ctx.JSONError(ctx.Tr("repo.pulls.invalid_merge_option"))
+			ctx.JSONError(mergeStyleMessage(ctx, err))
 		} else if models.IsErrMergeConflicts(err) {
 			conflictError := err.(models.ErrMergeConflicts)
 			flashError, err := ctx.RenderToHTML(tplAlertDetails, map[string]any{
@@ -1848,6 +1850,14 @@ func MergeQueue(ctx *context.Context) {
 }
 
 // mergeCheckError answers a refused CheckPullMergeable
+// mergeStyleMessage says that the merge style is refused, naming the branch rules that limit the styles
+func mergeStyleMessage(ctx *context.Context, err error) template.HTML {
+	if e, ok := errors.AsType[models.ErrInvalidMergeStyle](err); ok && e.Rules != "" {
+		return ctx.Tr("repo.pulls.invalid_merge_style_rules", e.Rules)
+	}
+	return ctx.Tr("repo.pulls.invalid_merge_option")
+}
+
 func mergeCheckError(ctx *context.Context, issue *issues_model.Issue, err error) {
 	if message, ok := mergeCheckMessage(ctx, issue, err); ok {
 		ctx.JSONError(message)
@@ -1888,7 +1898,7 @@ func addToMergeQueue(ctx *context.Context, form *forms.MergePullRequestForm, iss
 	case errors.As(err, &pull_model.ErrAlreadyInMergeQueue{}):
 		ctx.JSONError(ctx.Tr("repo.pulls.merge_queue.already_queued"))
 	case models.IsErrInvalidMergeStyle(err):
-		ctx.JSONError(ctx.Tr("repo.pulls.invalid_merge_option"))
+		ctx.JSONError(mergeStyleMessage(ctx, err))
 	case models.IsErrSHADoesNotMatch(err):
 		ctx.JSONError(ctx.Tr("repo.pulls.head_out_of_date"))
 	case errors.Is(err, util.ErrPermissionDenied):

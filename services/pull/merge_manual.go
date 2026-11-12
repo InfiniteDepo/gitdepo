@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"strings"
 
-	"forgejo.org/models"
 	"forgejo.org/models/db"
 	issues_model "forgejo.org/models/issues"
 	repo_model "forgejo.org/models/repo"
@@ -28,15 +27,9 @@ func MergedManually(ctx context.Context, pr *issues_model.PullRequest, doer *use
 		if err := pr.LoadBaseRepo(ctx); err != nil {
 			return err
 		}
-		prUnit, err := pr.BaseRepo.GetUnit(ctx, unit.TypePullRequests)
-		if err != nil {
+		// the manual merge is a style too: the matching branch rules, else the repository's setting
+		if err := CheckMergeStyle(ctx, pr, repo_model.MergeStyleManuallyMerged); err != nil {
 			return err
-		}
-		prConfig := prUnit.PullRequestsConfig()
-
-		// Check if merge style is correct and allowed
-		if !prConfig.IsMergeStyleAllowed(repo_model.MergeStyleManuallyMerged) {
-			return models.ErrInvalidMergeStyle{ID: pr.BaseRepo.ID, Style: repo_model.MergeStyleManuallyMerged}
 		}
 
 		// Accept full or abbreviated commit IDs, any case. Lowercase first so

@@ -105,6 +105,11 @@ func CheckPullMergeable(stdCtx context.Context, doer *user_model.User, perm *acc
 			return err
 		}
 
+		// not an exemption of IsAdminExempt: styles are no protection check, a force merge needs an allowed one too
+		if err := CheckMergeStyle(ctx, pr, mergeStyle); err != nil {
+			return err
+		}
+
 		if !pr.CanAutoMerge() && !pr.IsEmpty() {
 			return ErrNotMergeableState
 		}

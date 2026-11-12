@@ -29,7 +29,6 @@ import (
 	pull_model "forgejo.org/models/pull"
 	quota_model "forgejo.org/models/quota"
 	repo_model "forgejo.org/models/repo"
-	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/cache"
 	"forgejo.org/modules/git"
@@ -70,6 +69,7 @@ const (
 	ReasonRetargeted    = "retargeted"
 	ReasonPermission    = "permission"
 	ReasonBlocked       = "blocked"
+	ReasonMergeStyle    = "merge_style" // the style the entry merges with is no longer allowed by the branch rules
 	ReasonConflict      = "conflict"
 	ReasonWIP           = "wip"
 	ReasonDisabled      = "disabled"
@@ -213,13 +213,8 @@ func Add(ctx context.Context, doer *user_model.User, perm *access_model.Permissi
 	if style != repo_model.MergeStyleMerge && style != repo_model.MergeStyleRebase && style != repo_model.MergeStyleRebaseMerge && style != repo_model.MergeStyleSquash {
 		return models.ErrInvalidMergeStyle{ID: pr.BaseRepoID, Style: style}
 	}
-	prUnit, err := pr.BaseRepo.GetUnit(ctx, unit.TypePullRequests)
-	if err != nil {
-		return err
-	}
-	if !prUnit.PullRequestsConfig().IsMergeStyleAllowed(style) {
-		return models.ErrInvalidMergeStyle{ID: pr.BaseRepoID, Style: style}
-	}
+	// the style the queue merges with (the rule's, else the chosen one) must be allowed by the branch rules too:
+	// CheckPullMergeable below decides that, as for every other merge path
 	if l, err := quota_model.GetPersonalRepoLimit(ctx, pr.BaseRepo.OwnerID); err != nil {
 		return err
 	} else if l.Reached() {
@@ -560,6 +555,13 @@ func (p *pass) ineligible(it *item) (string, error) {
 		return "", err
 	} else if !noDeps {
 		return ReasonBlocked, nil
+	}
+	// rules can change while queued: the style is decided again at every pass, never switched
+	if err := pull_service.CheckMergeStyleWithRules(p.ctx, pr, p.rules, queueStyle(git_model.MergeQueueRule(p.rules), it.MergeStyle)); err != nil {
+		if models.IsErrInvalidMergeStyle(err) {
+			return ReasonMergeStyle, nil
+		}
+		return "", err
 	}
 	exempt := func(pb *git_model.ProtectedBranch) bool {
 		if !it.Forced {

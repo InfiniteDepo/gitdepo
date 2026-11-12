@@ -9,4 +9,5 @@
 {{else if eq . "conflict"}}{{ctx.Locale.Tr "repo.pulls.auto_merge.reason.conflict"}}
 {{else if eq . "wip"}}{{ctx.Locale.Tr "repo.pulls.auto_merge.reason.wip"}}
 {{else if eq . "blocked"}}{{ctx.Locale.Tr "repo.pulls.auto_merge.reason.blocked"}}
+{{else if eq . "merge_style"}}{{ctx.Locale.Tr "repo.pulls.auto_merge.reason.merge_style"}}
 {{end}}

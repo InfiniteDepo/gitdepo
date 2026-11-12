@@ -1949,28 +1949,25 @@ func ViewIssue(ctx *context.Context) {
 
 		ctx.Data["AutodetectManualMerge"] = prConfig.AutodetectManualMerge
 
-		var mergeStyle repo_model.MergeStyle
-		// Check correct values and select default
-		if ms, ok := ctx.Data["MergeStyle"].(repo_model.MergeStyle); !ok ||
-			!prConfig.IsMergeStyleAllowed(ms) {
-			defaultMergeStyle := prConfig.GetDefaultMergeStyle()
-			if prConfig.IsMergeStyleAllowed(defaultMergeStyle) && !ok {
-				mergeStyle = defaultMergeStyle
-			} else if prConfig.AllowMerge {
-				mergeStyle = repo_model.MergeStyleMerge
-			} else if prConfig.AllowRebase {
-				mergeStyle = repo_model.MergeStyleRebase
-			} else if prConfig.AllowRebaseMerge {
-				mergeStyle = repo_model.MergeStyleRebaseMerge
-			} else if prConfig.AllowSquash {
-				mergeStyle = repo_model.MergeStyleSquash
-			} else if prConfig.AllowFastForwardOnly {
-				mergeStyle = repo_model.MergeStyleFastForwardOnly
-			} else if prConfig.AllowManualMerge {
-				mergeStyle = repo_model.MergeStyleManuallyMerged
-			}
+		// the one decision on merge styles: the matching branch rules, else the repository's setting
+		stylePolicy, err := pull_service.MergeStylesOf(ctx, repo, pull.BaseBranch)
+		if err != nil {
+			ctx.ServerError("MergeStylesOf", err)
+			return
 		}
+		styleAllowed := make(map[string]bool, len(stylePolicy.Allowed))
+		for _, s := range stylePolicy.Allowed {
+			styleAllowed[string(s)] = true
+		}
+		ctx.Data["MergeStyleAllowed"] = styleAllowed
+		ctx.Data["MergeStyleAny"] = len(stylePolicy.Allowed) > 0
+		ctx.Data["MergeStyleRules"] = stylePolicy.RulesText()
 
+		// a style named in the request (ctx.Data["MergeStyle"]) counts if it is allowed, else the default
+		mergeStyle := stylePolicy.Default
+		if ms, ok := ctx.Data["MergeStyle"].(repo_model.MergeStyle); ok && stylePolicy.Allows(ms) {
+			mergeStyle = ms
+		}
 		ctx.Data["MergeStyle"] = mergeStyle
 
 		var updateStyle repo_model.UpdateStyle

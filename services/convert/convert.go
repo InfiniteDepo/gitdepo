@@ -241,6 +241,8 @@ func toBranchProtection(ctx context.Context, bp *git_model.ProtectedBranch, read
 		BlockOnIncompleteTasks:         bp.BlockOnIncompleteTasks,
 		RequireMergeQueue:              bp.RequireMergeQueue,
 		MergeQueueMergeStyle:           bp.MergeQueueMergeStyle,
+		AllowedMergeStyles:             bp.AllowedMergeStyles,
+		DefaultMergeStyle:              bp.DefaultMergeStyle,
 		MergeQueueBuildConcurrency:     bp.MergeQueueBuildConcurrency,
 		MergeQueueMinGroupSize:         bp.MergeQueueMinGroupSize,
 		MergeQueueMaxGroupSize:         bp.MergeQueueMaxGroupSize,

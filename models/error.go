@@ -429,6 +429,7 @@ func (err ErrSHAOrCommitIDNotProvided) Error() string {
 type ErrInvalidMergeStyle struct {
 	ID    int64
 	Style repo_model.MergeStyle
+	Rules string // the branch rules that set the allowed styles, "" if the repository's setting refused it
 }
 
 // IsErrInvalidMergeStyle checks if an error is a ErrInvalidMergeStyle.
@@ -438,6 +439,9 @@ func IsErrInvalidMergeStyle(err error) bool {
 }
 
 func (err ErrInvalidMergeStyle) Error() string {
+	if err.Rules != "" {
+		return fmt.Sprintf("merge strategy is not allowed by the branch rules [repo_id: %d, strategy: %s, rules: %s]", err.ID, err.Style, err.Rules)
+	}
 	return fmt.Sprintf("merge strategy is not allowed or is invalid [repo_id: %d, strategy: %s]",
 		err.ID, err.Style)
 }

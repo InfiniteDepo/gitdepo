@@ -88,6 +88,12 @@ type BranchProtection struct {
 	// merge style of every pull request in the queue; empty: the one chosen when adding
 	// enum: ["", "merge", "rebase", "rebase-merge", "squash"]
 	MergeQueueMergeStyle string `json:"merge_queue_merge_style"`
+	// merge styles pull requests into matching branches may use; empty: no opinion, the repository's Pull requests
+	// setting applies. With rules at several levels, only the styles all of them allow are offered.
+	// enum: ["merge", "rebase", "rebase-merge", "squash", "fast-forward-only", "manually-merged"]
+	AllowedMergeStyles []string `json:"allowed_merge_styles"`
+	// the style offered first; empty, or one of allowed_merge_styles
+	DefaultMergeStyle string `json:"default_merge_style"`
 	// pull requests tested at a time, 0 to 100 (default 5)
 	MergeQueueBuildConcurrency int `json:"merge_queue_build_concurrency"`
 	// passed pull requests to wait for before merging, 0 to 100 (default 1)
@@ -164,6 +170,12 @@ type CreateBranchProtectionOption struct {
 	// merge style of every pull request in the queue; empty: the one chosen when adding
 	// enum: ["", "merge", "rebase", "rebase-merge", "squash"]
 	MergeQueueMergeStyle string `json:"merge_queue_merge_style"`
+	// merge styles pull requests into matching branches may use; empty: no opinion, the repository's Pull requests
+	// setting applies. With rules at several levels, only the styles all of them allow are offered.
+	// enum: ["merge", "rebase", "rebase-merge", "squash", "fast-forward-only", "manually-merged"]
+	AllowedMergeStyles []string `json:"allowed_merge_styles"`
+	// the style offered first; empty, or one of allowed_merge_styles
+	DefaultMergeStyle string `json:"default_merge_style"`
 	// pull requests tested at a time, 0 to 100 (default 5)
 	MergeQueueBuildConcurrency int `json:"merge_queue_build_concurrency"`
 	// passed pull requests to wait for before merging, 0 to 100 (default 1)
@@ -226,13 +238,15 @@ type EditBranchProtectionOption struct {
 	BlockOnIncompleteTasks *bool `json:"block_on_incomplete_tasks"`
 
 	// see BranchProtection
-	RequireMergeQueue             *bool   `json:"require_merge_queue"`
-	MergeQueueMergeStyle          *string `json:"merge_queue_merge_style"`
-	MergeQueueBuildConcurrency    *int    `json:"merge_queue_build_concurrency"`
-	MergeQueueMinGroupSize        *int    `json:"merge_queue_min_group_size"`
-	MergeQueueMaxGroupSize        *int    `json:"merge_queue_max_group_size"`
-	MergeQueueWaitMinutes         *int    `json:"merge_queue_wait_minutes"`
-	MergeQueueCheckTimeoutMinutes *int    `json:"merge_queue_check_timeout_minutes"`
+	RequireMergeQueue             *bool     `json:"require_merge_queue"`
+	MergeQueueMergeStyle          *string   `json:"merge_queue_merge_style"`
+	AllowedMergeStyles            *[]string `json:"allowed_merge_styles"`
+	DefaultMergeStyle             *string   `json:"default_merge_style"`
+	MergeQueueBuildConcurrency    *int      `json:"merge_queue_build_concurrency"`
+	MergeQueueMinGroupSize        *int      `json:"merge_queue_min_group_size"`
+	MergeQueueMaxGroupSize        *int      `json:"merge_queue_max_group_size"`
+	MergeQueueWaitMinutes         *int      `json:"merge_queue_wait_minutes"`
+	MergeQueueCheckTimeoutMinutes *int      `json:"merge_queue_check_timeout_minutes"`
 
 	// Users, teams and deploy keys (public key IDs) allowed to delete matching branches. Empty lists block everyone.
 	// The default branch can never be deleted. IDs which are not write deploy keys of the repository are ignored.

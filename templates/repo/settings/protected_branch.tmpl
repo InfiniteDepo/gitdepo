@@ -370,6 +370,7 @@
 					<span class="help">{{ctx.Locale.Tr "repo.settings.block_on_incomplete_tasks_desc"}}</span>
 				</label>
 			</fieldset>
+			{{template "repo/settings/protected_branch_merge_styles" (dict "Rule" .Rule "RepoConfig" .MergeStyleRepoConfig "Styles" .MergeStyleChoices)}}
 			<fieldset id="merge-queue-settings">
 				<legend>{{ctx.Locale.Tr "repo.settings.merge_queue"}}</legend>
 				<div class="grouped fields">

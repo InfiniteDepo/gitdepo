@@ -248,16 +248,9 @@ func Merge(ctx context.Context, pr *issues_model.PullRequest, doer *user_model.U
 		return fmt.Errorf("unable to load head repo: %w", err)
 	}
 
-	prUnit, err := pr.BaseRepo.GetUnit(ctx, unit.TypePullRequests)
-	if err != nil {
-		log.Error("pr.BaseRepo.GetUnit(unit.TypePullRequests): %v", err)
+	// the one decision on merge styles: the matching branch rules, else the repository's setting
+	if err := CheckMergeStyle(ctx, pr, mergeStyle); err != nil {
 		return err
-	}
-	prConfig := prUnit.PullRequestsConfig()
-
-	// Check if merge style is correct and allowed
-	if !prConfig.IsMergeStyleAllowed(mergeStyle) {
-		return models.ErrInvalidMergeStyle{ID: pr.BaseRepo.ID, Style: mergeStyle}
 	}
 
 	if TestHookBeforeHeadPin != nil {
