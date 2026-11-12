@@ -183,7 +183,8 @@ func addToMergeQueue(ctx *context.APIContext, form *forms.MergePullRequestForm, 
 		ctx.Error(http.StatusConflict, "AddToMergeQueue", "the head of the pull request is not head_commit_id")
 		return
 	case models.IsErrInvalidMergeStyle(err):
-		ctx.Error(http.StatusUnprocessableEntity, "AddToMergeQueue", "the merge queue can't merge with this merge style")
+		e, _ := errors.AsType[models.ErrInvalidMergeStyle](err)
+		ctx.Error(http.StatusUnprocessableEntity, "AddToMergeQueue", mergeStyleError(err, e.Style))
 		return
 	default:
 		mergeCheckError(ctx, pr, err)

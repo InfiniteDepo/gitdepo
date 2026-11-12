@@ -27,6 +27,7 @@ import (
 	api "forgejo.org/modules/structs"
 	"forgejo.org/services/forms"
 	"forgejo.org/services/mergequeue"
+	repo_service "forgejo.org/services/repository"
 	"forgejo.org/tests"
 	"forgejo.org/tests/forgery"
 
@@ -276,6 +277,30 @@ func TestMergeStyles(t *testing.T) {
 			assert.Contains(t, page(pr), "no longer allowed")
 		})
 
+		t.Run("Auto merge cancels when the merge queue style is refused", func(t *testing.T) {
+			defer tests.PrintCurrentTest(t)()
+			fields := url.Values{
+				"enable_status_check": {"true"}, "status_check_contexts": {"ci"},
+				"require_merge_queue": {"true"}, "allowed_merge_styles": {"squash", "merge"},
+			}
+			msRule(t, session, repo, http.StatusSeeOther, fields)
+			pr := newPull(t)
+			testPullMergeForm(t, session, http.StatusOK, owner.Name, repo.Name, index(pr), optionsPullMerge{"do": "squash", "merge_when_checks_succeed": "true", "head_commit_id": head(pr)})
+			unittest.AssertExistsAndLoadBean(t, &pull_model.AutoMerge{PullID: pr.ID})
+
+			// the style of the pull request is allowed, the one the queue merges with is not
+			fields["merge_queue_merge_style"] = []string{"rebase"}
+			msRule(t, session, repo, http.StatusSeeOther, fields)
+			setStatus(t, statusCtx, head(pr), api.CommitStatusSuccess)
+
+			unittest.AssertNotExistsBean(t, &pull_model.AutoMerge{PullID: pr.ID})
+			assert.Nil(t, queueEntry(t, pr))
+			assert.False(t, merged(pr))
+			c := lastComment(pr, issues_model.CommentTypePRUnScheduledToAutoMerge)
+			require.NotNil(t, c)
+			assert.Equal(t, "merge_style", c.AutoMergeInfo().Reason)
+		})
+
 		t.Run("Without styles the repository setting applies", func(t *testing.T) {
 			defer tests.PrintCurrentTest(t)()
 			msRule(t, session, repo, http.StatusSeeOther, url.Values{})
@@ -367,5 +392,59 @@ func TestMergeStylesLevels(t *testing.T) {
 		post("/org/org3/settings/branches/edit", url.Values{"rule_id": {strconv.FormatInt(orgRule.ID, 10)}, "rule_name": {"master"}, "allowed_merge_styles": {"nope"}})
 		assert.NotEmpty(t, bwFlash(owner))
 		assert.Equal(t, []string{"rebase", "squash"}, unittest.AssertExistsAndLoadBean(t, &git_model.ProtectedBranch{ID: orgRule.ID}).AllowedMergeStyles)
+	})
+}
+
+// Only the first matching rule of a level counts, so a rule with styles can be shadowed by an earlier one without;
+// project rules decide on the merge paths, and the warnings show on every rule form.
+func TestMergeStylesShadowingAndProject(t *testing.T) {
+	onApplicationRun(t, func(t *testing.T, u *url.URL) {
+		name := bwRepo(t, "styles-shadow")
+		repo := unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{OwnerName: "org3", Name: name})
+		owner := loginUser(t, "user2")
+		post := func(link string, v url.Values) {
+			t.Helper()
+			owner.MakeRequest(t, NewRequestWithURLValues(t, "POST", link, v), http.StatusSeeOther)
+		}
+		merge := func(pr, do string, expected int) {
+			t.Helper()
+			owner.MakeRequest(t, NewRequestWithValues(t, "POST", fmt.Sprintf("%s/pulls/%s/merge", repo.Link(), pr), map[string]string{"do": do}), expected)
+		}
+		repoRuleURL := fmt.Sprintf("/%s/settings/branches/edit", repo.FullName())
+
+		// "master" (no styles) matches before "ma*" (squash): the first one counts, so "ma*" does not limit the styles
+		post(repoRuleURL, url.Values{"rule_name": {"master"}})
+		assert.NotContains(t, bwFlash(owner), "first matching rule")
+		post(repoRuleURL, url.Values{"rule_name": {"ma*"}, "allowed_merge_styles": {"squash"}})
+		assert.Contains(t, bwFlash(owner), `Only the first matching rule of a level counts: for branches both "master" and "ma*" match, "master" is used and the merge styles of "ma*" are ignored.`)
+		merge(bwPR(t, owner, "org3", name, "master", "shadow-1"), "merge", http.StatusOK)
+
+		// a merge queue style outside the rule's own list is warned about
+		post(repoRuleURL, url.Values{"rule_name": {"release"}, "allowed_merge_styles": {"squash"}, "merge_queue_merge_style": {"rebase"}})
+		assert.Contains(t, bwFlash(owner), `The merge queue style "rebase" of this rule is not one of its allowed styles`)
+
+		// a project rule decides on the merge paths
+		ctx := asActor(t, 2, "user2")
+		group, err := repo_model.CreateRepoGroup(ctx, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 3}), "styles-project", "")
+		require.NoError(t, err)
+		pr := bwPR(t, owner, "org3", name, "master", "shadow-2")
+		require.NoError(t, repo_service.MoveRepository(ctx, unittest.AssertExistsAndLoadBean(t, &user_model.User{ID: 2}), repo, group.ID))
+		repo = unittest.AssertExistsAndLoadBean(t, &repo_model.Repository{ID: repo.ID})
+		projectURL := fmt.Sprintf("/org/org3/groups/%d/settings/branches/edit", group.ID)
+		post(projectURL, url.Values{"rule_name": {"master"}, "allowed_merge_styles": {"squash"}})
+		projectRule := unittest.AssertExistsAndLoadBean(t, &git_model.ProtectedBranch{OrgID: 3, GroupID: group.ID, RuleName: "master"})
+		body := owner.MakeRequest(t, NewRequest(t, "GET", fmt.Sprintf("%s/pulls/%s", repo.Link(), pr)), http.StatusOK).Body.String()
+		assert.Contains(t, body, "project rule")
+		merge(pr, "merge", http.StatusBadRequest)
+		merge(pr, "rebase", http.StatusBadRequest)
+		merge(pr, "squash", http.StatusOK)
+
+		// the warnings on the organization and project forms
+		post("/org/org3/settings/branches/edit", url.Values{"rule_name": {"master"}, "allowed_merge_styles": {"merge"}})
+		assert.Contains(t, bwFlash(owner), "share none with the project rule")
+		post(projectURL, url.Values{"rule_id": {strconv.FormatInt(projectRule.ID, 10)}, "rule_name": {"master"}, "allowed_merge_styles": {"squash"}})
+		assert.Contains(t, bwFlash(owner), "share none with the organization rule")
+		post("/org/org3/settings/branches/edit", url.Values{"rule_name": {"m*"}, "allowed_merge_styles": {"rebase"}})
+		assert.Contains(t, bwFlash(owner), `"master" is used and the merge styles of "m*" are ignored`)
 	})
 }

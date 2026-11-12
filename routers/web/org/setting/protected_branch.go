@@ -219,6 +219,12 @@ func SettingsProtectedBranchPost(ctx *context.Context) {
 		ctx.ServerError("FindOtherLevelRules", err)
 		return
 	}
+	sameLevel, err := git_model.FindOrgProtectedBranchRules(ctx, org.ID, groupID)
+	if err != nil {
+		ctx.ServerError("FindOrgProtectedBranchRules", err)
+		return
+	}
+	others = append(others, sameLevel...)
 	repo_setting.MergeStyleWarning(ctx, rule, others)
 	ctx.Flash.Success(ctx.Tr("repo.settings.update_protect_branch_success", rule.RuleName))
 	ctx.Redirect(listLink)

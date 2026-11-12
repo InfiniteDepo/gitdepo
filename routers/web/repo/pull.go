@@ -1849,7 +1849,6 @@ func MergeQueue(ctx *context.Context) {
 	ctx.HTML(http.StatusOK, tplMergeQueue)
 }
 
-// mergeCheckError answers a refused CheckPullMergeable
 // mergeStyleMessage says that the merge style is refused, naming the branch rules that limit the styles
 func mergeStyleMessage(ctx *context.Context, err error) template.HTML {
 	if e, ok := errors.AsType[models.ErrInvalidMergeStyle](err); ok && e.Rules != "" {
@@ -1858,6 +1857,7 @@ func mergeStyleMessage(ctx *context.Context, err error) template.HTML {
 	return ctx.Tr("repo.pulls.invalid_merge_option")
 }
 
+// mergeCheckError answers a refused CheckPullMergeable
 func mergeCheckError(ctx *context.Context, issue *issues_model.Issue, err error) {
 	if message, ok := mergeCheckMessage(ctx, issue, err); ok {
 		ctx.JSONError(message)

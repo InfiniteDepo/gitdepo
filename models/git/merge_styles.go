@@ -53,13 +53,7 @@ func (protectBranch *ProtectedBranch) ValidateMergeStyles() error {
 
 // Level names the level of the rule: repository, project or organization.
 func (protectBranch *ProtectedBranch) Level() string {
-	switch {
-	case protectBranch.RepoID != 0:
-		return "repository"
-	case protectBranch.GroupID != 0:
-		return "project"
-	}
-	return "organization"
+	return []string{"repository", "project", "organization"}[protectBranch.level()]
 }
 
 // MergeStyleConflicts returns the rules of others that set merge styles, belong to another level than rule and may
@@ -77,6 +71,31 @@ func MergeStyleConflicts(rule *ProtectedBranch, others []*ProtectedBranch) []*Pr
 		if !slices.ContainsFunc(o.AllowedMergeStyles, func(s string) bool { return slices.Contains(rule.AllowedMergeStyles, s) }) &&
 			(o.RuleName == rule.RuleName || rule.Match(o.RuleName) || o.Match(rule.RuleName)) {
 			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// MergeStyleShadowing returns the pairs (first, second) of rules of rule's level in all, one of them rule, that may
+// match the same branches (equal patterns, or one pattern matches the other's name) and where second sets styles that
+// differ from first's: only the first matching rule of a level counts, so for those branches second's styles are
+// ignored (and first's, or the repository's setting, apply).
+func MergeStyleShadowing(rule *ProtectedBranch, all []*ProtectedBranch) [][2]*ProtectedBranch {
+	var same ProtectedBranchRules
+	for _, o := range all {
+		if o.level() == rule.level() {
+			same = append(same, o)
+		}
+	}
+	same.sort()
+	var out [][2]*ProtectedBranch
+	for i, first := range same {
+		for _, second := range same[i+1:] {
+			if (first.ID == rule.ID || second.ID == rule.ID) && len(second.AllowedMergeStyles) > 0 &&
+				!slices.Equal(first.AllowedMergeStyles, second.AllowedMergeStyles) &&
+				(first.Match(second.RuleName) || second.Match(first.RuleName)) {
+				out = append(out, [2]*ProtectedBranch{first, second})
+			}
 		}
 	}
 	return out

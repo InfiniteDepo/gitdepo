@@ -693,6 +693,26 @@ func (s stateResult) IsSuccess() bool { return s.success }
 func (s stateResult) IsFailure() bool { return s.failure }
 func (s stateResult) IsError() bool   { return false }
 
+// styleNow decides the merge style of it again with the rules as they are now: ReasonMergeStyle if the queue may no
+// longer merge it (ReasonDisabled when the queue rule is gone), "" if it may.
+func (p *pass) styleNow(it *item) (string, error) {
+	rules, err := git_model.GetMatchedProtectedBranchRules(p.ctx, p.repo.ID, p.branch)
+	if err != nil {
+		return "", err
+	}
+	rule := git_model.MergeQueueRule(rules)
+	if rule == nil {
+		return ReasonDisabled, nil
+	}
+	if err := pull_service.CheckMergeStyleWithRules(p.ctx, it.pr, rules, queueStyle(rule, it.MergeStyle)); err != nil {
+		if models.IsErrInvalidMergeStyle(err) {
+			return ReasonMergeStyle, nil
+		}
+		return "", err
+	}
+	return "", nil
+}
+
 // merge fast-forwards the branch to the passed builds: the first one, or up to the last passed one within the group
 // size, whose build has all the ones ahead of it. It returns how many entries it merged, and false when the pass
 // must stop.
@@ -712,6 +732,16 @@ func (p *pass) merge(live []*item) (int, bool) {
 	}
 	for i := 0; i <= last; i++ {
 		it := live[i]
+		// the rules are read again: one saved since the pass began must stop this merge (fail closed)
+		if reason, err := p.styleNow(it); err != nil || reason != "" {
+			if err != nil {
+				log.Error("styleNow[%d]: %v", it.ID, err)
+				p.again = true
+			} else if err := p.remove(it, reason, ""); err != nil {
+				log.Error("remove[%d]: %v", it.ID, err)
+			}
+			return i, false
+		}
 		if ok, err := pull_model.StartMergeQueueMerge(p.ctx, it.ID, it.TempCommitID); err != nil || !ok {
 			if err != nil {
 				log.Error("StartMergeQueueMerge[%d]: %v", it.ID, err)

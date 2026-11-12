@@ -266,12 +266,20 @@ func SetMergeStyleData(ctx *context.Context, cfg *repo_model.PullRequestsConfig)
 	ctx.Data["MergeStyleRepoConfig"] = cfg
 }
 
-// MergeStyleWarning warns, after saving rule, about rules of other levels in others whose styles share none with
-// its own: the pull requests into the branches both match can't be merged (the save is not refused).
+// MergeStyleWarning warns, after saving rule, about rules in others (all levels of its owner, rule included) that
+// shadow or conflict with its merge styles, and about a merge queue style it doesn't allow (the save is not refused):
+// styles of another level that share none with its own (such pull requests can't be merged), a same-level rule that
+// matches first, so that only one of the two counts, and a merge queue style outside its list.
 func MergeStyleWarning(ctx *context.Context, rule *git_model.ProtectedBranch, others []*git_model.ProtectedBranch) {
 	var msgs []string
 	for _, o := range git_model.MergeStyleConflicts(rule, others) {
 		msgs = append(msgs, string(ctx.Tr("repo.settings.merge_styles.conflict", o.Level(), o.RuleName, strings.Join(o.AllowedMergeStyles, ", "))))
+	}
+	for _, pair := range git_model.MergeStyleShadowing(rule, others) {
+		msgs = append(msgs, string(ctx.Tr("repo.settings.merge_styles.shadowed", pair[0].RuleName, pair[1].RuleName)))
+	}
+	if len(rule.AllowedMergeStyles) > 0 && rule.MergeQueueMergeStyle != "" && !slices.Contains(rule.AllowedMergeStyles, rule.MergeQueueMergeStyle) {
+		msgs = append(msgs, string(ctx.Tr("repo.settings.merge_styles.queue_style", rule.MergeQueueMergeStyle)))
 	}
 	if len(msgs) > 0 {
 		ctx.Flash.Warning(strings.Join(msgs, "<br>"))
