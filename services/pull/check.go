@@ -105,6 +105,15 @@ func CheckPullMergeable(stdCtx context.Context, doer *user_model.User, perm *acc
 			return err
 		}
 
+		// not an exemption of IsAdminExempt: styles are no protection check, a force merge needs an allowed one too
+		rules, err := git_model.GetMatchedProtectedBranchRules(ctx, pr.BaseRepoID, pr.BaseBranch)
+		if err != nil {
+			return err
+		}
+		if err := CheckMergeStyleWithRules(ctx, pr, rules, mergeStyle); err != nil {
+			return err
+		}
+
 		if !pr.CanAutoMerge() && !pr.IsEmpty() {
 			return ErrNotMergeableState
 		}
@@ -148,7 +157,7 @@ func CheckPullMergeable(stdCtx context.Context, doer *user_model.User, perm *acc
 			}
 		}
 
-		if _, err := isSignedIfRequired(ctx, pr, doer, mergeStyle); err != nil {
+		if _, err := isSignedIfRequired(ctx, pr, rules, doer, mergeStyle); err != nil {
 			return err
 		}
 
@@ -163,12 +172,7 @@ func CheckPullMergeable(stdCtx context.Context, doer *user_model.User, perm *acc
 }
 
 // isSignedIfRequired check if merge will be signed if required
-func isSignedIfRequired(ctx context.Context, pr *issues_model.PullRequest, doer *user_model.User, mergeStyle repo_model.MergeStyle) (bool, error) {
-	rules, err := git_model.GetMatchedProtectedBranchRules(ctx, pr.BaseRepoID, pr.BaseBranch)
-	if err != nil {
-		return false, err
-	}
-
+func isSignedIfRequired(ctx context.Context, pr *issues_model.PullRequest, rules git_model.ProtectedBranchRules, doer *user_model.User, mergeStyle repo_model.MergeStyle) (bool, error) {
 	if !slices.ContainsFunc(rules, func(pb *git_model.ProtectedBranch) bool { return pb.RequireSignedCommits }) {
 		return true, nil
 	}

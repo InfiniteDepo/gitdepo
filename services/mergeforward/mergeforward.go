@@ -337,7 +337,8 @@ func (c *cascade) run(ctx context.Context, targets []string) error {
 }
 
 // step merges source into target and returns the merge commit, "" when target already has source, and the commit of
-// source it read.
+// source it read. It always makes a merge commit, whatever merge styles the rules of target allow: merging forward is
+// done by the system, not by a user's merge, so the allowed styles don't limit it (documented in the rule form).
 func (c *cascade) step(ctx context.Context, source, target string) (sha, sourceSHA string, err error) {
 	for range pushAttempts {
 		if err := git.NewCommand(ctx, "fetch", "--quiet", "origin").AddDynamicArguments("+"+git.BranchPrefix+source+":"+git.BranchPrefix+source, "+"+git.BranchPrefix+target+":"+git.BranchPrefix+target).Run(&git.RunOpts{Dir: c.tmp}); err != nil {

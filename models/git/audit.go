@@ -23,6 +23,10 @@ func ids(s []int64) []int64 {
 // AuditFields are the settings the audit log keeps before/after for a branch rule.
 func (protectBranch *ProtectedBranch) AuditFields() map[string]any {
 	contexts := protectBranch.StatusCheckContexts
+	styles := protectBranch.AllowedMergeStyles
+	if styles == nil {
+		styles = []string{}
+	}
 	if contexts == nil {
 		contexts = []string{}
 	}
@@ -49,6 +53,7 @@ func (protectBranch *ProtectedBranch) AuditFields() map[string]any {
 		"merge_queue_build_concurrency": protectBranch.MergeQueueBuildConcurrency, "merge_queue_min_group_size": protectBranch.MergeQueueMinGroupSize,
 		"merge_queue_max_group_size": protectBranch.MergeQueueMaxGroupSize, "merge_queue_wait_minutes": protectBranch.MergeQueueWaitMinutes,
 		"merge_queue_check_timeout_minutes": protectBranch.MergeQueueCheckTimeoutMinutes,
+		"allowed_merge_styles":              styles, "default_merge_style": protectBranch.DefaultMergeStyle,
 	}
 }
 

@@ -94,6 +94,11 @@ type ProtectedBranch struct {
 	MergeQueueCheckTimeoutMinutes int    `xorm:"NOT NULL DEFAULT 0"`
 	MergeQueueMergeStyle          string `xorm:"VARCHAR(30) NOT NULL DEFAULT ''"` // "" = the style chosen for the pull request
 
+	// Merge styles pull requests into matching branches may use (see ValidateMergeStyles); empty = no opinion, the
+	// repository's Pull requests setting applies. DefaultMergeStyle must be one of them, or empty.
+	AllowedMergeStyles []string `xorm:"JSON TEXT"`
+	DefaultMergeStyle  string   `xorm:"VARCHAR(30) NOT NULL DEFAULT ''"`
+
 	CreatedUnix timeutil.TimeStamp `xorm:"created"`
 	UpdatedUnix timeutil.TimeStamp `xorm:"updated"`
 }

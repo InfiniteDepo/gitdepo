@@ -39,10 +39,10 @@ func TestMergeQueueEntries(t *testing.T) {
 	assert.Equal(t, a.ID, queue[0].ID)
 
 	// only a waiting entry starts a build
-	started, err := pull_model.StartMergeQueueBuild(ctx, a.ID, "base", "temp")
+	started, err := pull_model.StartMergeQueueBuild(ctx, a.ID, "base", "temp", "squash")
 	require.NoError(t, err)
 	assert.True(t, started)
-	started, err = pull_model.StartMergeQueueBuild(ctx, a.ID, "base2", "temp2")
+	started, err = pull_model.StartMergeQueueBuild(ctx, a.ID, "base2", "temp2", "merge")
 	require.NoError(t, err)
 	assert.False(t, started)
 

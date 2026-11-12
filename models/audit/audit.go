@@ -212,7 +212,8 @@ var Fields = map[string][]string{
 		"merge_queue_build_concurrency", "merge_queue_min_group_size", "merge_queue_max_group_size", "merge_queue_wait_minutes",
 		"merge_queue_check_timeout_minutes", "delete_allowlist_user_ids", "delete_allowlist_team_ids",
 		"delete_allowlist_deploy_key_ids", "force_push_allowlist_user_ids", "force_push_allowlist_team_ids",
-		"force_push_allowlist_deploy_key_ids", "apply_to_selected_repos", "approval_rules", "repo_ids",
+		"force_push_allowlist_deploy_key_ids", "apply_to_selected_repos", "approval_rules", "repo_ids", "allowed_merge_styles",
+		"default_merge_style",
 	},
 	"vulnerability_alert": {
 		"alert_id", "advisory_id", "ecosystem", "package", "manifest", "reason", "comment", "previous_state", "previous_reason",

@@ -34179,6 +34179,14 @@
       "description": "BranchProtection represents a branch protection for a repository",
       "type": "object",
       "properties": {
+        "allowed_merge_styles": {
+          "description": "merge styles pull requests into matching branches may use; empty: no opinion, the repository's Pull requests\nsetting applies. With rules at several levels, only the styles all of them allow are offered.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-name": "AllowedMergeStyles"
+        },
         "apply_to_admins": {
           "type": "boolean",
           "x-go-name": "ApplyToAdmins"
@@ -34236,6 +34244,11 @@
           "type": "string",
           "format": "date-time",
           "x-go-name": "Created"
+        },
+        "default_merge_style": {
+          "description": "the style offered first; empty, or one of allowed_merge_styles",
+          "type": "string",
+          "x-go-name": "DefaultMergeStyle"
         },
         "delete_allowlist_deploy_key_ids": {
           "type": "array",
@@ -35206,6 +35219,14 @@
       "description": "CreateBranchProtectionOption options for creating a branch protection",
       "type": "object",
       "properties": {
+        "allowed_merge_styles": {
+          "description": "merge styles pull requests into matching branches may use; empty: no opinion, the repository's Pull requests\nsetting applies. With rules at several levels, only the styles all of them allow are offered.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-name": "AllowedMergeStyles"
+        },
         "apply_to_admins": {
           "type": "boolean",
           "x-go-name": "ApplyToAdmins"
@@ -35258,6 +35279,11 @@
           "type": "string",
           "x-deprecated": true,
           "x-go-name": "BranchName"
+        },
+        "default_merge_style": {
+          "description": "the style offered first; empty, or one of allowed_merge_styles",
+          "type": "string",
+          "x-go-name": "DefaultMergeStyle"
         },
         "delete_allowlist_deploy_key_ids": {
           "type": "array",
@@ -36026,6 +36052,14 @@
       "type": "object",
       "title": "CreateOrgBranchProtectionOption options for creating a branch protection rule of an organization.",
       "properties": {
+        "allowed_merge_styles": {
+          "description": "merge styles pull requests into matching branches may use; empty: no opinion, the repository's Pull requests\nsetting applies. With rules at several levels, only the styles all of them allow are offered.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-name": "AllowedMergeStyles"
+        },
         "apply_to_admins": {
           "type": "boolean",
           "x-go-name": "ApplyToAdmins"
@@ -36082,6 +36116,11 @@
           "type": "string",
           "x-deprecated": true,
           "x-go-name": "BranchName"
+        },
+        "default_merge_style": {
+          "description": "the style offered first; empty, or one of allowed_merge_styles",
+          "type": "string",
+          "x-go-name": "DefaultMergeStyle"
         },
         "delete_allowlist_deploy_key_ids": {
           "type": "array",
@@ -37669,6 +37708,13 @@
       "description": "EditBranchProtectionOption options for editing a branch protection",
       "type": "object",
       "properties": {
+        "allowed_merge_styles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-name": "AllowedMergeStyles"
+        },
         "apply_to_admins": {
           "type": "boolean",
           "x-go-name": "ApplyToAdmins"
@@ -37716,6 +37762,10 @@
           "description": "Block merging while code review conversations are unresolved, optionally not counting outdated ones.",
           "type": "boolean",
           "x-go-name": "BlockOnUnresolvedConversations"
+        },
+        "default_merge_style": {
+          "type": "string",
+          "x-go-name": "DefaultMergeStyle"
         },
         "delete_allowlist_deploy_key_ids": {
           "type": "array",
@@ -38219,6 +38269,13 @@
       "type": "object",
       "title": "EditOrgBranchProtectionOption options for editing a branch protection rule of an organization.",
       "properties": {
+        "allowed_merge_styles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-name": "AllowedMergeStyles"
+        },
         "apply_to_admins": {
           "type": "boolean",
           "x-go-name": "ApplyToAdmins"
@@ -38270,6 +38327,10 @@
           "description": "Block merging while code review conversations are unresolved, optionally not counting outdated ones.",
           "type": "boolean",
           "x-go-name": "BlockOnUnresolvedConversations"
+        },
+        "default_merge_style": {
+          "type": "string",
+          "x-go-name": "DefaultMergeStyle"
         },
         "delete_allowlist_deploy_key_ids": {
           "type": "array",
@@ -41471,6 +41532,14 @@
       "description": "OrgBranchProtection represents a branch protection rule of an organization. It applies to the\nrepositories of the organization in addition to their own rules.",
       "type": "object",
       "properties": {
+        "allowed_merge_styles": {
+          "description": "merge styles pull requests into matching branches may use; empty: no opinion, the repository's Pull requests\nsetting applies. With rules at several levels, only the styles all of them allow are offered.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-name": "AllowedMergeStyles"
+        },
         "apply_to_admins": {
           "type": "boolean",
           "x-go-name": "ApplyToAdmins"
@@ -41533,6 +41602,11 @@
           "type": "string",
           "format": "date-time",
           "x-go-name": "Created"
+        },
+        "default_merge_style": {
+          "description": "the style offered first; empty, or one of allowed_merge_styles",
+          "type": "string",
+          "x-go-name": "DefaultMergeStyle"
         },
         "delete_allowlist_deploy_key_ids": {
           "type": "array",

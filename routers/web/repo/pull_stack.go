@@ -17,7 +17,6 @@ import (
 	"forgejo.org/models"
 	issues_model "forgejo.org/models/issues"
 	repo_model "forgejo.org/models/repo"
-	"forgejo.org/models/unit"
 	"forgejo.org/modules/git"
 	"forgejo.org/modules/gitrepo"
 	"forgejo.org/modules/log"
@@ -80,6 +79,7 @@ type stackView struct {
 	ChildrenCount int
 	Styles        []stackStyle
 	DefaultStyle  string
+	StyleRules    string // the branch rules that limit the styles, "" if none does
 	DeleteDefault bool
 	DeleteForced  bool
 	Deletable     int // the branches of the merged pull requests that are deleted after the merge
@@ -222,7 +222,13 @@ func prepareStack(ctx *context.Context, pull *issues_model.PullRequest, allowMer
 		}
 	}
 
-	cfg := ctx.Repo.Repository.MustGetUnit(ctx, unit.TypePullRequests).PullRequestsConfig()
+	// the styles every pull request of the stack may use: the intersection over the rules of the base of each
+	// (the server checks each pull request again when merging)
+	policy, err := pull_service.MergeStylesOf(ctx, ctx.Repo.Repository, stack.BaseBranch)
+	if err != nil {
+		ctx.ServerError("MergeStylesOf", err)
+		return
+	}
 	for _, s := range []stackStyle{
 		{string(repo_model.MergeStyleMerge), ctx.Tr("repo.pulls.merge_pull_request")},
 		{string(repo_model.MergeStyleRebase), ctx.Tr("repo.pulls.rebase_merge_pull_request")},
@@ -230,11 +236,12 @@ func prepareStack(ctx *context.Context, pull *issues_model.PullRequest, allowMer
 		{string(repo_model.MergeStyleSquash), ctx.Tr("repo.pulls.squash_merge_pull_request")},
 		{string(repo_model.MergeStyleFastForwardOnly), ctx.Tr("repo.pulls.fast_forward_only_merge_pull_request")},
 	} {
-		if cfg.IsMergeStyleAllowed(repo_model.MergeStyle(s.Value)) {
+		if policy.Allows(repo_model.MergeStyle(s.Value)) {
 			view.Styles = append(view.Styles, s)
 		}
 	}
-	view.DefaultStyle = string(cfg.GetDefaultMergeStyle())
+	view.DefaultStyle = string(policy.Default)
+	view.StyleRules = policy.RulesText()
 	view.DeleteDefault, _ = ctx.Data["DefaultDeleteBranchAfterMerge"].(bool)
 	view.DeleteForced, _ = ctx.Data["DeleteBranchForced"].(bool)
 	// the same decision as after the merge: only branches that DeleteBranchAfterMerge would delete are counted
@@ -360,7 +367,7 @@ func stackCause(ctx *context.Context, issue *issues_model.Issue, stopped int64, 
 		}
 		return ctx.Tr("repo.pulls.head_out_of_date"), false, true
 	case models.IsErrInvalidMergeStyle(cause):
-		return ctx.Tr("repo.pulls.invalid_merge_option"), false, true
+		return mergeStyleMessage(ctx, cause), false, true
 	case models.IsErrMergeConflicts(cause):
 		return ctx.Tr("repo.pulls.merge_conflict"), false, true
 	case models.IsErrRebaseConflicts(cause):

@@ -1039,6 +1039,8 @@ func BranchProtectionFromCreateOption(ctx *context.APIContext, owner *user_model
 		BlockOnIncompleteTasks:         form.BlockOnIncompleteTasks,
 		RequireMergeQueue:              form.RequireMergeQueue,
 		MergeQueueMergeStyle:           form.MergeQueueMergeStyle,
+		AllowedMergeStyles:             form.AllowedMergeStyles,
+		DefaultMergeStyle:              form.DefaultMergeStyle,
 		MergeQueueBuildConcurrency:     form.MergeQueueBuildConcurrency,
 		MergeQueueMinGroupSize:         form.MergeQueueMinGroupSize,
 		MergeQueueMaxGroupSize:         form.MergeQueueMaxGroupSize,
@@ -1047,6 +1049,10 @@ func BranchProtectionFromCreateOption(ctx *context.APIContext, owner *user_model
 	}
 	if err := pb.ValidateMergeQueue(); err != nil {
 		ctx.Error(http.StatusUnprocessableEntity, "ValidateMergeQueue", err)
+		return nil, opts, false
+	}
+	if err := pb.ValidateMergeStyles(); err != nil {
+		ctx.Error(http.StatusUnprocessableEntity, "ValidateMergeStyles", err)
 		return nil, opts, false
 	}
 	return pb, opts, true
@@ -1110,6 +1116,12 @@ func ApplyEditBranchProtectionOption(ctx *context.APIContext, owner *user_model.
 	if form.MergeQueueMergeStyle != nil {
 		protectBranch.MergeQueueMergeStyle = *form.MergeQueueMergeStyle
 	}
+	if form.AllowedMergeStyles != nil {
+		protectBranch.AllowedMergeStyles = *form.AllowedMergeStyles
+	}
+	if form.DefaultMergeStyle != nil {
+		protectBranch.DefaultMergeStyle = *form.DefaultMergeStyle
+	}
 	for _, f := range []struct{ dst, src *int }{
 		{&protectBranch.MergeQueueBuildConcurrency, form.MergeQueueBuildConcurrency},
 		{&protectBranch.MergeQueueMinGroupSize, form.MergeQueueMinGroupSize},
@@ -1123,6 +1135,10 @@ func ApplyEditBranchProtectionOption(ctx *context.APIContext, owner *user_model.
 	}
 	if err := protectBranch.ValidateMergeQueue(); err != nil {
 		ctx.Error(http.StatusUnprocessableEntity, "ValidateMergeQueue", err)
+		return git_model.WhitelistOptions{}, false
+	}
+	if err := protectBranch.ValidateMergeStyles(); err != nil {
+		ctx.Error(http.StatusUnprocessableEntity, "ValidateMergeStyles", err)
 		return git_model.WhitelistOptions{}, false
 	}
 

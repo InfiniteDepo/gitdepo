@@ -29,7 +29,6 @@ import (
 	pull_model "forgejo.org/models/pull"
 	quota_model "forgejo.org/models/quota"
 	repo_model "forgejo.org/models/repo"
-	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/cache"
 	"forgejo.org/modules/git"
@@ -70,6 +69,7 @@ const (
 	ReasonRetargeted    = "retargeted"
 	ReasonPermission    = "permission"
 	ReasonBlocked       = "blocked"
+	ReasonMergeStyle    = "merge_style" // the style the entry merges with is no longer allowed by the branch rules
 	ReasonConflict      = "conflict"
 	ReasonWIP           = "wip"
 	ReasonDisabled      = "disabled"
@@ -184,6 +184,12 @@ func queueStyle(rule *git_model.ProtectedBranch, style repo_model.MergeStyle) re
 	return style
 }
 
+// styleChanged reports whether the queue style is no longer the one the build of it was made with: that build must
+// not be merged, as the rules may forbid its style
+func styleChanged(it *item, now repo_model.MergeStyle) bool {
+	return it.Status == pull_model.MergeQueueBuilding && it.BuildStyle != now
+}
+
 // AddOptions are the choices of a merge that adds a pull request to the merge queue
 type AddOptions struct {
 	Style        repo_model.MergeStyle
@@ -213,13 +219,8 @@ func Add(ctx context.Context, doer *user_model.User, perm *access_model.Permissi
 	if style != repo_model.MergeStyleMerge && style != repo_model.MergeStyleRebase && style != repo_model.MergeStyleRebaseMerge && style != repo_model.MergeStyleSquash {
 		return models.ErrInvalidMergeStyle{ID: pr.BaseRepoID, Style: style}
 	}
-	prUnit, err := pr.BaseRepo.GetUnit(ctx, unit.TypePullRequests)
-	if err != nil {
-		return err
-	}
-	if !prUnit.PullRequestsConfig().IsMergeStyleAllowed(style) {
-		return models.ErrInvalidMergeStyle{ID: pr.BaseRepoID, Style: style}
-	}
+	// the style the queue merges with (the rule's, else the chosen one) must be allowed by the branch rules too:
+	// CheckPullMergeable below decides that, as for every other merge path
 	if l, err := quota_model.GetPersonalRepoLimit(ctx, pr.BaseRepo.OwnerID); err != nil {
 		return err
 	} else if l.Reached() {
@@ -561,6 +562,17 @@ func (p *pass) ineligible(it *item) (string, error) {
 	} else if !noDeps {
 		return ReasonBlocked, nil
 	}
+	// rules can change while queued: the style is decided again at every pass, never switched
+	style := queueStyle(git_model.MergeQueueRule(p.rules), it.MergeStyle)
+	if styleChanged(it, style) {
+		return ReasonMergeStyle, nil
+	}
+	if err := pull_service.CheckMergeStyleWithRules(p.ctx, pr, p.rules, style); err != nil {
+		if models.IsErrInvalidMergeStyle(err) {
+			return ReasonMergeStyle, nil
+		}
+		return "", err
+	}
 	exempt := func(pb *git_model.ProtectedBranch) bool {
 		if !it.Forced {
 			return false
@@ -691,6 +703,30 @@ func (s stateResult) IsSuccess() bool { return s.success }
 func (s stateResult) IsFailure() bool { return s.failure }
 func (s stateResult) IsError() bool   { return false }
 
+// styleNow decides the merge style of it again with the rules as they are now: ReasonMergeStyle if the queue may no
+// longer merge it (ReasonDisabled when the queue rule is gone), "" if it may.
+func (p *pass) styleNow(it *item) (string, error) {
+	rules, err := git_model.GetMatchedProtectedBranchRules(p.ctx, p.repo.ID, p.branch)
+	if err != nil {
+		return "", err
+	}
+	rule := git_model.MergeQueueRule(rules)
+	if rule == nil {
+		return ReasonDisabled, nil
+	}
+	style := queueStyle(rule, it.MergeStyle)
+	if styleChanged(it, style) {
+		return ReasonMergeStyle, nil
+	}
+	if err := pull_service.CheckMergeStyleWithRules(p.ctx, it.pr, rules, style); err != nil {
+		if models.IsErrInvalidMergeStyle(err) {
+			return ReasonMergeStyle, nil
+		}
+		return "", err
+	}
+	return "", nil
+}
+
 // merge fast-forwards the branch to the passed builds: the first one, or up to the last passed one within the group
 // size, whose build has all the ones ahead of it. It returns how many entries it merged, and false when the pass
 // must stop.
@@ -710,6 +746,16 @@ func (p *pass) merge(live []*item) (int, bool) {
 	}
 	for i := 0; i <= last; i++ {
 		it := live[i]
+		// the rules are read again: one saved since the pass began must stop this merge (fail closed)
+		if reason, err := p.styleNow(it); err != nil || reason != "" {
+			if err != nil {
+				log.Error("styleNow[%d]: %v", it.ID, err)
+				p.again = true
+			} else if err := p.remove(it, reason, ""); err != nil {
+				log.Error("remove[%d]: %v", it.ID, err)
+			}
+			return i, false
+		}
 		if ok, err := pull_model.StartMergeQueueMerge(p.ctx, it.ID, it.TempCommitID); err != nil || !ok {
 			if err != nil {
 				log.Error("StartMergeQueueMerge[%d]: %v", it.ID, err)
@@ -817,8 +863,9 @@ func (p *pass) build(live []*item, tip string) error {
 		rule := git_model.MergeQueueRule(p.rules)
 		// the build is claimed before it is pushed, so another server building the same entry never pushes over it
 		started := false
-		sha, err := pull_service.BuildMergeQueueCommit(p.ctx, it.pr, it.doer, queueStyle(rule, it.MergeStyle), it.HeadCommitID, prev, it.TempBranch(), func(sha string) (ok bool, err error) {
-			started, err = pull_model.StartMergeQueueBuild(p.ctx, it.ID, prev, sha)
+		style := queueStyle(rule, it.MergeStyle)
+		sha, err := pull_service.BuildMergeQueueCommit(p.ctx, it.pr, it.doer, style, it.HeadCommitID, prev, it.TempBranch(), func(sha string) (ok bool, err error) {
+			started, err = pull_model.StartMergeQueueBuild(p.ctx, it.ID, prev, sha, style)
 			return started, err
 		})
 		if err != nil {
@@ -860,7 +907,7 @@ func (p *pass) build(live []*item, tip string) error {
 		if sha == "" {
 			return nil // another server builds it
 		}
-		it.Status, it.BaseCommitID, it.TempCommitID, it.StartedUnix = pull_model.MergeQueueBuilding, prev, sha, timeutil.TimeStampNow()
+		it.Status, it.BaseCommitID, it.TempCommitID, it.BuildStyle, it.StartedUnix = pull_model.MergeQueueBuilding, prev, sha, style, timeutil.TimeStampNow()
 		log.Trace("Merge queue of %s in %-v: built %-v at %s", p.branch, p.repo, it.pr, sha)
 		notify_service.MergeGroupChecksRequested(p.ctx, it.doer, p.repo, it.MergeQueueEntry)
 		p.again = true // a build without required checks passes at once

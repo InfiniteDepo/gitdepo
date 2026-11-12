@@ -14,4 +14,5 @@
 {{else if eq . "empty"}}{{ctx.Locale.Tr "repo.pulls.merge_queue.reason.empty"}}
 {{else if eq . "build_failed"}}{{ctx.Locale.Tr "repo.pulls.merge_queue.reason.build_failed"}}
 {{else if eq . "merge_failed"}}{{ctx.Locale.Tr "repo.pulls.merge_queue.reason.merge_failed"}}
+{{else if eq . "merge_style"}}{{ctx.Locale.Tr "repo.pulls.merge_queue.reason.merge_style"}}
 {{end}}

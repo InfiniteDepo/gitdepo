@@ -287,6 +287,8 @@ type ProtectBranchForm struct {
 
 	RequireMergeQueue             bool
 	MergeQueueMergeStyle          string
+	AllowedMergeStyles            []string `form:"allowed_merge_styles"`
+	DefaultMergeStyle             string   `form:"default_merge_style"`
 	MergeQueueBuildConcurrency    int
 	MergeQueueMinGroupSize        int
 	MergeQueueMaxGroupSize        int

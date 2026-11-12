@@ -1949,28 +1949,28 @@ func ViewIssue(ctx *context.Context) {
 
 		ctx.Data["AutodetectManualMerge"] = prConfig.AutodetectManualMerge
 
-		var mergeStyle repo_model.MergeStyle
-		// Check correct values and select default
-		if ms, ok := ctx.Data["MergeStyle"].(repo_model.MergeStyle); !ok ||
-			!prConfig.IsMergeStyleAllowed(ms) {
-			defaultMergeStyle := prConfig.GetDefaultMergeStyle()
-			if prConfig.IsMergeStyleAllowed(defaultMergeStyle) && !ok {
-				mergeStyle = defaultMergeStyle
-			} else if prConfig.AllowMerge {
-				mergeStyle = repo_model.MergeStyleMerge
-			} else if prConfig.AllowRebase {
-				mergeStyle = repo_model.MergeStyleRebase
-			} else if prConfig.AllowRebaseMerge {
-				mergeStyle = repo_model.MergeStyleRebaseMerge
-			} else if prConfig.AllowSquash {
-				mergeStyle = repo_model.MergeStyleSquash
-			} else if prConfig.AllowFastForwardOnly {
-				mergeStyle = repo_model.MergeStyleFastForwardOnly
-			} else if prConfig.AllowManualMerge {
-				mergeStyle = repo_model.MergeStyleManuallyMerged
-			}
+		// the one decision on merge styles: the matching branch rules, else the repository's setting
+		stylePolicy, err := pull_service.MergeStylesOf(ctx, repo, pull.BaseBranch)
+		if err != nil {
+			ctx.ServerError("MergeStylesOf", err)
+			return
+		}
+		styleAllowed := make(map[string]bool, len(stylePolicy.Allowed))
+		for _, s := range stylePolicy.Allowed {
+			styleAllowed[string(s)] = true
+		}
+		ctx.Data["MergeStyleAllowed"] = styleAllowed
+		ctx.Data["MergeStyleAny"] = len(stylePolicy.Allowed) > 0
+		ctx.Data["MergeStyleRules"] = stylePolicy.RulesText()
+		if len(stylePolicy.Rules) > 0 && len(stylePolicy.Allowed) == 1 {
+			ctx.Data["MergeStyleOnly"] = MergeStyleLabel(ctx, stylePolicy.Allowed[0])
 		}
 
+		// a style named in the request (ctx.Data["MergeStyle"]) counts if it is allowed, else the default
+		mergeStyle := stylePolicy.Default
+		if ms, ok := ctx.Data["MergeStyle"].(repo_model.MergeStyle); ok && stylePolicy.Allows(ms) {
+			mergeStyle = ms
+		}
 		ctx.Data["MergeStyle"] = mergeStyle
 
 		var updateStyle repo_model.UpdateStyle
@@ -4196,4 +4196,23 @@ func getIssueParticipants(ctx *context.Context, issue *issues_model.Issue) []*us
 	}
 
 	return participants
+}
+
+// MergeStyleLabel is the merge box's button label of a merge style.
+func MergeStyleLabel(ctx *context.Context, style repo_model.MergeStyle) string {
+	switch style {
+	case repo_model.MergeStyleMerge:
+		return ctx.Locale.TrString("repo.pulls.merge_pull_request")
+	case repo_model.MergeStyleRebase:
+		return ctx.Locale.TrString("repo.pulls.rebase_merge_pull_request")
+	case repo_model.MergeStyleRebaseMerge:
+		return ctx.Locale.TrString("repo.pulls.rebase_merge_commit_pull_request")
+	case repo_model.MergeStyleSquash:
+		return ctx.Locale.TrString("repo.pulls.squash_merge_pull_request")
+	case repo_model.MergeStyleFastForwardOnly:
+		return ctx.Locale.TrString("repo.pulls.fast_forward_only_merge_pull_request")
+	case repo_model.MergeStyleManuallyMerged:
+		return ctx.Locale.TrString("repo.pulls.merge_manually")
+	}
+	return string(style)
 }

@@ -22,6 +22,8 @@ import (
 	"forgejo.org/models/organization"
 	"forgejo.org/models/perm"
 	access_model "forgejo.org/models/perm/access"
+	repo_model "forgejo.org/models/repo"
+	"forgejo.org/models/unit"
 	user_model "forgejo.org/models/user"
 	"forgejo.org/modules/base"
 	linearglob "forgejo.org/modules/glob"
@@ -150,6 +152,7 @@ func SettingsProtectedBranch(c *context.Context) {
 	c.Data["MaxApprovalRules"] = git_model.MaxApprovalRules
 
 	c.Data["Rule"] = rule
+	SetMergeStyleData(c, c.Repo.Repository.MustGetUnit(c, unit.TypePullRequests).PullRequestsConfig())
 	c.HTML(http.StatusOK, tplProtectedBranch)
 }
 
@@ -235,8 +238,49 @@ func SettingsProtectedBranchPost(ctx *context.Context) {
 		}
 	}
 
+	others, err := git_model.FindProtectedBranchRulesForRepo(ctx, ctx.Repo.Repository)
+	if err != nil {
+		ctx.ServerError("FindProtectedBranchRulesForRepo", err)
+		return
+	}
+	MergeStyleWarning(ctx, protectBranch, others)
 	ctx.Flash.Success(ctx.Tr("repo.settings.update_protect_branch_success", protectBranch.RuleName))
 	ctx.Redirect(fmt.Sprintf("%s/settings/branches?rule_name=%s", ctx.Repo.RepoLink, protectBranch.RuleName))
+}
+
+// SetMergeStyleData sets what the merge styles part of the rule form shows; cfg is the repository's Pull requests
+// setting, nil for organization and project rules.
+func SetMergeStyleData(ctx *context.Context, cfg *repo_model.PullRequestsConfig) {
+	type choice struct {
+		Name, Label string
+		Style       repo_model.MergeStyle
+	}
+	var choices []choice
+	for _, style := range git_model.RuleMergeStyles {
+		choices = append(choices, choice{string(style), repo.MergeStyleLabel(ctx, style), style})
+	}
+	ctx.Data["MergeStyleChoices"] = choices
+	ctx.Data["MergeStyleRepoConfig"] = cfg
+}
+
+// MergeStyleWarning warns, after saving rule, about rules in others (all levels of its owner, rule included) that
+// shadow or conflict with its merge styles, and about a merge queue style it doesn't allow (the save is not refused):
+// styles of another level that share none with its own (such pull requests can't be merged), a same-level rule that
+// matches first, so that only one of the two counts, and a merge queue style outside its list.
+func MergeStyleWarning(ctx *context.Context, rule *git_model.ProtectedBranch, others []*git_model.ProtectedBranch) {
+	var msgs []string
+	for _, o := range git_model.MergeStyleConflicts(rule, others) {
+		msgs = append(msgs, string(ctx.Tr("repo.settings.merge_styles.conflict", o.Level(), o.RuleName, strings.Join(o.AllowedMergeStyles, ", "))))
+	}
+	for _, pair := range git_model.MergeStyleShadowing(rule, others) {
+		msgs = append(msgs, string(ctx.Tr("repo.settings.merge_styles.shadowed", pair[0].RuleName, pair[1].RuleName)))
+	}
+	if len(rule.AllowedMergeStyles) > 0 && rule.MergeQueueMergeStyle != "" && !slices.Contains(rule.AllowedMergeStyles, rule.MergeQueueMergeStyle) {
+		msgs = append(msgs, string(ctx.Tr("repo.settings.merge_styles.queue_style", rule.MergeQueueMergeStyle)))
+	}
+	if len(msgs) > 0 {
+		ctx.Flash.Warning(strings.Join(msgs, "<br>"))
+	}
 }
 
 // ProtectBranchFromForm sets the fields of protectBranch from the form and returns its allow-lists, teams and
@@ -342,6 +386,11 @@ func ProtectBranchFromForm(ctx *context.Context, f *forms.ProtectBranchForm, pro
 	protectBranch.MergeQueueMaxGroupSize = f.MergeQueueMaxGroupSize
 	protectBranch.MergeQueueWaitMinutes = f.MergeQueueWaitMinutes
 	protectBranch.MergeQueueCheckTimeoutMinutes = f.MergeQueueCheckTimeoutMinutes
+	protectBranch.AllowedMergeStyles = f.AllowedMergeStyles
+	protectBranch.DefaultMergeStyle = f.DefaultMergeStyle
+	if err := protectBranch.ValidateMergeStyles(); err != nil {
+		return opts, ctx.Tr("repo.settings.merge_styles.invalid")
+	}
 	if cfgErr, ok := errors.AsType[*git_model.MergeQueueConfigError](protectBranch.ValidateMergeQueue()); ok {
 		return opts, ctx.Tr("repo.settings.merge_queue.invalid." + cfgErr.Field)
 	}

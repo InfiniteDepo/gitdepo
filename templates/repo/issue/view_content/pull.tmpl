@@ -1,7 +1,9 @@
 {{$prUnit := .Repository.MustGetUnit $.Context $.UnitTypePullRequests}}
 {{$prConfig := $prUnit.PullRequestsConfig}}
-{{$fastForwardStyleAllowed := and $prConfig.AllowFastForwardOnly (eq .Issue.PullRequest.CommitsBehind 0)}}
-{{$manualMergeStyleAllowed := $prConfig.AllowManualMerge}}
+{{/* the allowed styles are decided on the server (branch rules, else the repository setting): pull_service.ResolveMergeStyles */}}
+{{$allowedStyles := .MergeStyleAllowed}}
+{{$fastForwardStyleAllowed := and (index $allowedStyles "fast-forward-only") (eq .Issue.PullRequest.CommitsBehind 0)}}
+{{$manualMergeStyleAllowed := index $allowedStyles "manually-merged"}}
 {{$hasUnsignedMergeStyle := or $fastForwardStyleAllowed $manualMergeStyleAllowed}}
 {{$signingBlocksAllMergeStyles := and .AllowMerge .RequireSigned (not .WillSign) (not $hasUnsignedMergeStyle)}}
 {{if or (not .Issue.PullRequest.HasMerged) .IsPullBranchDeletable .CanRevertPull .SomePullRequestRunsNeedApproval}}
@@ -229,7 +231,7 @@
 							{{svg "octicon-dot-fill"}}
 							{{if .MergeQueueRule}}{{ctx.Locale.Tr "repo.pulls.merge_queue.admin_force"}}{{else}}{{ctx.Locale.Tr "repo.pulls.required_status_check_administrator"}}{{end}}
 						</div>
-					{{else}}
+					{{else if .MergeStyleAny}}
 						<div class="item">
 							{{svg "octicon-check"}}
 							{{ctx.Locale.Tr "repo.pulls.can_auto_merge_desc"}}
@@ -283,7 +285,7 @@
 						{{end}}
 					</div>
 				{{else if .AllowMerge}} {{/* user is allowed to merge */}}
-					{{if or $prConfig.AllowMerge $prConfig.AllowRebase $prConfig.AllowRebaseMerge $prConfig.AllowSquash $prConfig.AllowFastForwardOnly $prConfig.AllowManualMerge}}
+					{{if .MergeStyleAny}}
 						{{$hasPendingPullRequestMergeTip := ""}}
 						{{if .HasPendingPullRequestMerge}}
 							{{$createdPRMergeStr := DateUtils.TimeSince .PendingPullRequestMerge.CreatedUnix}}
@@ -345,7 +347,7 @@
 							mergeForm['mergeStyles'] = [
 								{
 									'name': 'merge',
-									'allowed': {{and $prConfig.AllowMerge (or (not .RequireSigned) .WillSign)}},
+									'allowed': {{and (index $allowedStyles "merge") (or (not .RequireSigned) .WillSign)}},
 									'textDoMerge': {{if $stackedOnly}}{{ctx.Locale.Tr "repo.pulls.stack.merge_only"}}{{else}}{{ctx.Locale.Tr "repo.pulls.merge_pull_request"}}{{end}},
 									'mergeTitleFieldText': defaultMergeTitle,
 									'mergeMessageFieldText': defaultMergeMessage,
@@ -353,14 +355,14 @@
 								},
 								{
 									'name': 'rebase',
-									'allowed': {{and $prConfig.AllowRebase (or (not .RequireSigned) .WillSign)}},
+									'allowed': {{and (index $allowedStyles "rebase") (or (not .RequireSigned) .WillSign)}},
 									'textDoMerge': {{if $stackedOnly}}{{ctx.Locale.Tr "repo.pulls.stack.style_only" (ctx.Locale.Tr "repo.pulls.rebase_merge_pull_request")}}{{else}}{{ctx.Locale.Tr "repo.pulls.rebase_merge_pull_request"}}{{end}},
 									'hideMergeMessageTexts': true,
 									'hideAutoMerge': generalHideAutoMerge,
 								},
 								{
 									'name': 'rebase-merge',
-									'allowed': {{and $prConfig.AllowRebaseMerge (or (not .RequireSigned) .WillSign)}},
+									'allowed': {{and (index $allowedStyles "rebase-merge") (or (not .RequireSigned) .WillSign)}},
 									'textDoMerge': {{if $stackedOnly}}{{ctx.Locale.Tr "repo.pulls.stack.style_only" (ctx.Locale.Tr "repo.pulls.rebase_merge_commit_pull_request")}}{{else}}{{ctx.Locale.Tr "repo.pulls.rebase_merge_commit_pull_request"}}{{end}},
 									'mergeTitleFieldText': defaultMergeTitle,
 									'mergeMessageFieldText': defaultMergeMessage,
@@ -368,7 +370,7 @@
 								},
 								{
 									'name': 'squash',
-									'allowed': {{and $prConfig.AllowSquash (or (not .RequireSigned) .WillSign)}},
+									'allowed': {{and (index $allowedStyles "squash") (or (not .RequireSigned) .WillSign)}},
 									'textDoMerge': {{if $stackedOnly}}{{ctx.Locale.Tr "repo.pulls.stack.style_only" (ctx.Locale.Tr "repo.pulls.squash_merge_pull_request")}}{{else}}{{ctx.Locale.Tr "repo.pulls.squash_merge_pull_request"}}{{end}},
 									'mergeTitleFieldText': defaultSquashMergeTitle,
 									'mergeMessageFieldText': {{.GetCommitMessages}} + defaultSquashMergeMessage,
@@ -408,10 +410,18 @@
 						</script>
 
 						{{$showGeneralMergeForm = true}}
+						{{if .MergeStyleOnly}}<div class="ui small message" id="merge-style-rules">{{ctx.Locale.Tr "repo.pulls.merge_style_only" .MergeStyleOnly .Issue.PullRequest.BaseBranch .MergeStyleRules}}</div>
+						{{else if .MergeStyleRules}}<div class="ui small message" id="merge-style-rules">{{ctx.Locale.Tr "repo.pulls.merge_styles_limited" .MergeStyleRules}}</div>{{end}}
 						<div id="pull-request-merge-form"></div>
 					{{else}}
 						{{/* no merge style was set in repo setting: not or ($prConfig.AllowMerge ...) */}}
 						<div class="divider"></div>
+						{{if .MergeStyleRules}}
+						<div class="item text red">
+							{{svg "octicon-x"}}
+							{{ctx.Locale.Tr "repo.pulls.no_merge_styles_rules" .MergeStyleRules}}
+						</div>
+						{{else}}
 						<div class="item text red">
 							{{svg "octicon-x"}}
 							{{ctx.Locale.Tr "repo.pulls.no_merge_desc"}}
@@ -420,6 +430,7 @@
 							{{svg "octicon-info"}}
 							{{ctx.Locale.Tr "repo.pulls.no_merge_helper"}}
 						</div>
+						{{end}}
 					{{end}} {{/* end if the repo was set to use any merge style */}}
 				{{else}}
 					{{/* user is not allowed to merge */}}

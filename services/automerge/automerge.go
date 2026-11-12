@@ -260,6 +260,15 @@ func cancelAutoMerge(ctx context.Context, pr *issues_model.PullRequest, am *pull
 	}
 }
 
+// cancelAutoMergeStyle cancels an auto merge whose merge style the branch rules or the repository no longer allow: the
+// style is never switched silently
+func cancelAutoMergeStyle(ctx context.Context, pr *issues_model.PullRequest, am *pull_model.AutoMerge) {
+	log.Info("Cancelling the auto merge of %-v: its merge style %s is no longer allowed", pr, am.MergeStyle)
+	if err := pull_service.CancelAutoMerge(ctx, pr, am, am.Doer, "merge_style"); err != nil {
+		log.Error("%-v CancelAutoMerge: %v", pr, err)
+	}
+}
+
 // StartPRCheckAndAutoMergeBySHA start an automerge check and auto merge task for all pull requests of repository and SHA
 func StartPRCheckAndAutoMergeBySHA(ctx context.Context, sha string, repo *repo_model.Repository) error {
 	return shared_automerge.StartPRCheckAndAutoMergeBySHA(ctx, sha, repo)
@@ -425,6 +434,10 @@ func handlePullRequestAutoMerge(pullID int64, sha string) {
 			cancelAutoMerge(ctx, pr, scheduledPRM)
 			return
 		}
+		if models.IsErrInvalidMergeStyle(err) {
+			cancelAutoMergeStyle(ctx, pr, scheduledPRM)
+			return
+		}
 		switch {
 		case errors.Is(err, pull_service.ErrNotMergeableState):
 			skipAutoMerge(ctx, pr, scheduledPRM, "conflict", headCommitID)
@@ -452,6 +465,13 @@ func handlePullRequestAutoMerge(pullID int64, sha string) {
 		return
 	} else if rule != nil {
 		if err := mergequeue.Add(ctx, doer, &perm, pr, mergequeue.AddOptions{Style: scheduledPRM.MergeStyle, ExpectedHead: sha, DeleteBranch: scheduledPRM.DeleteBranchAfterMerge, SkipForward: scheduledPRM.SkipMergeForward}); err != nil {
+			if models.IsErrInvalidMergeStyle(err) { // the queue's own style is refused: the entry was never added
+				log.Warn("Auto merge of %-v was removed, the merge queue style is not allowed: %v", pr, err)
+				if _, err := issues_model.CreateAutoMergeComment(ctx, issues_model.CommentTypePRUnScheduledToAutoMerge, pr, doer, issues_model.AutoMergeInfo{Reason: "merge_style"}); err != nil {
+					log.Error("%-v CreateAutoMergeComment: %v", pr, err)
+				}
+				return
+			}
 			log.Warn("Auto merge of %-v was removed but adding it to the merge queue failed: %v", pr, err)
 			skipAutoMerge(ctx, pr, scheduledPRM, "merge_failed", sha)
 		}
@@ -463,6 +483,12 @@ func handlePullRequestAutoMerge(pullID int64, sha string) {
 	}
 	// only merge the head validated above: the merge fetches the head branch, which may have moved since
 	if err := pull_service.Merge(ctx, pr, doer, baseGitRepo, scheduledPRM.MergeStyle, sha, scheduledPRM.Message, true); err != nil {
+		if models.IsErrInvalidMergeStyle(err) { // the rules changed after the check above; the row is gone already
+			if _, err := issues_model.CreateAutoMergeComment(ctx, issues_model.CommentTypePRUnScheduledToAutoMerge, pr, doer, issues_model.AutoMergeInfo{Reason: "merge_style"}); err != nil {
+				log.Error("%-v CreateAutoMergeComment: %v", pr, err)
+			}
+			return
+		}
 		log.Warn("Auto merge of %-v was removed but the merge failed: %v", pr, err)
 		skipAutoMerge(ctx, pr, scheduledPRM, "merge_failed", sha)
 		// FIXME: if merge failed, we should display some error message to the pull request page.
